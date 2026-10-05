@@ -450,6 +450,65 @@ namespace BasicLang.Compiler.IR
             return false;
         }
 
+        /// <summary>A module procedure named <paramref name="name"/>: not a lambda, not external, not a
+        /// class member's body (<paramref name="classMembers"/>, <see cref="IRModule.CollectMemberImplementations"/>).</summary>
+        internal static IRFunction ModuleFunction(IRModule module, HashSet<IRFunction> classMembers, string name) =>
+            module.Functions.FirstOrDefault(f => f != null && !f.IsLambda && !f.IsExternal
+                                                 && !classMembers.Contains(f) && NameEquals(f.Name, name));
+
+        /// <summary>What an <c>AddressOf</c> operand names (see <see cref="ResolveAddressOf"/>).</summary>
+        /// <param name="Method">The body the delegate calls.</param>
+        /// <param name="ReturnType">The return type as the method DECLARES it (for a class method, the
+        /// <see cref="IRMethod"/>'s).</param>
+        /// <param name="Receiver">The object an <c>AddressOf obj.M</c> binds (an instance method); null
+        /// for a module procedure, a Shared method, or a bare method of the enclosing class.</param>
+        /// <param name="BindsMe">A bare instance method of the enclosing class: the delegate binds
+        /// <c>Me</c>, which only the caller can say exists.</param>
+        /// <param name="MethodRead">For <c>obj.M</c>, the member "read" IRBuilder emitted for it, which is
+        /// not a read.</param>
+        internal sealed record AddressOfTarget(IRFunction Method, TypeInfo ReturnType, IRValue Receiver, bool BindsMe,
+            bool IsVirtual, string Shape, IRFieldAccess MethodRead);
+
+        /// <summary>
+        /// #201: what an <c>AddressOf</c> operand names, or null when it is none of the three shapes this
+        /// pass binds — a module procedure, a method of <paramref name="ownerClass"/> (the enclosing class),
+        /// and <c>obj.M</c> on an object of a class this program declares. The ONE answer shared by the
+        /// lowering (D8) and the C++ by-copy fallback, which emits a root this pass refused and so still
+        /// sees the <c>AddressOf</c> as written.
+        /// </summary>
+        internal static AddressOfTarget ResolveAddressOf(IRModule module, HashSet<IRFunction> classMembers,
+            IRClass ownerClass, IRValue operand)
+        {
+            switch (operand)
+            {
+                case IRVariable m when ModuleFunction(module, classMembers, m.Name) is IRFunction fn:
+                    return new AddressOfTarget(fn, fn.ReturnType, null, false, false, m.Name, null);
+
+                case IRVariable m when ownerClass != null
+                                       && TryFindMethod(module, ownerClass, m.Name, out _, out var own)
+                                       && own.Implementation != null:
+                    return new AddressOfTarget(own.Implementation, own.ReturnType, null, BindsMe: !own.IsStatic,
+                        IsVirtual: !own.IsStatic && (own.IsVirtual || own.IsOverride || own.IsAbstract), m.Name, null);
+
+                case IRFieldAccess fa when TryFindClass(module, fa.Object?.Type?.Name, out var receiverClass)
+                                          && TryFindMethod(module, receiverClass, fa.FieldName, out _, out var viaObject)
+                                          && viaObject.Implementation != null:
+                    return new AddressOfTarget(viaObject.Implementation, viaObject.ReturnType,
+                        viaObject.IsStatic ? null : fa.Object, false,
+                        IsVirtual: !viaObject.IsStatic && (viaObject.IsVirtual || viaObject.IsOverride || viaObject.IsAbstract),
+                        $"{fa.Object?.Name}.{fa.FieldName}", fa);
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>True when an instruction of <paramref name="function"/> other than
+        /// <paramref name="consumer"/> uses <paramref name="value"/>.</summary>
+        internal static bool IsUsedElsewhere(IRFunction function, IRValue value, IRInstruction consumer) =>
+            function.Blocks.SelectMany(b => b.Instructions)
+                .Any(x => x != null && !ReferenceEquals(x, consumer) && OptimizationPass.UsesOf(x).Any(v => ReferenceEquals(v, value)));
+
         /// <summary>
         /// True for a type the program uses as a delegate: a user <c>Delegate</c> declaration, the
         /// BCL <c>Action</c>/<c>Func</c> (unless the program declares a class of that name), or
@@ -2116,9 +2175,7 @@ namespace BasicLang.Compiler.IR
             private static TypeInfo ParameterType(IReadOnlyList<IRVariable> parameters, int index) =>
                 parameters != null && index < parameters.Count ? parameters[index]?.Type : null;
 
-            private IRFunction ModuleFunction(string name) =>
-                _module.Functions.FirstOrDefault(f => f != null && !f.IsLambda && !f.IsExternal
-                                                     && !_classMembers.Contains(f) && NameEquals(f.Name, name));
+            private IRFunction ModuleFunction(string name) => ClosureLowering.ModuleFunction(_module, _classMembers, name);
 
             private bool IsDelegateValue(IRValue value) =>
                 value != null && !(value is IRConstant) && IsDelegateType(_module, value.Type);
@@ -2139,66 +2196,34 @@ namespace BasicLang.Compiler.IR
                     {
                         if (!(block.Instructions[i] is IRUnaryOp { Operation: UnaryOpKind.AddressOf } u)) continue;
 
-                        IRFunction method;
-                        IRValue target = null;
-                        TypeInfo methodReturn;
-                        var isVirtual = false;
-                        string shape;
+                        var resolved = ResolveAddressOf(_module, _classMembers, ctx.Root.Class, u.Operand)
+                            ?? throw new ForeignFeatureException(
+                                $"{_backend}: 'AddressOf' of {(u.Operand == null ? "nothing" : $"'{u.Operand.Name}' ({u.Operand.GetType().Name})")} "
+                                + $"in '{g.Name}' has no IL lowering. Supported: a module procedure, a method of the "
+                                + "enclosing class, and obj.Method on an object of a class this program declares.");
 
-                        switch (u.Operand)
+                        var method = resolved.Method;
+                        var methodReturn = resolved.ReturnType;
+                        var shape = resolved.Shape;
+                        var isVirtual = resolved.IsVirtual;
+                        var target = resolved.Receiver;
+                        if (resolved.BindsMe)
                         {
-                            case IRVariable m when ModuleFunction(m.Name) is IRFunction fn:
-                                method = fn;
-                                methodReturn = fn.ReturnType;
-                                shape = m.Name;
-                                break;
-
-                            case IRVariable m when ctx.Root.Class != null
-                                                   && TryFindMethod(_module, ctx.Root.Class, m.Name, out _, out var own)
-                                                   && own.Implementation != null:
-                                method = own.Implementation;
-                                methodReturn = own.ReturnType;
-                                shape = m.Name;
-                                if (!own.IsStatic)
-                                {
-                                    if (!ctx.Root.IsInstance)
-                                        throw new ForeignFeatureException(
-                                            $"{_backend}: 'AddressOf {m.Name}' in '{g.Name}' names an instance method from a "
-                                            + "Shared context, where there is no Me to bind it to.");
-                                    target = new IRVariable("Me", new TypeInfo(ctx.Root.Class.Name, TypeKind.Class));
-                                    isVirtual = own.IsVirtual || own.IsOverride || own.IsAbstract;
-                                }
-                                break;
-
-                            case IRFieldAccess fa when TryFindClass(_module, fa.Object?.Type?.Name, out var receiverClass)
-                                                      && TryFindMethod(_module, receiverClass, fa.FieldName, out _, out var viaObject)
-                                                      && viaObject.Implementation != null:
-                                method = viaObject.Implementation;
-                                methodReturn = viaObject.ReturnType;
-                                shape = $"{fa.Object?.Name}.{fa.FieldName}";
-                                if (!viaObject.IsStatic)
-                                {
-                                    target = fa.Object;
-                                    isVirtual = viaObject.IsVirtual || viaObject.IsOverride || viaObject.IsAbstract;
-                                }
-                                // The member "read" IRBuilder emitted for `obj.M` is not a read.
-                                if (ctx.InBlock.Contains(fa))
-                                {
-                                    var other = g.Blocks.SelectMany(b => b.Instructions)
-                                        .Any(x => x != null && !ReferenceEquals(x, u) && OptimizationPass.UsesOf(x).Any(v => ReferenceEquals(v, fa)));
-                                    if (other)
-                                        throw new ForeignFeatureException(
-                                            $"{_backend}: 'AddressOf {shape}' in '{g.Name}' has a method reference that is also "
-                                            + "used as a value; that shape has no IL lowering.");
-                                    phantoms.Add((g.Blocks.First(b => b.Instructions.Contains(fa)), fa));
-                                }
-                                break;
-
-                            default:
+                            if (!ctx.Root.IsInstance)
                                 throw new ForeignFeatureException(
-                                    $"{_backend}: 'AddressOf' of {(u.Operand == null ? "nothing" : $"'{u.Operand.Name}' ({u.Operand.GetType().Name})")} "
-                                    + $"in '{g.Name}' has no IL lowering. Supported: a module procedure, a method of the "
-                                    + "enclosing class, and obj.Method on an object of a class this program declares.");
+                                    $"{_backend}: 'AddressOf {shape}' in '{g.Name}' names an instance method from a "
+                                    + "Shared context, where there is no Me to bind it to.");
+                            target = new IRVariable("Me", new TypeInfo(ctx.Root.Class.Name, TypeKind.Class));
+                        }
+
+                        // The member "read" IRBuilder emitted for `obj.M` is not a read.
+                        if (resolved.MethodRead is { } fa && ctx.InBlock.Contains(fa))
+                        {
+                            if (IsUsedElsewhere(g, fa, u))
+                                throw new ForeignFeatureException(
+                                    $"{_backend}: 'AddressOf {shape}' in '{g.Name}' has a method reference that is also "
+                                    + "used as a value; that shape has no IL lowering.");
+                            phantoms.Add((g.Blocks.First(b => b.Instructions.Contains(fa)), fa));
                         }
 
                         var slot = OptimizationPass.NamedDestination(u) is string dest

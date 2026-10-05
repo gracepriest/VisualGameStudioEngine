@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.CodeGen.CPlusPlus
 {
@@ -78,6 +79,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             _closurePaths.Clear();
             _closureNames.Clear();
+            _fallbackAddressOf.Clear();
+            _fallbackMethodReads.Clear();
+            _memberImplementations = null;
 
             var result = ClosureLowering.Run(module,
                 new ClosureLoweringOptions("C++", MaxActionArity: null, MaxFuncArity: null, UnloweredRootPolicy.Skip));
@@ -290,10 +294,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var method = create.Method
                 ?? throw new CppCapabilityException(new List<string> { "a delegate value with no method to bind (#140)" });
+            var target = create.Target != null ? GetValueName(create.Target) : null;
+            WriteLine($"{GetValueName(create)} = {DelegateValueText(method, target)};");
+        }
 
-            var declaring = _module.Classes.Values.FirstOrDefault(
-                c => c?.Methods != null && c.Methods.Any(m => ReferenceEquals(m?.Implementation, method)));
-            var declared = declaring?.Methods.First(m => ReferenceEquals(m?.Implementation, method));
+        /// <summary>The forwarding closure a delegate value over <paramref name="method"/> is: it holds
+        /// <paramref name="targetValue"/> (null: none) by copy and calls the method through it. The ONE
+        /// spelling of a bound delegate, for a lowered root's <see cref="IRDelegateCreate"/> and a by-copy
+        /// root's <c>AddressOf</c> alike (#201).</summary>
+        private string DelegateValueText(IRFunction method, string targetValue)
+        {
+            var (declaring, declared) = DeclaringMethodOf(method);
 
             var argument = _closureNames.TryGetValue(ThunkArgumentKey, out var a) ? a : "blArg";
             var target = _closureNames.TryGetValue(ThunkTargetKey, out var t) ? t : "blTarget";
@@ -306,9 +317,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var methodName = SanitizeName(declared?.Name ?? method.Name);
 
             string capture = "", callee;
-            if (create.Target != null)
+            if (targetValue != null)
             {
-                capture = $"{target} = {GetValueName(create.Target)}";
+                capture = $"{target} = {targetValue}";
                 callee = $"{target}->{methodName}";
             }
             else if (declaring != null)
@@ -322,7 +333,103 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             var body = isVoid ? $"{callee}({argumentList});" : $"return {callee}({argumentList});";
-            WriteLine($"{GetValueName(create)} = [{capture}]({parameterList}){(isVoid ? "" : " -> " + ret)} {{ {body} }};");
+            return $"[{capture}]({parameterList}){(isVoid ? "" : " -> " + ret)} {{ {body} }}";
+        }
+
+        /// <summary>The <c>std::function</c> that holds <see cref="DelegateValueText"/>'s closure over
+        /// <paramref name="method"/>: its parameter and return types exactly as the closure spells them.</summary>
+        private string DelegateValueType(IRFunction method)
+        {
+            var (_, declared) = DeclaringMethodOf(method);
+            var returnType = declared?.ReturnType ?? method.ReturnType;
+            var ret = MapType(returnType);
+            if (ClosureLowering.IsVoid(returnType)) ret = "void";
+            return $"std::function<{ret}({string.Join(", ", method.Parameters.Select(p => MapType(p.Type)))})>";
+        }
+
+        private (IRClass Declaring, IRMethod Declared) DeclaringMethodOf(IRFunction method)
+        {
+            var declaring = _module.Classes.Values.FirstOrDefault(
+                c => c?.Methods != null && c.Methods.Any(m => ReferenceEquals(m?.Implementation, method)));
+            return (declaring, declaring?.Methods.First(m => ReferenceEquals(m?.Implementation, method)));
+        }
+
+        // =========================================================================================
+        // AddressOf on the by-copy fallback (#201)
+        // =========================================================================================
+        //
+        // A root the lowering refused (ADR-0019's fallback) reaches this backend with its AddressOf as
+        // written — an IRUnaryOp, never an IRDelegateCreate. Two of its shapes did not compile: an
+        // instance or Shared method (`AddressOf obj.M`, `AddressOf Me.M`, a bare method of the class)
+        // rendered as the member READ `obj->M`, and every AddressOf temp was declared `auto` at its
+        // assignment (§8.4 / D-P12), which a goto from before it to a label after it may not cross —
+        // a Return or a Select arm makes exactly that goto. Where ClosureLowering.ResolveAddressOf
+        // names the target, the IR's pointer-to-return type is no longer the only spelling available:
+        //   * a module procedure keeps its name (`t = Inc;`, a function pointer as before) and its
+        //     temp is declared with the rest, as `decltype(&Inc)` — exactly what `auto` deduced;
+        //   * a class method — bound to its receiver, or Shared — is the lowered path's own forwarding
+        //     closure (DelegateValueText), and its temp is declared as that closure's std::function.
+        // A target the resolver cannot name keeps `auto`, byte-identical to before.
+
+        /// <summary>Every by-copy AddressOf this module renders through its resolved target, by node.</summary>
+        private readonly Dictionary<IRUnaryOp, ClosureLowering.AddressOfTarget> _fallbackAddressOf = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>The member "read" IRBuilder emitted for a by-copy <c>AddressOf obj.M</c> rendered
+        /// through its target: it is not a read, and emits nothing.</summary>
+        private readonly HashSet<IRFieldAccess> _fallbackMethodReads = new(ReferenceEqualityComparer.Instance);
+
+        private HashSet<IRFunction> _memberImplementations;
+
+        /// <summary>Records <paramref name="function"/>'s AddressOf nodes the fallback renders through
+        /// their target. Called before the temporaries are collected, so a method read is never one.</summary>
+        private void CollectFallbackAddressOf(IRFunction function)
+        {
+            foreach (var block in function.Blocks)
+                foreach (var instruction in block.Instructions)
+                {
+                    if (instruction is not IRUnaryOp { Operation: UnaryOpKind.AddressOf } u || _fallbackAddressOf.ContainsKey(u))
+                        continue;
+                    _memberImplementations ??= _module.CollectMemberImplementations();
+                    var resolved = ClosureLowering.ResolveAddressOf(_module, _memberImplementations, _emittingClass, u.Operand);
+                    if (resolved == null || !CanRenderFallbackAddressOf(function, u, resolved)) continue;
+                    _fallbackAddressOf[u] = resolved;
+                    if (resolved.MethodRead != null) _fallbackMethodReads.Add(resolved.MethodRead);
+                }
+        }
+
+        private bool CanRenderFallbackAddressOf(IRFunction function, IRUnaryOp u, ClosureLowering.AddressOfTarget resolved)
+        {
+            if (IsModuleProcedure(resolved.Method)) return true;
+            // A template's parameter types are not in scope where the closure is written.
+            if (resolved.Method.GenericParameters is { Count: > 0 }) return false;
+            if (DeclaringMethodOf(resolved.Method).Declaring is not { } declaring
+                || declaring.GenericParameters is { Count: > 0 }) return false;
+            // The read is also used as a value: no rendering of it compiles (the lowering refuses it).
+            if (resolved.MethodRead != null && ClosureLowering.IsUsedElsewhere(function, resolved.MethodRead, u)) return false;
+            if (!resolved.BindsMe) return true;
+            // A bare instance method binds Me, which exists only in an instance member's root.
+            if (_emittingClass is not { IsStruct: false }) return false;
+            var root = function.IsLambda ? ClosureLowering.RootOf(function, ClosureLowering.CreatorsOf(_module)) : function;
+            return ClosureLowering.OwnerClassOf(_module, root, out var isInstance) != null && isInstance;
+        }
+
+        private bool IsModuleProcedure(IRFunction method) => !_memberImplementations.Contains(method);
+
+        /// <summary>The declared type of a by-copy AddressOf temp rendered through its target.</summary>
+        private string FallbackAddressOfType(IRUnaryOp u, ClosureLowering.AddressOfTarget resolved) =>
+            IsModuleProcedure(resolved.Method) ? $"decltype(&{GetValueName(u.Operand)})" : DelegateValueType(resolved.Method);
+
+        private void VisitFallbackAddressOf(IRUnaryOp u, ClosureLowering.AddressOfTarget resolved)
+        {
+            string value;
+            if (IsModuleProcedure(resolved.Method))
+                value = GetValueName(u.Operand);
+            else
+            {
+                var receiver = resolved.BindsMe ? new IRVariable("Me", new TypeInfo(_emittingClass.Name, TypeKind.Class)) : resolved.Receiver;
+                value = DelegateValueText(resolved.Method, receiver != null ? GetValueName(receiver) : null);
+            }
+            WriteLine($"{GetValueName(u)} = {value};");
         }
 
         // =========================================================================================
