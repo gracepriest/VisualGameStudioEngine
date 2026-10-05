@@ -83,10 +83,14 @@ public static class DesignCodes
     //   BL8036          a referenced image or icon the build did not copy into the output (FormAssetCopy;
     //                   slice 4 D-5d) — a WARNING; the build never fails for it (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8037. That is not
-    // the band being full — BL8037..BL8999 are simply unclaimed, and "full" would wrongly send the
-    // next task looking for another band. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 —
-    // re-check at merge.
+    //   BL8037          RESERVED for piece 2 (feat/portable-controls) — never claim it here
+    //
+    //   BL8038          a retargeted handler SHARED by two owners whose destination signatures differ: the
+    //                   second owner keeps its bind under a NEW name and stub — a WARNING naming both
+    //                   (property-grid slice 5 review round 6; FormRetarget.ConvertToPair)
+    //
+    // The next claim starts at BL8039. That is not the band being full — BL8039..BL8999 are simply
+    // unclaimed. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 — re-check at merge.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -228,12 +232,20 @@ public static class DesignCodes
     public const string RetargetLayoutCrossed = "BL8025";
 
     /// <summary>
-    /// A <c>&lt;Bind&gt;</c> on an event the catalog cannot name on the destination. Only a kind's
-    /// default event has a measured name on both sides (D8); anything else is dropped and named,
-    /// because carrying <c>MouseEnter</c> into <c>addEventListener</c> registers cleanly and never
-    /// fires.
+    /// A <c>&lt;Bind&gt;</c> on an event the catalog cannot name on the destination. A bind crosses iff its
+    /// event is wired on BOTH targets (<c>FormEvents.WiredOn</c>, slice 5's per-kind lists); anything else —
+    /// Paint, Validating, FormClosing on the way to the web — is dropped and named, because carrying a
+    /// WinForms-only name into <c>addEventListener</c> registers cleanly and never fires.
     /// </summary>
     public const string RetargetBindLost = "BL8026";
+
+    /// <summary>
+    /// A retargeted handler SHARED by two owners whose destination signatures differ (a window's Load and a Button's
+    /// Click both calling <c>Init</c>: on the web Load is <c>Init()</c>, Click needs <c>(e As DomEvent)</c>). Nothing is
+    /// lost — the second owner keeps its bind, under a new computed name with its own stub — so not BL8026: a warning
+    /// naming both owners, the shared name and the new one.
+    /// </summary>
+    public const string RetargetHandlerSplit = "BL8038";
 
     /// <summary>
     /// "Wired means running" crossed by RULE (Task 25 review). A web script component runs the
@@ -311,11 +323,10 @@ public static class DesignCodes
     /// silent dead handler for another. The catalog is the source of truth; the shape of the string
     /// is not.</para>
     ///
-    /// <para>⚠ The vocabulary is currently one event per kind per target — the row's
-    /// <c>WebEvent</c> — so this also refuses a real DOM event the row simply does not name
-    /// (<c>mouseenter</c> on a Button). That is the same edge <c>BL8026</c> already drops on the
-    /// retarget route, and widening it is followup 18's per-kind event table, which this refusal is
-    /// written to widen with rather than around.</para>
+    /// <para>⚠ The vocabulary is the row's event LIST on the target (slice 5 D-1, through
+    /// <c>FormEvents.WiredOn</c>) — so this still refuses a real DOM event the row simply does not name
+    /// (<c>mouseover</c> on a Button). That is the same edge <c>BL8026</c> drops on the retarget route; the
+    /// list widens by adding a catalog event, never by relaxing this check.</para>
     /// </summary>
     public const string UnknownWebEvent = "BL8032";
 

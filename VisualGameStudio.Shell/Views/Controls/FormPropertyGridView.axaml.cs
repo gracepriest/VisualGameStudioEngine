@@ -32,7 +32,72 @@ public partial class FormPropertyGridView : UserControl
         PropertyList.AddHandler(KeyDownEvent, OnListKeyDown, RoutingStrategies.Tunnel);
         PropertyList.AddHandler(KeyUpEvent, OnListKeyUp, RoutingStrategies.Tunnel);
         PropertyList.AddHandler(DoubleTappedEvent, OnListDoubleTapped);
+        // A pointer release on a drop-down ITEM routes out of the popup through its combo (the popup's logical parent) and
+        // so tunnels through the list first: that marks the NEXT selection change of that combo as the user's pick.
+        PropertyList.AddHandler(PointerReleasedEvent, OnListPointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        // The mark lives for ONE pointer gesture: a new press (anywhere but an item) or any key ends it (round 5 fix 1).
+        PropertyList.AddHandler(PointerPressedEvent, OnListPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         PropertyList.ContainerPrepared += OnContainerPrepared;
+    }
+
+    private FormPropertyGridViewModel? _revertSource;
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_revertSource != null)
+        {
+            _revertSource.HandlerCellReverted -= OnHandlerCellReverted;
+        }
+
+        _revertSource = DataContext as FormPropertyGridViewModel;
+        if (_revertSource != null)
+        {
+            _revertSource.HandlerCellReverted += OnHandlerCellReverted;
+        }
+    }
+
+    /// <summary>A refused handler name (the row's or the host's): the cell shows the bound handler again.</summary>
+    private void OnHandlerCellReverted(object? sender, FormHandlerCellRevert revert) => RevertCell(revert.Row, revert.RefusedText);
+
+    /// <summary>
+    /// Puts the row's bound handler back into its combo, discarding the refused text. ⛔ Only while the cell still SHOWS
+    /// that text (round 5 fix 2): a host refusal arrives after the user may have typed something else, which is never wiped.
+    /// ⚠ <c>SetCurrentValue</c>, so the one-way binding stays in place for the next host bind.
+    /// </summary>
+    private void RevertCell(FormEventRow row, string? refusedText)
+    {
+        if (PropertyList.ContainerFromItem(row) is { } container &&
+            container.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault() is { } combo &&
+            (refusedText == null || string.Equals((combo.Text ?? "").Trim(), refusedText.Trim(), StringComparison.Ordinal)))
+        {
+            combo.SetCurrentValue(ComboBox.TextProperty, row.Handler);
+        }
+    }
+
+    /// <summary>The handler combo whose drop-down ITEM the pointer was just released on — the only source of a pick.</summary>
+    private ComboBox? _pointerPick;
+
+    private void OnListPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Source is not Visual source || source.FindAncestorOfType<ComboBoxItem>(includeSelf: true) == null)
+        {
+            _pointerPick = null;
+        }
+    }
+
+    /// <summary>
+    /// ⛔ The drop-down closed: whatever the pointer marked is over (round 5 fix 1). Clicking the item ALREADY selected raises
+    /// no selection change, so without this the mark outlived the drop-down and the next auto-select — typing a matching
+    /// name — was taken for the user's pick.
+    /// </summary>
+    private void OnHandlerDropDownClosed(object? sender, EventArgs e) => _pointerPick = null;
+
+    private void OnListPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _pointerPick = e.Source is Visual source && source.FindAncestorOfType<ComboBoxItem>(includeSelf: true) is { } item
+            ? ItemsControl.ItemsControlFromItemContainer(item) as ComboBox
+            : null;
     }
 
     /// <summary>
@@ -341,6 +406,18 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListDoubleTapped(object? sender, TappedEventArgs e)
     {
+        // Slice 5 D-5: a double-click on an Events-tab row (its name, or its value cell) creates-or-navigates its handler —
+        // the host decides which (bound → navigate; empty → write <Id>_<Event>). Not inside an OPEN drop-down: a
+        // double-click there picks an item.
+        if (e.Source is Visual eventSource &&
+            eventSource.FindAncestorOfType<ListBoxItem>(includeSelf: true) is { DataContext: FormEventRow eventRow } &&
+            eventSource.FindAncestorOfType<ComboBoxItem>(includeSelf: true) == null)
+        {
+            eventRow.RequestHandler();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Source is not Visual source ||
             source.FindAncestorOfType<TypedValueEditor>(includeSelf: true) != null ||
             source.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: FormPropertyRow row })
@@ -352,6 +429,44 @@ public partial class FormPropertyGridView : UserControl
         if (row.ToggleBool())
         {
             e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// An Events-tab handler drop-down is opening (D-5 freshness): ask the host for the code-behind as it is NOW — the open
+    /// tab's unsaved text first, then the disk — so the list offers a Sub typed a moment ago.
+    /// </summary>
+    private void OnHandlerDropDownOpened(object? sender, EventArgs e)
+    {
+        if (DataContext is FormPropertyGridViewModel grid)
+        {
+            grid.RequestCodeBehindRefresh();
+        }
+    }
+
+    /// <summary>
+    /// A handler was PICKED from the drop-down: bind it (the row's commit rules). ⛔ Only a pick the USER made — a pointer
+    /// released on one of THIS combo's items (<see cref="OnListPointerReleased"/>). The editable combo also selects by
+    /// itself: when the typed text MATCHES an item (round 4 ruling 7 — typing <c>Fits</c> on the way to <c>Fits2</c> bound
+    /// <c>Fits</c>), and when its items or text change underneath it (a refresh). Enter commits what was typed instead.
+    /// </summary>
+    private void OnHandlerPicked(object? sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { DataContext: FormEventRow row, SelectedItem: string picked } combo &&
+            ReferenceEquals(_pointerPick, combo))
+        {
+            _pointerPick = null;
+            row.Commit(picked);
+        }
+    }
+
+    /// <summary>Leaving the handler cell commits what was typed, as Enter does (VS). The same text as bound is a no-op.</summary>
+    private void OnHandlerLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox { DataContext: FormEventRow row, IsDropDownOpen: false } combo &&
+            !combo.IsKeyboardFocusWithin)
+        {
+            row.Commit(combo.Text);
         }
     }
 
@@ -397,6 +512,30 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListKeyDown(object? sender, KeyEventArgs e)
     {
+        _pointerPick = null;   // a key is never part of a pointer pick (round 5 fix 1)
+
+        // Slice 5: Enter in an Events-tab row's handler combo COMMITS what was typed (a fitting Sub binds, a new name asks
+        // the host for the stub, an empty cell unbinds). On the TUNNEL, before the editable combo takes Enter for itself.
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && e.Source is Visual typedIn &&
+            typedIn.FindAncestorOfType<ComboBox>(includeSelf: true) is { DataContext: FormEventRow eventRow } combo)
+        {
+            eventRow.Commit(combo.Text);
+            combo.IsDropDownOpen = false;
+            e.Handled = true;
+            return;
+        }
+
+        // Escape (VS, round 4 ruling 2): what was typed is thrown away — the cell re-reads its bound handler — and nothing
+        // is committed, so the LostFocus that follows finds the bound text and is a no-op.
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None && e.Source is Visual escapedIn &&
+            escapedIn.FindAncestorOfType<ComboBox>(includeSelf: true) is { DataContext: FormEventRow escapedRow } escapedCombo)
+        {
+            escapedCombo.IsDropDownOpen = false;
+            escapedCombo.SetCurrentValue(ComboBox.TextProperty, escapedRow.Handler);
+            e.Handled = true;
+            return;
+        }
+
         // A COMPOSITE row (Font, Size, Location, Padding) expands with Right and collapses with Left, as in VS — only when
         // focus is on the row's CONTAINER itself: in its editor the arrows move the caret.
         if (e.KeyModifiers == KeyModifiers.None && e.Source is ListBoxItem { DataContext: FormPropertyRow { IsComposite: true } row } &&

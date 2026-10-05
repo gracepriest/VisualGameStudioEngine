@@ -679,11 +679,13 @@ public class FormDocumentRoundTripTests
     public void Write_StillAddsAPropertyWhoseValueIsNotTheDefault()
     {
         // The other half: suppressing defaults must not suppress a real value.
+        // ⚠ Not "b.blwebform": a nameless form takes its file's name, and a control named like its form is refused
+        // (BL8017, slice 5 review fix 2) — the write would then be refused for a reason this test is not about.
         var form = Read("""
             <WebForm>
               <Controls><Button Id="b"/></Controls>
             </WebForm>
-            """, "b.blwebform");
+            """, "Page.blwebform");
         form.Model.FindById("b")!.TabIndex = 3;
 
         Assert.That(FormDocumentWriter.Write(form), Does.Contain("""TabIndex="3" """.TrimEnd()));

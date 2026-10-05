@@ -17,6 +17,60 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: property grid slice 5 (EVENTS) GATED and merged to master (branch `feat/property-grid-slice5`)
+
+Slice 5 of the property grid: the Events tab. VS's lightning bolt lists the seam's events (`FormEvents.WiredOn`; a web
+Panel has no Paint). The handler cell is an editable combo:
+- pick a fitting Sub to bind it;
+- clear the cell to unbind;
+- type a new name to create a stub;
+- double-click to create-or-navigate;
+- Esc to revert.
+
+Also:
+- The Form has events: Load runs at the end of `InitializeComponent` on the page.
+- KeyPress and Enter/Leave are emitted on the web through generated `VgsOn_` wrapper Subs.
+- Double-clicking the form surface opens `<Form>_Load`.
+- Retarget crosses every owner by one rule (`CrossBinds`) and stubs the form's own binds. A handler shared with
+  incompatible signatures is split (BL8038).
+- `FormCodeScan` is rebuilt on BasicLang's lexer.
+
+ADR 0021 (the event-list contract piece 2 consumes); the next free design code is BL8039 (BL8037 reserved for piece 2).
+Record, decisions, mutation ledgers: `docs/superpowers/plans/2026-10-04-property-grid-slice5-preflight.md` §6;
+follow-ups `docs/form-designer-followups.md` §36–43.
+
+**Gate** (Windows, Release, base `2813205d`):
+- **Fast subset:** 12424 total, 12399 passed, 6 failed, 19 skipped. The six failure NAMES are identical to Task 0's
+  machine rows (`Emit_Replaces…Mapped` ×2, `Emit_ReplacingAnImportedModule_…`, `EveryTextRoute_UsesTheFormatter_…`,
+  `SearchSnippets_*` ×2).
+- **Named Integration set:** 289 total, 288 passed, 0 failed, 1 skipped (the inverse-gated
+  `Build_CppLanguageProject_NoToolchain_…`).
+- `Form*`/`WinFormsCatalog*` Integration: 349/350 (machine-culture `Expected_IsWhatDotNetPrints`).
+- The IDE drop is refreshed. No trial merge was run (the coordinator merges).
+
+**Owner click-through** (`VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`):
+1. A Button → the lightning bolt: its events, Action first; Categorized/A-Z/search work; Properties brings the rows back.
+2. Double-click the empty Click cell: `btnX_Click(sender As Object, e As EventArgs)` opens and the cell shows it; click the
+   canvas and the wiring stays; F5 — the click runs it.
+3. Double-click MouseDown: `e As MouseEventArgs`.
+4. Write `Private Sub AnyClick(sender As Object, e As EventArgs)`. Another Button's Click drop-down offers it; a
+   `KeyEventArgs` Sub is offered for KeyDown, not Click. Pick it: the code is unchanged.
+5. Clear the cell: the wiring goes, the Sub stays; Ctrl+Z restores it.
+6. Type `DoIt` + Enter: created and opened. `Dim` + Enter: refused in the description pane, and the cell reverts. Type a
+   name, then Esc: reverted, nothing written.
+7. Double-click the form background: `<Form>_Load`; F5 — Load runs before the window shows. The grey canvas outside the
+   form: nothing.
+8. Web form: a TextBox KeyPress appending to a label runs for letters, Enter, Backspace and Esc — not Shift or the arrows.
+   A Panel's Enter does not run when tabbing between its own TextBoxes, and does when tabbing in from outside.
+9. Web form: a Panel has no Paint, and its Click → `pnl_Click(e As DomEvent)` above the region. Form events are
+   Load/Resize/Click/KeyDown/KeyUp/KeyPress. A Load that writes a label shows on the page; resizing runs Resize.
+10. Retarget a WinForms form with Load + a Button MouseDown to the web: the pair builds and the page runs both; FormClosing
+    is reported. Load and Click sharing one handler → the Button gets its own `btn_Click` + BL8038, and it builds.
+11. Half-typed `.bas` (an unclosed string, `99999999999999999999L`, a Sub with no `End Sub`): the Events drop-downs still
+    work.
+
+---
+
 ## 🧪 NEWEST — 2026-10-05: #134 TESTED — a C++ Release `.blproj` runs the aggressive pipeline, and the suite can finally tell
 
 The fix is commit `1e3d261b` on master `7daf263d` (`CppProjectBuilder.EmitCore` builds its `CompilerOptions` with `OptimizeAggressive = project.OptimizationsEnabledFor(configuration)`; the native `-O2` request asks the same; `Program.cs`'s managed `build` asks it too). The tests and this section are uncommitted work on top of it. No product file changed. Before this, **nothing in the suite could tell the fix from its absence**: every C++ leg ran a program through `BclE2E.CompileToCppOptimized` (standard) or `CompileToCppAggressive` (called directly), never through a project.
@@ -84,7 +138,7 @@ M1 the arm removed (a base call falls to the IRValue catch-all again) **38** sha
 
 ---
 
-## 🎨 NEWEST — 2026-10-04: property grid slice 4 GATED and merged to master (PR #155, branch `feat/property-grid-slice4`)
+## 🎨 2026-10-04: property grid slice 4 GATED and merged to master (PR #155, branch `feat/property-grid-slice4`)
 
 Slice 4 of the property grid: the colour drop-down (Custom / Web / System, alpha refused where WinForms throws —
 measured per kind), the Font `…` dialog, Bool as True/False, catalog-filtered choices, Anchor/Dock pop-ups, AcceptButton

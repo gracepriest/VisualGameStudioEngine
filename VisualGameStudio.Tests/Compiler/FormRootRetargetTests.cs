@@ -5,8 +5,9 @@ namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
 /// Spec §2.3 Retarget — FormRetarget visits FormRoot EXPLICITLY: a root row that applies to the
-/// destination crosses; one that does not is NAMED (never carried silently); a root bind with no name
-/// on the destination is dropped and named with RetargetBindLost.
+/// destination crosses; one that does not is NAMED (never carried silently). The form's own binds cross by the ONE rule
+/// controls use (slice 5 D-6): an event wired on both targets crosses under the destination's name with its handler; any
+/// other is dropped and named with RetargetBindLost.
 /// </summary>
 [TestFixture]
 public class FormRootRetargetTests
@@ -182,20 +183,47 @@ public class FormRootRetargetTests
         });
     }
 
-    [Test]
-    public void ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed(
-        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    /// <summary>
+    /// Slice 5: Load now crosses (the Form has events), so the LOST arm is pinned on an event with no destination name —
+    /// FormClosing (WinForms-only) on the way to the web; on the way back every web root event exists on WinForms, so an
+    /// event the Form does not declare at all (<c>beforeunload</c>).
+    /// </summary>
+    [TestCase(FormTarget.WinForms, "FormClosing", "'Load' → 'load'", TestName = "{m}(WinForms)")]
+    [TestCase(FormTarget.Web, "beforeunload", "'load' → 'Load'", TestName = "{m}(Web)")]
+    public void ARootBind_WithNoFormEventOnTheDestination_IsDroppedAndNamed(FormTarget from, string evt, string bothSides)
     {
         var source = new FormDocument { Target = from, Name = "Login" };
-        source.Binds.Add(new FormBind { Event = "Load", Handler = "Login_Load" });
+        source.Binds.Add(new FormBind { Event = evt, Handler = "Login_Closing" });
 
         var result = FormRetarget.Convert(source, Other(from));
 
         Assert.Multiple(() =>
         {
             Assert.That(result.Document.Binds, Is.Empty, "never carried silently");
+            // Slice 5 Task 7 (D-6): the ONE crossing rule's finding — the owner, the event, the handler AND the events that
+            // DO cross, exactly as a control's says.
             Assert.That(result.Diagnostics.Single(d => d.Code == DesignCodes.RetargetBindLost).Message,
-                Does.Contain("'form'").And.Contain("Login_Load"));
+                Does.Contain("'form'").And.Contain("Login_Closing").And.Contain(evt).And.Contain(bothSides));
+        });
+    }
+
+    /// <summary>
+    /// Slice 5 Task 7: the crossing branch made non-vacuous — the Form's Load crosses BOTH ways under the destination's name
+    /// (<c>Load</c> ⇄ <c>load</c>), the user's handler name kept, nothing named lost.
+    /// </summary>
+    [TestCase(FormTarget.WinForms, "Load", "load", TestName = "{m}(WinForms)")]
+    [TestCase(FormTarget.Web, "load", "Load", TestName = "{m}(Web)")]
+    public void ARootLoadBind_Crosses_BothWays_KeepingItsHandler(FormTarget from, string fromName, string toName)
+    {
+        var source = new FormDocument { Target = from, Name = "Login" };
+        source.Binds.Add(new FormBind { Event = fromName, Handler = "StartUp" });
+
+        var result = FormRetarget.Convert(source, Other(from));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Document.Binds.Select(b => (b.Event, b.Handler)), Is.EqualTo(new[] { (toName, "StartUp") }));
+            Assert.That(result.Diagnostics.Where(d => d.Code == DesignCodes.RetargetBindLost), Is.Empty);
         });
     }
 
@@ -203,7 +231,7 @@ public class FormRootRetargetTests
     public void ARootBind_ReadFromTheFile_IsDroppedAndNamed_NotCarriedAsAnUnknownChild()
     {
         var source = BasicLang.Forms.Serialization.FormDocumentReader.Read("Login.blform", """
-            <Form Name="Login" Version="1"><Bind Event="Load" Handler="Login_Load"/><Controls/></Form>
+            <Form Name="Login" Version="1"><Bind Event="FormClosing" Handler="Login_Closing"/><Controls/></Form>
             """).Model;
 
         var result = FormRetarget.Convert(source, FormTarget.Web);

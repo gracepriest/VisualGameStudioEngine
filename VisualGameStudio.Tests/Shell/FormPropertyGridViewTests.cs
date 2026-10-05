@@ -291,6 +291,7 @@ public class FormPropertyGridViewTests
             Assert.That(types, Does.Contain(typeof(FormPropertyRow)));
             Assert.That(types, Does.Contain(typeof(FormPropertyCategoryHeader)));
             Assert.That(types, Does.Contain(typeof(FormObjectItem)));
+            Assert.That(types, Does.Contain(typeof(FormEventRow)), "slice 5: the Events tab's row");
         });
     }
 
@@ -337,6 +338,11 @@ public class FormPropertyGridViewTests
         {
             Assert.That(NameOf("AlphabeticalButton"), Is.EqualTo("Alphabetical"));
             Assert.That(NameOf("CategorizedButton"), Is.EqualTo("Categorized"));
+            // Slice 5: the bolt is a glyph with no text, so its name is all a screen reader has; each handler cell names
+            // its event.
+            Assert.That(NameOf("PropertiesButton"), Is.EqualTo("Properties"));
+            Assert.That(NameOf("EventsButton"), Is.EqualTo("Events"));
+            Assert.That(NameOf("HandlerCombo"), Does.Contain("{0}").And.Contain("Binding Name"), "the handler cell names its event");
             Assert.That(NameOf("SearchBox"), Is.EqualTo("Search properties"));
             Assert.That(NameOf("ObjectSelector"), Is.Not.Null.And.Not.Empty);
             // Dock's "None" carries its caption, but its name must match its tooltip like every other pop-up choice.
@@ -582,6 +588,91 @@ public class FormPropertyGridViewTests
             {
                 Assert.That(first.IsCategorized, Is.True, "the first grid went back to Categorized");
                 Assert.That(second.IsAlphabetical, Is.True, "…and the second grid STAYED A-Z");
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Slice 5: Properties | Events and Categorized | A-Z are independent — clicking the bolt shows the events and leaves the
+    /// sort alone; Properties brings the property rows back; and the MODE drives the bolt (the binding's other direction).
+    /// ⚠ Measured on Avalonia 11.3.13: putting all four radios in ONE panel did not couple them (an equivalent mutant —
+    /// see the AXAML comment), so this guards the bindings, and any version that does couple them.
+    /// </summary>
+    [AvaloniaTest]
+    public void ClickingEvents_LeavesCategorizedChecked_AndPropertiesComesBack()
+    {
+        using var host = Host();
+        var (grid, view, window) = (host.Grid, host.View, host.Window);
+        var categorized = view.FindControl<ToggleButton>("CategorizedButton")!;
+
+        Click(window, view.FindControl<ToggleButton>("EventsButton")!);
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.IsEventsMode, Is.True, "the bolt shows the events");
+            Assert.That(categorized.IsChecked, Is.True, "the sort toggle is untouched");
+            Assert.That(grid.IsCategorized, Is.True, "and so is the sort");
+            Assert.That(grid.DisplayItems.OfType<FormEventRow>(), Is.Not.Empty, "the list carries event rows");
+            Assert.That(grid.DisplayItems.OfType<FormPropertyRow>(), Is.Empty, "and no property row");
+        });
+
+        var events = view.FindControl<ToggleButton>("EventsButton")!;
+        var properties = view.FindControl<ToggleButton>("PropertiesButton")!;
+        Click(window, properties);
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.IsEventsMode, Is.False);
+            Assert.That(grid.DisplayItems.OfType<FormPropertyRow>(), Is.Not.Empty, "the property rows are back");
+            Assert.That(categorized.IsChecked, Is.True);
+            Assert.That(events.IsChecked, Is.False, "the bolt unchecks");
+        });
+
+        // The other direction: the MODE drives the toggles (a grid whose mode is set — another view of it, a restore).
+        grid.IsEventsMode = true;
+        Dispatcher.UIThread.RunJobs();
+        Assert.Multiple(() =>
+        {
+            Assert.That(events.IsChecked, Is.True, "the bolt follows the mode");
+            Assert.That(properties.IsChecked, Is.False, "and Properties lets go");
+        });
+    }
+
+    /// <summary>
+    /// ⛔ Two grids in one window keep their OWN mode: the Properties/Events pair groups by its parent panel too, never by
+    /// a window-wide GroupName (the sort buttons' rule, <see cref="TwoGridViewsInOneWindow_SortIndependently"/>).
+    /// </summary>
+    [AvaloniaTest]
+    public void TwoGridViewsInOneWindow_ShowEventsIndependently()
+    {
+        FormPropertyGridViewModel NewGrid()
+        {
+            var file = FormDocumentReader.Read("F.blform", Doc);
+            var grid = new FormPropertyGridViewModel();
+            grid.Load(file);
+            return grid;
+        }
+
+        var (first, second) = (NewGrid(), NewGrid());
+        var firstView = new FormPropertyGridView { DataContext = first };
+        var secondView = new FormPropertyGridView { DataContext = second };
+        var panel = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        Grid.SetColumn(secondView, 1);
+        panel.Children.Add(firstView);
+        panel.Children.Add(secondView);
+        var window = NewWindow(panel, 800, 900);
+        try
+        {
+            Click(window, firstView.FindControl<ToggleButton>("EventsButton")!);
+            Click(window, secondView.FindControl<ToggleButton>("EventsButton")!);
+            Click(window, firstView.FindControl<ToggleButton>("PropertiesButton")!);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first.IsEventsMode, Is.False, "the first grid went back to Properties");
+                Assert.That(second.IsEventsMode, Is.True, "…and the second STAYED on Events");
             });
         }
         finally
@@ -969,6 +1060,27 @@ public class FormPropertyGridViewTests
         {
             Assert.That(text, Does.Contain("SelectedControl=\"{Binding PropertyGrid.SelectedControl, Mode=TwoWay}\""));
             Assert.That(text, Does.Contain("CommandParameter=\"{Binding PropertyGrid.SelectedControl}\""));
+        });
+    }
+
+    /// <summary>
+    /// Slice 5 D-9: the canvas's form-surface double-click reaches the host only through this binding — and the binding
+    /// reaches something only if the toolkit GENERATED <c>ActivateFormCommand</c> (an attribute separated from its method by
+    /// a doc comment binds to nothing, CLAUDE.md). Both halves, read from the AXAML and the view model's type.
+    /// </summary>
+    [Test]
+    public void TheDesignCanvas_BindsBothActivateCommands_AndTheViewModelHasThem()
+    {
+        var canvas = DocumentView().Descendants()
+            .Single(e => (string?)e.Attribute(XName.Get("Name", Xaml)) == "DesignCanvas");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)canvas.Attribute("ActivateFormCommand"), Is.EqualTo("{Binding ActivateFormCommand}"));
+            Assert.That((string?)canvas.Attribute("ActivateControlCommand"), Is.EqualTo("{Binding ActivateControlCommand}"));
+            Assert.That(Resolve(typeof(CodeEditorDocumentViewModel), "ActivateFormCommand", out _), Is.Not.Null,
+                "the toolkit generated ActivateFormCommand");
+            Assert.That(Resolve(typeof(CodeEditorDocumentViewModel), "ActivateControlCommand", out _), Is.Not.Null);
         });
     }
 }
