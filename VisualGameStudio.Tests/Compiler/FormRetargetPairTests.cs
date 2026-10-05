@@ -458,7 +458,9 @@ public class FormRetargetPairTests
     {
         var pair = FormRetarget.ConvertToPair(Read(WinFormsSharedInit, "Login.blform"), FormTarget.Web);
         var document = FormDocumentReader.Read(Path.Combine(_dir, pair.DocumentFileName), pair.DocumentText).Model;
-        var warning = pair.Diagnostics.SingleOrDefault(d => d.Code == DesignCodes.RetargetBindLost && d.Message.Contains("Init"));
+        // Round 6 fix 4: the bind was KEPT and renamed, not lost — its own code (BL8038), never BL8026.
+        var warning = pair.Diagnostics.SingleOrDefault(d => d.Code == "BL8038" && d.Message.Contains("Init"));
+        Assert.That(pair.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.RetargetBindLost), "nothing was lost");
 
         Assert.Multiple(() =>
         {

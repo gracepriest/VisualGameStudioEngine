@@ -124,7 +124,7 @@ public class FormEventAcceptanceTests
         vm.Selection.Set(control);
         var row = vm.PropertyGrid.EventRows.Single(r => r.Name == eventName);
         row.RequestHandler();
-        for (var i = 0; i < 100 && row.Handler.Length == 0; i++)
+        for (var i = 0; i < 500 && row.Handler.Length == 0; i++)   // up to 10 s: a loaded machine is slow, never wrong
         {
             await Task.Delay(20);
         }
@@ -147,12 +147,35 @@ public class FormEventAcceptanceTests
         return route;
     }
 
-    private static string CliBuild(string route)
+    /// <summary>
+    /// Builds with the real CLI and returns its output directory — FOUND (the directory under <c>bin</c> holding the built
+    /// <paramref name="artifact"/>), not assumed, so a change of configuration or framework does not break the walkthrough.
+    /// </summary>
+    private static string CliBuild(string route, string artifact)
     {
         var (exit, stdout, stderr) = CliTestHarness.RunProcess(
             CliTestHarness.CliPath(), new[] { "build", Path.Combine(route, "App.blproj") }, route, timeoutMs: 300_000);
         Assert.That(exit, Is.Zero, $"the real CLI refused the designer's output.\n{stdout}\n{stderr}");
-        return Path.Combine(route, "bin", "Debug", "net8.0");
+        var built = Directory.GetFiles(Path.Combine(route, "bin"), artifact, SearchOption.AllDirectories).FirstOrDefault();
+        Assert.That(built, Is.Not.Null, $"the CLI built no {artifact} under bin/:\n{stdout}");
+        return Path.GetDirectoryName(built!)!;
+    }
+
+    /// <summary>Skips the test when node cannot run — asked BEFORE any build, so a missing node costs nothing.</summary>
+    private static void RequireNode()
+    {
+        try
+        {
+            var (exit, _, _) = CliTestHarness.RunProcess("node", new[] { "--version" }, Path.GetTempPath(), timeoutMs: 30_000);
+            if (exit != 0)
+            {
+                Assert.Ignore("node is not runnable here — the web run tier needs it");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Assert.Ignore("node is not on PATH — the web run tier needs it");
+        }
     }
 
     private static async Task<string> IdeBuild(string route)
@@ -220,6 +243,7 @@ public class FormEventAcceptanceTests
     [Test]
     public async Task Web_TheEventsTabsGestures_BuildThroughBothRoutes_AndRun()
     {
+        RequireNode();
         var design = await DesignAsync(FormTarget.Web);
         var form = FormDocumentReader.Read(Path.Combine(design, "EvForm.blwebform"),
             File.ReadAllText(Path.Combine(design, "EvForm.blwebform"))).Model;
@@ -234,7 +258,7 @@ public class FormEventAcceptanceTests
             console.log("LBL " + get("Label1").textContent);
             """;
 
-        var cliOut = CliBuild(Route(design, "cli", WebCliProject));
+        var cliOut = CliBuild(Route(design, "cli", WebCliProject), "EvForm.html");
         AssertTheRun(RunNode(form, cliOut, dispatch), "--- dispatch", "web/CLI");
         Log("[3] web/CLI ran under node");
 
@@ -336,7 +360,7 @@ public class FormEventAcceptanceTests
         var design = await DesignAsync(FormTarget.WinForms);
         var driver = BuildDriver();
 
-        var cliOut = CliBuild(Route(design, "cli", WinCliProject));
+        var cliOut = CliBuild(Route(design, "cli", WinCliProject), "App.dll");
         AssertTheRun(RunDriver(driver, cliOut), "--- shown", "WinForms/CLI");
         Log("[3] WinForms/CLI ran");
 

@@ -779,12 +779,12 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         // ⛔ One gesture at a time, IN ORDER (round 5 fix 2): each waits for the one before it, so a second gesture reads
-        // the code-behind the first one wrote. Only a request IDENTICAL to the one in flight is dropped — Enter and the
-        // LostFocus right behind it asking for the same typed name; a different request (another control, another event)
-        // is queued, never lost. ⚠ A chained completion rather than SemaphoreSlim: the waiter's continuation must run on
-        // the releasing (UI) thread, and a semaphore's waiter resumes on the thread pool where there is no sync context.
+        // the code-behind the first one wrote. A request IDENTICAL to one already waiting or running is dropped (round 6
+        // fix 3): Enter and the LostFocus right behind it asking for the same typed name. A different request (another
+        // control, another event) is queued, never lost. The queue is a chain of completions: each gesture awaits the
+        // previous one's task, then completes its own whatever happened.
         var key = (owner.Control, owner.Form, evt, handlerName);
-        if (_handlerInFlight is { } current && current.Equals(key))
+        if (!_handlerGesturesPending.Add(key))
         {
             return;
         }
@@ -792,32 +792,46 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         var previous = _handlerGestureTail;
         var done = new TaskCompletionSource();
         _handlerGestureTail = done.Task;
-        await previous;
-        _handlerInFlight = key;
         try
         {
+            await previous;
             await RunHandlerGestureAsync(owner, evt, handlerName);
+        }
+        catch (Exception ex)
+        {
+            // ⛔ Never a faulted task (round 6 fix 3): the grid starts this fire-and-forget, so a throw here (even from
+            // reporting a failure) would go unobserved. Traced, and the queue moves on.
+            System.Diagnostics.Trace.TraceError($"A designer handler gesture failed: {ex}");
         }
         finally
         {
-            _handlerInFlight = null;
+            _handlerGesturesPending.Remove(key);
             done.SetResult();
         }
     }
 
+    /// <summary>
+    /// The tab closed (the shell's <c>CleanupDocumentState</c> calls this): a handler gesture still queued writes and opens
+    /// nothing (round 6 fix 3); <see cref="RunHandlerGestureAsync"/> checks it before touching the code-behind.
+    /// </summary>
+    public void MarkClosed() => _closed = true;
+
+    private bool _closed;
+
     /// <summary>The last handler gesture queued: the next one waits for it (<see cref="ActivateHandlerAsync"/>).</summary>
     private Task _handlerGestureTail = Task.CompletedTask;
 
-    /// <summary>The gesture running now — a request identical to it is dropped.</summary>
-    private (BasicLang.Forms.FormControl?, BasicLang.Forms.FormDocument, BasicLang.Forms.FormEventDef?, string?)? _handlerInFlight;
+    /// <summary>Every gesture waiting or running: a request identical to one of them is dropped.</summary>
+    private readonly HashSet<(BasicLang.Forms.FormControl?, BasicLang.Forms.FormDocument, BasicLang.Forms.FormEventDef?, string?)>
+        _handlerGesturesPending = new();
 
     private async Task RunHandlerGestureAsync(
         BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
     {
         var file = DesignFile;
-        if (file == null || FilePath == null)
+        if (file == null || FilePath == null || _closed)
         {
-            return;
+            return;   // ⛔ a gesture still queued when the tab closed writes and opens nothing (round 6 fix 3)
         }
 
         var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);

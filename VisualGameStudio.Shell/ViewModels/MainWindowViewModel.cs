@@ -1281,6 +1281,12 @@ public partial class MainWindowViewModel : ViewModelBase
             _documentCleanupActions.Remove(filePath);
         }
 
+        // A designer handler gesture still queued on this document must not write or navigate after its tab is gone.
+        if (_openDocuments.TryGetValue(filePath, out var closing))
+        {
+            closing.MarkClosed();
+        }
+
         _openDocuments.Remove(filePath);
 
         // Stop auto-save tracking for the closed document (cancels any pending timer)

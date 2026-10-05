@@ -251,8 +251,10 @@ public static class FormCodeScan
                 tokens = null;
             }
         }
-        catch (LexerException)
+        catch (Exception e) when (IsNonFatal(e))
         {
+            // ⛔ Not only LexerException (round 6, CRITICAL): a literal too big for a Long throws a RAW OverflowException
+            // (long.Parse / Convert.ToInt64 inside the lexer) — half-typed mid-edit, it threw out of the grid's refresh.
             tokens = null;
         }
 
@@ -284,9 +286,14 @@ public static class FormCodeScan
             .ToList();
     }
 
+    /// <summary>
+    /// One physical line's tokens, cut at its error. A <see cref="LexerException"/> says where (its column); any other
+    /// non-fatal failure (a raw <see cref="OverflowException"/> from a literal) does not, so the line is cut back one
+    /// word at a time until what remains tokenizes — `Private big As Long = 999…L` still names `big`.
+    /// </summary>
     private static List<LexToken> TokenizeLine(string line)
     {
-        while (true)
+        while (line.Length > 0)
         {
             try
             {
@@ -296,12 +303,19 @@ public static class FormCodeScan
             {
                 line = line[..(e.Column - 1)];   // keep what precedes the error
             }
-            catch (LexerException)
+            catch (Exception e) when (IsNonFatal(e))
             {
-                return new List<LexToken>();
+                var cut = line.TrimEnd().LastIndexOfAny(new[] { ' ', '\t', '=', '(', ',' });
+                line = cut <= 0 ? "" : line[..cut];
             }
         }
+
+        return new List<LexToken>();
     }
+
+    /// <summary>Every exception but the ones a process cannot recover from — what a scan of a half-typed file may swallow.</summary>
+    private static bool IsNonFatal(Exception e) =>
+        e is not (OutOfMemoryException or StackOverflowException or AccessViolationException or ThreadAbortException);
 
     /// <summary>
     /// Logical lines split at top-level <c>:</c> (a one-line <c>Sub X() : End Sub</c> is two statements). A line ending
@@ -556,8 +570,11 @@ public static class FormCodeScan
             case TokenType.Declare:
             {
                 var i = k + 1;
-                while (i < tokens.Count && tokens[i].Type == TokenType.Identifier &&
-                       tokens[i].Lexeme is "Ansi" or "Unicode" or "Auto")
+                // ⚠ By TEXT, not token type: `Auto` is a lexer KEYWORD token (round 6 fix 5), `Ansi`/`Unicode` identifiers.
+                while (i < tokens.Count &&
+                       (tokens[i].Lexeme.Equals("Ansi", StringComparison.OrdinalIgnoreCase) ||
+                        tokens[i].Lexeme.Equals("Unicode", StringComparison.OrdinalIgnoreCase) ||
+                        tokens[i].Lexeme.Equals("Auto", StringComparison.OrdinalIgnoreCase)))
                 {
                     i++;
                 }

@@ -160,16 +160,28 @@ public static class FormRetarget
                 {
                     var shared = plan.Handler;
                     var at = owner.Binds.IndexOf(bind);
+
+                    // The bind is set aside while the planner computes a fresh name (an existing bind would win over the
+                    // computed one) — and ALWAYS put back, whatever the planner does (round 6 fix 4).
+                    FormHandlerPlan fresh;
                     owner.Binds.RemoveAt(at);
-                    var fresh = FormHandlers.Plan(document, owner, evt, code);
-                    owner.Binds.Insert(at, bind);
+                    try
+                    {
+                        fresh = FormHandlers.Plan(document, owner, evt, code);
+                    }
+                    finally
+                    {
+                        owner.Binds.Insert(at, bind);
+                    }
+
                     if (fresh.Outcome != HandlerOutcome.Refused)
                     {
                         bind.Handler = fresh.Handler;
                         plan = fresh;
                         var first = claimedBy.TryGetValue(shared, out var c) ? $"{c.Owner.Label}'s {c.Event}" : "another member";
-                        diagnostics.Add(new DesignDiagnostic(DesignCodes.RetargetBindLost,
-                            $"{DesignCodes.RetargetBindLost}: {owner.Label}'s {evt.Name} and {first} both call {shared}, and on " +
+                        // Its OWN code (round 6 fix 4): nothing was lost — the bind is kept, renamed — so never BL8026.
+                        diagnostics.Add(new DesignDiagnostic(DesignCodes.RetargetHandlerSplit,
+                            $"{DesignCodes.RetargetHandlerSplit}: {owner.Label}'s {evt.Name} and {first} both call {shared}, and on " +
                             $"{Describe(to)} their handlers need different signatures ({why}). {shared} stays with {first}; " +
                             $"{owner.Label}'s {evt.Name} now calls {fresh.Handler}, a new stub — move what {shared} did for it there.",
                             source.SourcePath, 0, 0, IsWarning: true));

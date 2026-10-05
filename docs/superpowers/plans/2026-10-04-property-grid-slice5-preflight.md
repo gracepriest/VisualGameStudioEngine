@@ -1251,6 +1251,36 @@ the round-5 filter 1260/1260. `dotnet clean` was run on the Shell after the AXAM
 
 Green: `FormEventAcceptanceTests` 2/2 and `FormEventWebRunTests` 28/28, Edge rows included.
 
+### Review round 6 (of `9fd5b58e`/`fdb625b3`) — fixes (base `fdb625b3`)
+Red first: 7 failed for their own reasons. The differential (6 fixtures), the last-quote LexerException row and the
+Ansi/Unicode rows were green on arrival and stand as guards.
+1. **CRITICAL.** The scanner now catches every NON-FATAL exception from the lexer (`IsNonFatal`: everything but OOM,
+   StackOverflow, AccessViolation, ThreadAbort). Measured: a raw `OverflowException` from `99999999999999999999L` and from
+   `&HFFFFFFFFFFFFFFFFFFFF` threw out of the grid's refresh. Line by line, a non-`LexerException` failure has no column, so
+   the line is cut back one word at a time: `Private big As Long = …` still names `big`.
+2. **Differential:** every clean fixture with a trailing `x = "` (the last quote → the LexerException fallback) reads
+   identically to the lexer: the Subs' name@line(params) and the member set.
+3. **Gesture queue:**
+   - Identical requests are de-duplicated against EVERY waiting or running gesture (a pending set).
+   - `MarkClosed()`, called by `MainWindowViewModel.CleanupDocumentState`, stops queued gestures before they touch the
+     code-behind.
+   - The gesture's task never faults (catch-all, traced).
+   - The queue comment now describes the design (the SemaphoreSlim claim is gone).
+   - ⚠ The shell's call to `MarkClosed` is not driven by a test; the closed behaviour is, through the view model.
+4. **BL8038 `RetargetHandlerSplit`** is claimed in the band (BL8037 stays reserved for piece 2; the next free is BL8039).
+   The kept-and-renamed bind uses it, naming both owners. Remove/Insert around `Plan` is now try/finally; that exception
+   path is not reachable through the planner today, so it is untested.
+5. `Declare Auto|Ansi|Unicode` is matched by text (`Auto` is a keyword token).
+6. Acceptance: wait 10 s; node probed BEFORE any build; the CLI output directory is found (the built artifact under
+   `bin/`), not hard-coded.
+
+| Mutation (paired builds, disjoint tests) | Killed by |
+|---|---|
+| Fallback on LexerException only / no de-dupe | both overflow rows / `ARequestIdenticalToAQueuedOne…` + `ASecondHandlerRequest…` |
+| A bad-literal line dropped whole / no closed check | the overflow rows (`big`) / `AGestureQueuedWhenTheDocumentCloses…` |
+| Charset matched by token type / gesture catch removed | the `Auto` row / `AGestureWhoseFailureReportThrows…` |
+| BL8038 back to BL8026 / fallback ignores `_` continuations | the shared-handler row / the differential (declaration shapes, classes and namespaces) |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

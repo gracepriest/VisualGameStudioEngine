@@ -668,6 +668,74 @@ public class FormHandlerGestureTests
         });
     }
 
+    /// <summary>Round 6 fix 3: a request identical to one already QUEUED (not only the one in flight) is dropped.</summary>
+    [Test]
+    public async Task ARequestIdenticalToAQueuedOne_IsDropped()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var gate = new TaskCompletionSource();
+        h.Files.WriteGate = gate;
+
+        var control = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);   // in flight, waiting on the write
+        var form1 = h.Vm.ActivateFormCommand.ExecuteAsync(null);              // queued
+        var form2 = h.Vm.ActivateFormCommand.ExecuteAsync(null);              // identical to the QUEUED one
+        gate.SetResult();
+        await Task.WhenAll(control, form1, form2);
+
+        Assert.That(h.Navigations, Has.Count.EqualTo(2), "the control's and ONE form gesture");
+    }
+
+    /// <summary>
+    /// Round 6 fix 3: a gesture still QUEUED when the document closes must not write or navigate afterwards — the tab is
+    /// gone.
+    /// </summary>
+    [Test]
+    public async Task AGestureQueuedWhenTheDocumentCloses_WritesAndOpensNothing()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var gate = new TaskCompletionSource();
+        h.Files.WriteGate = gate;
+
+        var control = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);
+        var form = h.Vm.ActivateFormCommand.ExecuteAsync(null);
+        h.Vm.MarkClosed();
+        gate.SetResult();
+        await Task.WhenAll(control, form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Files.Contents[h.CodePath], Does.Not.Contain("Sub LoginForm_Load("), "the queued gesture wrote nothing");
+            Assert.That(h.Navigations, Has.Count.LessThanOrEqualTo(1), "only the gesture already in flight may finish");
+        });
+    }
+
+    /// <summary>
+    /// Round 6 fix 3: a gesture's task never faults — even when reporting its own failure throws — so nothing goes
+    /// unobserved from the fire-and-forget the grid's HandlerRequested starts.
+    /// </summary>
+    [Test]
+    public void AGestureWhoseFailureReportThrows_StillCompletesWithoutFaulting()
+    {
+        var scaffold = FormScaffolder.Create("LoginForm", FormTarget.WinForms);
+        var files = new Files();
+        var document = new FormDocument { Target = FormTarget.WinForms, Name = "LoginForm", Width = 800, Height = 450 };
+        document.Controls.Add(new FormControl
+        {
+            Kind = "Button", Id = "btnLogin", TabIndex = 0, Geometry = new PixelGeometry { X = 40, Y = 40, Width = 75, Height = 23 }
+        });
+        files.Contents[Dir + scaffold.DocumentFileName] = BasicLang.Forms.Serialization.FormDocumentWriter.Create(document);
+        files.Contents[Dir + scaffold.CodeFileName] = scaffold.CodeText;
+        files.FailWrites = true;
+        var events = new Mock<IEventAggregator>();
+        events.Setup(e => e.Publish(It.IsAny<DesignerDiagnosticsEvent>())).Throws(new InvalidOperationException("the bus is down"));
+        var vm = new CodeEditorDocumentViewModel(files.Service, events.Object) { FilePath = Dir + scaffold.DocumentFileName };
+        vm.Text = files.Contents[vm.FilePath];
+
+        Assert.That(async () => await vm.ActivateControlCommand.ExecuteAsync(vm.DesignDocument!.Controls[0]), Throws.Nothing);
+    }
+
     /// <summary>
     /// Round 5 fix 2: a TYPED name whose write fails is the ROW's refusal (pane + revert) — not an Error List entry.
     /// </summary>

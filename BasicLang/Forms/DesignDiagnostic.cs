@@ -83,10 +83,14 @@ public static class DesignCodes
     //   BL8036          a referenced image or icon the build did not copy into the output (FormAssetCopy;
     //                   slice 4 D-5d) — a WARNING; the build never fails for it (here)
     //
-    // The ENUMERATED table above is now exhausted: the next claim starts at BL8037. That is not
-    // the band being full — BL8037..BL8999 are simply unclaimed, and "full" would wrongly send the
-    // next task looking for another band. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 —
-    // re-check at merge.
+    //   BL8037          RESERVED for piece 2 (feat/portable-controls) — never claim it here
+    //
+    //   BL8038          a retargeted handler SHARED by two owners whose destination signatures differ: the
+    //                   second owner keeps its bind under a NEW name and stub — a WARNING naming both
+    //                   (property-grid slice 5 review round 6; FormRetarget.ConvertToPair)
+    //
+    // The next claim starts at BL8039. That is not the band being full — BL8039..BL8999 are simply
+    // unclaimed. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 — re-check at merge.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -234,6 +238,14 @@ public static class DesignCodes
     /// WinForms-only name into <c>addEventListener</c> registers cleanly and never fires.
     /// </summary>
     public const string RetargetBindLost = "BL8026";
+
+    /// <summary>
+    /// A retargeted handler SHARED by two owners whose destination signatures differ (a window's Load and a Button's
+    /// Click both calling <c>Init</c>: on the web Load is <c>Init()</c>, Click needs <c>(e As DomEvent)</c>). Nothing is
+    /// lost — the second owner keeps its bind, under a new computed name with its own stub — so not BL8026: a warning
+    /// naming both owners, the shared name and the new one.
+    /// </summary>
+    public const string RetargetHandlerSplit = "BL8038";
 
     /// <summary>
     /// "Wired means running" crossed by RULE (Task 25 review). A web script component runs the

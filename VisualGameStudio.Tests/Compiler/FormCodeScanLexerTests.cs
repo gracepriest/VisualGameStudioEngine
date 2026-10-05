@@ -232,6 +232,127 @@ public class FormCodeScanLexerTests
         });
     }
 
+    /// <summary>
+    /// Round 6, CRITICAL: the lexer throws more than <c>LexerException</c> — a literal too big for a Long throws a raw
+    /// <c>OverflowException</c> (measured: <c>long.Parse</c> at BasicLangLexer.cs:1109, <c>Convert.ToInt64</c> at :1218).
+    /// Half-typed mid-edit, it threw straight out of the grid's refresh. Any non-fatal lexer failure takes the fallback;
+    /// the line with the bad literal keeps what precedes it, and the rest of the file is read.
+    /// </summary>
+    [TestCase("    Private big As Long = 99999999999999999999L")]
+    [TestCase("    Private big As Long = &HFFFFFFFFFFFFFFFFFFFF")]
+    public void AnOverflowingLiteralMidEdit_DoesNotThrow_AndTheRestIsRead(string member)
+    {
+        FormCodeScanResult? scan = null;
+        Assert.That(() => scan = Scan(
+            "    Private Sub Before(sender As Object, e As EventArgs)",
+            "    End Sub",
+            member,
+            "    Private Sub After(sender As Object, e As EventArgs)",
+            "    End Sub"), Throws.Nothing);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SubNames(scan!), Is.EqualTo(new[] { "Before", "After" }));
+            Assert.That(scan!.OtherMembers, Does.Contain("big"), "what precedes the bad literal is still read");
+        });
+    }
+
+    /// <summary>
+    /// The LexerException path itself (spec review: untested before): an unterminated string that is the LAST quote in the
+    /// file, so the lexer reaches the end and throws — rather than running on to a later quote.
+    /// </summary>
+    [Test]
+    public void AnUnterminatedStringThatIsTheLastQuote_TakesTheFallback()
+    {
+        var code = "Public Class LoginForm\n    Private Sub A(sender As Object, e As EventArgs)\n    End Sub\n" +
+                   "    Private Sub B()\n        Dim s = \"never closed\n    End Sub\n" +
+                   "    Private counter As Integer\nEnd Class\n";
+
+        var scan = FormCodeScan.Scan(code, "LoginForm");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SubNames(scan), Is.EqualTo(new[] { "A", "B" }));
+            Assert.That(scan.OtherMembers, Does.Contain("counter"));
+        });
+    }
+
+    /// <summary>Round 6 fix 5: <c>Declare Auto|Ansi|Unicode Function X</c> — the name AFTER the charset word is the member.</summary>
+    [TestCase("Auto")]
+    [TestCase("Ansi")]
+    [TestCase("Unicode")]
+    public void ADeclareWithACharset_NamesTheFunctionAfterIt(string charset)
+    {
+        var scan = Scan($"    Private Declare {charset} Function Beep Lib \"kernel32\" (f As Integer) As Integer");
+
+        Assert.That(scan.OtherMembers, Does.Contain("Beep").And.No.Member(charset));
+    }
+
+    /// <summary>
+    /// Round 6 fix 2, DIFFERENTIAL: every clean fixture read by the whole-file lexer and by the line-by-line fallback must
+    /// agree. A trailing unterminated <c>x = "</c> (the last quote in the file) forces the fallback; it sits after
+    /// <c>End Class</c>, so it changes nothing the scanner reads.
+    /// </summary>
+    [TestCaseSource(nameof(CleanFixtures))]
+    public void TheFallback_ReadsEveryCleanFixture_ExactlyAsTheLexerDoes(string code)
+    {
+        var lexed = FormCodeScan.Scan(code, "LoginForm");
+        var fallback = FormCodeScan.Scan(code + "\nx = \"\n", "LoginForm");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Describe(fallback.Subs), Is.EqualTo(Describe(lexed.Subs)));
+            Assert.That(fallback.OtherMembers.OrderBy(n => n), Is.EqualTo(lexed.OtherMembers.OrderBy(n => n)));
+            Assert.That(lexed.Subs, Is.Not.Empty, "a fixture with nothing to read proves nothing");
+        });
+    }
+
+    private static IEnumerable<string> Describe(IEnumerable<FormDeclaredSub> subs) =>
+        subs.Select(s => $"{s.Name}@{s.Line}{(s.IsShared ? " shared" : "")}(" +
+                         string.Join(", ", s.Parameters.Select(p => $"{(p.IsByRef ? "ByRef " : "")}{p.Name}:{p.Type}")) + ")");
+
+    private static IEnumerable<TestCaseData> CleanFixtures()
+    {
+        string Form(params string[] members) =>
+            "Public Class LoginForm\n" + string.Concat(members.Select(m => m + "\n")) + "End Class\n";
+
+        yield return new TestCaseData(FormScaffolder.Create("LoginForm", FormTarget.WinForms).CodeText.Replace(
+            "    ' Your event handlers go here.", "    Private Sub H(sender As Object, e As EventArgs)\n    End Sub\n    ' Your event handlers go here."))
+            .SetName("{m}(WinForms scaffold + a handler)");
+        yield return new TestCaseData(FormScaffolder.Create("LoginForm", FormTarget.Web).CodeText.Replace(
+            "    ' Your event handlers go here", "    Private Sub H(e As DomEvent)\n    End Sub\n    ' Your event handlers go here"))
+            .SetName("{m}(web scaffold + a handler)");
+        yield return new TestCaseData(Form(
+            "    <Obsolete(\"x\")> <CLSCompliant(False)> Private Sub Attributed(sender As Object, e As EventArgs)\n    End Sub",
+            "    Private Sub Generic(Of T)(item As T, e As EventArgs)\n    End Sub",
+            "    Private Sub Tabbed(sender As Object,\t_\n        e As EventArgs)\n    End Sub",
+            "    Private Sub Split _\n        (sender As Object, e As MouseEventArgs)\n    End Sub",
+            "    Protected Overridable Sub Multi(sender As Object,\n        ByVal e As System.Windows.Forms.MouseEventArgs)\n    End Sub",
+            "    Private Sub Commented(sender As Object, ' who raised it, (the control)\n        e As EventArgs)\n    End Sub",
+            "    Private Shared Sub Stat(sender As Object, ByRef e As EventArgs)\n    End Sub"))
+            .SetName("{m}(declaration shapes)");
+        yield return new TestCaseData(Form(
+            "#If False Then", "    Private Sub Dead()\n    End Sub", "#Else", "    Private Sub Alive()\n    End Sub", "#End If",
+            "#IfDef DEBUG", "    Private Sub Live1()\n    End Sub", "#EndIf"))
+            .SetName("{m}(directives)");
+        yield return new TestCaseData(Form(
+            "    Private Sub Work()", "        Dim total As Integer", "        Dim handler = Sub(x As Integer)",
+            "                          Dim inner As Integer", "                      End Sub", "    End Sub",
+            "    Public Property Size As Integer", "        Get", "            Return 0", "        End Get",
+            "        Private Set(value As Integer)", "        End Set", "    End Property",
+            "    Public Custom Event Changed As EventHandler", "        AddHandler(v As EventHandler)", "        End AddHandler",
+            "    End Event", "    Dim a, b As Integer", "    Private WithEvents t As Timer, u As Timer", "    Const K = 1, L = 2",
+            "    Private Sub X(sender As Object, e As EventArgs) : End Sub",
+            "    Private Enum Mode\n        One\n    End Enum"))
+            .SetName("{m}(bodies and members)");
+        yield return new TestCaseData(
+            "Public Class Helper\n    Public Sub Other()\n    End Sub\nEnd Class\n" +
+            "Namespace App\n    Partial Public Class _\n        LoginForm\n        Private Sub Mine(sender As Object, e As EventArgs)\n" +
+            "        End Sub\n        Private Class Nested\n            Private Sub Inner()\n            End Sub\n        End Class\n" +
+            "    End Class\nEnd Namespace\n")
+            .SetName("{m}(classes and namespaces)");
+    }
+
     /// <summary>Line numbers are the PHYSICAL line of the <c>Sub</c> keyword, after continuations and colons.</summary>
     [Test]
     public void TheLine_IsTheSubKeywordsPhysicalLine()
