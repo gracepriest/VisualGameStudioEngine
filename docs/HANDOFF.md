@@ -17,6 +17,94 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: property grid slice 6 (MULTI-SELECT) — the property-grid programme is COMPLETE (branch `feat/property-grid-slice6`)
+
+Slice 6 of the property grid: multi-select, as Visual Studio does it.
+- The grid takes the selection SET (`SetSelection`); `SelectedControl` stays the primary (the canvas is TwoWay-bound to it).
+- A multi-selection offers the rows every member has as the same row (`FormPropertyDef.SharesShapeWith`: name, type, enum
+  type, members) and that WinForms marks mergeable (`FormPropertyDef.Mergeable`, MEASURED by the oracle — the item
+  collections are not); Location/Size/Anchor/Dock by geometry; never Name or TabIndex.
+- A value every member shows is shown; a differing one is blank. Bold when any member is; Reset only when all can.
+- ONE edit = ONE `Edited` = ONE write = ONE undo step, all-or-nothing (a refusal by any member — catalog or store —
+  writes nothing and names the member). Font/Size/Padding parts compose per member (Bold keeps each family).
+- A mixed Int row is a text box; no mixed editor writes on bind or on leave.
+- The grid's values follow every model revision (`RefreshValues`) — this also fixed the single selection's stale X row
+  after a drag.
+- A plain click on a member promotes it to primary and keeps the group (the collapse-on-release is gone).
+- The Events tab shows the events every member shares; one double-click writes ONE stub (the primary's name) bound on
+  every member; the canvas double-click on a member does the same; the selection is kept.
+- Delete and the arrow keys act on every top-level selected control (a child of a selected Panel goes WITH it); docked
+  members are not nudged.
+
+No ADR, no design code (nothing new reaches a build). Records:
+- Slice 2: `docs/superpowers/plans/2026-09-26-property-grid-slice2-preflight.md`
+- Slice 3: `docs/superpowers/plans/2026-09-29-property-grid-slice3-preflight.md`
+- Slice 4: `docs/superpowers/plans/2026-10-04-property-grid-slice4-preflight.md`
+- Slice 5: `docs/superpowers/plans/2026-10-04-property-grid-slice5-preflight.md`
+- Slice 6: `docs/superpowers/plans/2026-10-05-property-grid-slice6-preflight.md` — §6 holds the execution notes, the
+  mutation ledgers AND the slice/programme gate numbers (this file is not edited after this commit).
+- Follow-ups: `docs/form-designer-followups.md` §44 (deferred VS behaviour: selection across undo, tray Ctrl+click,
+  Ctrl+A, Shift-adds, the primary's white handles).
+
+The IDE drop is refreshed (`IDE\lib\js\dom-core.bli` byte-identical). Run from
+`VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`.
+
+**Owner click-through for the WHOLE programme:**
+
+Slice 2 — the grid:
+1. Select a Button: categories with +/− headers, Categorized ⇄ A-Z, search "back" filters to BackColor; the description
+   pane explains the highlighted row.
+2. An unset property shows its default greyed; set Text → bold; right-click → Reset removes it (the `.blform` loses the
+   attribute); clearing a Color row resets; typing `Bogus` into BackColor is refused, the reason in the pane, the box snaps
+   back.
+3. Click the form background: the Form's rows (ClientSize, Text, FormBorderStyle, …); the object selector picks any
+   control and the canvas follows.
+
+Slice 3 — the D1 batches and composites:
+4. Form FormBorderStyle/StartPosition/Opacity (type `80%`), Font; F5 — the window shows them.
+5. A TextBox's Multiline/ReadOnly/PasswordChar, a CheckBox's CheckState/ThreeState, a ComboBox's DropDownStyle; F5 on
+   WinForms and on a web form (CssClass/Style present only on the web).
+6. Expand Font (Name/Size/Bold/Italic/Underline), Padding (All/sides), Size and Location (Width/Height, X/Y): each part
+   edits one value, one undo step each.
+
+Slice 4 — the editors:
+7. Colour: Custom / Web / System; a TextBox offers no transparency, a Label does; a web form's System tab shows 8.
+8. The Font `…` dialog with live preview, then one Ctrl+Z; Bool True/False and double-click toggles; Anchor/Dock pop-ups
+   (Esc closes); AcceptButton lists the Buttons and `(none)`.
+9. ComboBox Items `…` with `Smith, John` and `Beta` → two items on both targets; PictureBox Image from outside the project
+   → copied into Resources, shown on both targets; Form Icon; delete the png and build → BL8036 at the `Image=` line, and
+   the build succeeds.
+
+Slice 5 — the Events tab:
+10. The bolt lists a Button's events; double-click Click → `btnX_Click` opens and stays wired after clicking the canvas;
+    F5 runs it. MouseDown gives `MouseEventArgs`. An existing fitting Sub is offered and picking it leaves the code
+    untouched. Clearing unbinds and Ctrl+Z restores. Type `DoIt` + Enter creates it; `Dim` is refused.
+11. Double-click the form surface → `<Form>_Load` (outside the form: nothing). A web TextBox KeyPress runs for
+    letters/Enter/Backspace/Esc only. A web Panel's Enter ignores tabbing between its own children.
+12. Retarget a WinForms form with Load + MouseDown to the web: it builds, both run, FormClosing is reported.
+
+Slice 6 — multi-select:
+13. Click `button1`, Ctrl+click `button2`: the object selector goes blank; Name and TabIndex disappear; Location, Size,
+    Text, BackColor, Font… remain; a property that differs shows blank. Click `button1` again (no modifier): both stay
+    selected and `button1` becomes the primary (align-lefts now lines up on `button1`).
+14. Type `Go` into Text: both change; ONE Ctrl+Z restores both.
+15. Ctrl+click a Label too: BackColor → Web → Red colours all three; Font → Bold keeps each control's own family; Width
+    `90` sizes all three; a blank Width box left without typing changes nothing.
+16. A Button + a TextBox: no TextAlign row (their alignments are different types).
+17. Set Location X to `96` on three controls: their left edges line up; align-lefts from the toolbar and the X row follows
+    without reselecting.
+18. Events with two Buttons selected: double-click Click → ONE handler named after the PRIMARY (the button you
+    Ctrl+clicked last, or the one you last clicked inside the selection), both wired; F5, both buttons run it; clear the
+    cell → both unwired, the Sub stays; Ctrl+Z restores both.
+    18a. On the canvas, with both Buttons selected, double-click `button1`: ONE `button1_Click`, wired on both, and both
+    stay selected. Add a TrackBar to the selection and repeat on a fresh form: the TrackBar is not wired (no Click).
+19. Delete with three selected removes all three; Ctrl+Z brings all three back. Arrow keys move the group together. Select
+    a Panel AND a Button inside it: an arrow moves the Panel and the Button rides along once; Delete removes both, one
+    Ctrl+Z restores both, the Button still inside. A MenuStrip in the selection stays docked when the arrows move the rest.
+20. A web form: steps 13–15 and 18 again; open the page, both elements styled, both clicks run the handler.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #143 DONE, JavaScript reads a field-named value back through the field (fix `d42d63cf`, JS only)
 
 - **The bug:** `K = p + q` renames the binop after the field; JS WROTE it `this.K`/`Owner.K` and READ it back as a bare `K` — a ReferenceError once CSE forwarded it into `Dim a = (p + q) * 2`. `JavaScriptBackend.BindsToMember` is now the ONE predicate for the write (`Bind`) and the read (`BoundRef`); the field-access, indexer and cast arms bind by name and stay bare. C#/C++/MSIL were right.
@@ -57,7 +145,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## ⚡ NEWEST — 2026-10-05: property grid slice 5 (EVENTS) GATED and merged to master (branch `feat/property-grid-slice5`)
+## ⚡ 2026-10-05: property grid slice 5 (EVENTS) GATED and merged to master (branch `feat/property-grid-slice5`)
 
 Slice 5 of the property grid: the Events tab. VS's lightning bolt lists the seam's events (`FormEvents.WiredOn`; a web
 Panel has no Paint). The handler cell is an editable combo:

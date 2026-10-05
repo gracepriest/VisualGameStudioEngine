@@ -203,6 +203,252 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>A Reference row's candidate Ids, asked on every read; null for any other row. See <see cref="ForStoredValue"/>.</summary>
     private readonly Func<IReadOnlyList<string>>? _referenceCandidates;
 
+    // ==================================================================
+    // MERGED mode (property-grid slice 6, pre-flight 2026-10-05 D-3/D-5): ONE row over the same row of several selected
+    // controls. A mode, not a class, so the view's templates, the display list, search, sort and collapse work unchanged.
+    // ==================================================================
+
+    /// <summary>The members — the same row of each selected control, in SELECTION order (primary LAST); null when not merged.</summary>
+    private readonly IReadOnlyList<FormPropertyRow>? _members;
+
+    /// <summary>Whose row each member is (same order as <see cref="_members"/>) — a frozen or refused member is NAMED.</summary>
+    private readonly IReadOnlyList<FormControl>? _owners;
+
+    /// <summary>The gesture tally every member was built with (<see cref="FormEditTally.Mark"/> as its change callback).</summary>
+    private readonly FormEditTally? _tally;
+
+    /// <summary>A merged row (slice 6): see <see cref="Merged"/>.</summary>
+    private FormPropertyRow(
+        IReadOnlyList<FormPropertyRow> members, IReadOnlyList<FormControl> owners, FormEditTally tally, Action onChanged)
+    {
+        var primary = members[^1];
+        _members = members;
+        _owners = owners;
+        _tally = tally;
+        _onChanged = onChanged;
+        Name = primary.Name;
+        _type = primary._type;
+        _choices = primary._choices;
+        _definition = primary._definition;
+        _target = primary._target;
+        _editor = primary._editor;
+        Category = primary.Category;
+        Description = primary.Description;
+
+        // D-3: a frozen member (D9 Degraded) freezes the set, and the reason names it — nothing may coerce a preserved value,
+        // even in company.
+        var frozen = members.Select((m, i) => (Member: m, Owner: owners[i])).FirstOrDefault(x => x.Member.IsFrozen);
+        FrozenReason = frozen.Member != null ? $"'{frozen.Owner.Id}': {frozen.Member.FrozenReason}" : null;
+    }
+
+    /// <summary>
+    /// For a composite PART: how it composes the parent's WHOLE value from a part value (null = nothing to write). Set by
+    /// <see cref="FormCompositeRows"/>; read by <see cref="Preview"/>, so a merged part can pre-judge each member's whole
+    /// (slice 6 D-5) without writing anything.
+    /// </summary>
+    internal Func<string, string?>? Compose { get; set; }
+
+    /// <summary>
+    /// What a commit of <paramref name="value"/> WOULD do to this row — the same decision <see cref="Commit"/> takes
+    /// (the catalog's Judge, or the intrinsic no-op rule; a part asks its parent about the composed whole) — writing
+    /// nothing. The refusal's reason comes with a Refuse. Slice 6 D-5: a merged row pre-judges every member with this.
+    /// </summary>
+    internal (FormEditVerdict Verdict, string? Refusal) Preview(string value)
+    {
+        if (IsFrozen)
+        {
+            return (FormEditVerdict.Refuse, FrozenReason);
+        }
+
+        if (Compose != null && Parent != null)
+        {
+            return Compose(value) is { } whole ? Parent.Preview(whole) : (FormEditVerdict.NoOp, null);
+        }
+
+        if (_definition != null)
+        {
+            var verdict = _definition.Judge(value, IsPresent ? RawValue : null, _target);
+            if (verdict == FormEditVerdict.Refuse)
+            {
+                return (verdict, _definition.DescribeRefusedEdit(value, _target));
+            }
+
+            // ⛔ The STORE too (review of 9fe0d153): a value the catalog accepts can still be refused where it is stored
+            // (FormRootValues: a ClientSize of "0, 300"). Its refusal function is the store's own pure rule — the one Set
+            // asks — so asking it here writes nothing and predicts the write exactly.
+            if (verdict == FormEditVerdict.Write && _storeRefusal?.Invoke(_definition.ToDocument(value)) is { } refused)
+            {
+                return (FormEditVerdict.Refuse, refused);
+            }
+
+            return (verdict, null);
+        }
+
+        return (IsSameIntrinsicValue(value, DisplayValue) ? FormEditVerdict.NoOp : FormEditVerdict.Write, null);
+    }
+
+    /// <summary>
+    /// ⛔⛔ The multi-edit (slice 6 D-5): ONE Edited, ONE write, ONE undo step — and all-or-nothing.
+    /// <list type="number">
+    /// <item>Every member is PRE-JUDGED (<see cref="Preview"/>). If any refuses, nothing is written: the refusal names
+    /// the members (<c>'txt' (TextBox): …</c>) and the editor snaps back. VS cancels the whole transaction too.</item>
+    /// <item>A Reset verdict on any member is the Reset gesture: done for all when every member can reset, otherwise the
+    /// editor snaps back and nothing is written.</item>
+    /// <item>Otherwise each member commits through its OWN rule (its own no-op / write against its own value), counted by
+    /// the tally the members were built with, and <see cref="_onChanged"/> is raised ONCE when anything changed.</item>
+    /// </list>
+    /// </summary>
+    private void CommitMerged(string value)
+    {
+        var verdicts = _members!.Select((m, i) => (Member: m, Owner: _owners![i], Judged: m.Preview(value))).ToList();
+
+        Refusal = null;
+        var refused = verdicts.Where(v => v.Judged.Verdict == FormEditVerdict.Refuse).ToList();
+        if (refused.Count > 0)
+        {
+            Refusal = string.Join(" ", refused.Select(r => $"'{r.Owner.Id}' ({r.Owner.Kind}): {r.Judged.Refusal}"));
+            RaiseEditorRefresh(value);
+            return;
+        }
+
+        if (verdicts.Any(v => v.Judged.Verdict == FormEditVerdict.Reset))
+        {
+            if (CanReset)
+            {
+                ResetMerged();
+            }
+            else
+            {
+                RaiseEditorRefresh(value);
+            }
+
+            return;
+        }
+
+        _tally!.Reset();
+        foreach (var member in _members!)
+        {
+            member.Commit(value);
+        }
+
+        // Belt and braces: a member refusal the pre-judgement did not predict is never LOST — it is said on the merged row
+        // (the pane reads this row, never the members). Every store here predicts through its own pure rule, so this
+        // should stay empty; if it ever is not, the pane says which member refused.
+        var unpredicted = verdicts.Where(v => v.Member.Refusal != null).ToList();
+        if (unpredicted.Count > 0)
+        {
+            Refusal = string.Join(" ", unpredicted.Select(r => $"'{r.Owner.Id}' ({r.Owner.Kind}): {r.Member.Refusal}"));
+        }
+
+        if (_tally.Count == 0)
+        {
+            // Nothing moved (every member already showed it, or the store declined it everywhere — unparseable Int text):
+            // the editor re-reads what the members show.
+            RaiseEditorRefresh(value);
+            return;
+        }
+
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    /// <summary>Reset over a merged row (offered only when every member can, D-3): every member resets, ONE Edited.</summary>
+    private void ResetMerged()
+    {
+        // A Reset is the newest thing the user did: a refusal standing on this row is retracted (as a single row's
+        // successful commit retracts its own).
+        Refusal = null;
+        _tally!.Reset();
+        foreach (var member in _members!)
+        {
+            member.Reset();
+        }
+
+        if (_tally.Count > 0)
+        {
+            RaiseValueChanged();
+            _onChanged();
+        }
+    }
+
+    /// <summary>
+    /// D-9: the document changed under the rows while the selection stood (an Arrange, a drag, a paste) — every view of
+    /// this row re-reads: the row itself, its parts (recursively), and a merged row's members. EACH row is raised exactly
+    /// once: a member is raised alone (<see cref="RaiseOwnValueChanged"/>, never recursively), because a merged part
+    /// already raises the members' parts — recursing through the members too raised every part twice. Cost ∝ rows ×
+    /// selection.
+    ///
+    /// <para>⛔ Notifications ONLY: never a commit, never the editor echo. It cannot meet a refused value's echo:
+    /// <see cref="_editorEcho"/> is set only INSIDE the posted step of <see cref="RaiseEditorRefresh"/>, around a
+    /// synchronous try/finally that only raises properties, and anything those raises push back into the row is dropped by
+    /// <see cref="Commit"/>'s echo guard before it can write — so no edit, hence no model revision and no call here, can
+    /// happen while it is set. (Review of 9fe0d153: the skip this used to carry was unreachable; a mutant deleting it
+    /// survived the whole fixture.)</para>
+    /// </summary>
+    internal void RefreshValue()
+    {
+        RaiseOwnValueChanged();
+        foreach (var child in _children)
+        {
+            child.RefreshValue();
+        }
+
+        foreach (var member in Members)
+        {
+            member.RaiseOwnValueChanged();
+        }
+    }
+
+    /// <summary>
+    /// ONE row over <paramref name="members"/> — the same row (<see cref="FormPropertyDef.SharesShapeWith"/>, or the same
+    /// intrinsic row) of each selected control, in selection order with the PRIMARY last; <paramref name="owners"/> are
+    /// their controls in the same order. Every member must have been built with <paramref name="tally"/>'s
+    /// <see cref="FormEditTally.Mark"/> as its change callback; <paramref name="onChanged"/> is raised ONCE per gesture.
+    /// A composite's parts are merged too, part by part (each member's own parts, by index).
+    /// </summary>
+    public static FormPropertyRow Merged(
+        IReadOnlyList<FormPropertyRow> members, IReadOnlyList<FormControl> owners, FormEditTally tally, Action onChanged)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        ArgumentNullException.ThrowIfNull(owners);
+        if (members.Count < 2 || owners.Count != members.Count)
+        {
+            throw new ArgumentException("a merged row has two or more members, each with its owner", nameof(members));
+        }
+
+        var merged = new FormPropertyRow(members, owners, tally, onChanged);
+        var parts = members[^1].Children.Count;
+        if (parts > 0 && members.All(m => m.Children.Count == parts))
+        {
+            merged.AdoptChildren(Enumerable.Range(0, parts)
+                .Select(i => Merged(members.Select(m => m.Children[i]).ToList(), owners, tally, onChanged))
+                .ToList());
+        }
+
+        return merged;
+    }
+
+    /// <summary>True for a row over several selected controls (slice 6).</summary>
+    public bool IsMerged => _members != null;
+
+    /// <summary>A merged row's members, primary last; empty for an ordinary row.</summary>
+    public IReadOnlyList<FormPropertyRow> Members => _members ?? Array.Empty<FormPropertyRow>();
+
+    /// <summary>
+    /// D-3: a merged row whose members SHOW different values — it shows blank. Each member's own canonical display is
+    /// compared (ordinal), so two absent rows whose kinds default differently are mixed too.
+    /// </summary>
+    public bool IsMixed => _members != null && !AllShow(m => m.DisplayValue);
+
+    private bool AllShow(Func<FormPropertyRow, string> read)
+    {
+        var first = read(_members![0]);
+        return _members.All(m => string.Equals(read(m), first, StringComparison.Ordinal));
+    }
+
+    /// <summary>The members' shared text, or "" when they differ (D-3: VS shows blank, never the primary's value).</summary>
+    private string Shared(Func<FormPropertyRow, string> read) => AllShow(read) ? read(_members![0]) : "";
+
     private readonly FormRowEditor _editor = FormRowEditor.Default;
 
     // ==================================================================
@@ -239,8 +485,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     IReadOnlyList<IFormDisplayRow> IFormDisplayRow.SubRows => _children;
 
-    /// <summary>The catalog row, for a composite helper that needs its type; null for an intrinsic row.</summary>
-    internal FormPropertyDef? Definition => _definition;
+    /// <summary>
+    /// The catalog row, for a composite helper that needs its type; null for an intrinsic row. Public since slice 6: the
+    /// multi-select tests judge each member through its own catalog row (the Shell grants the tests no internals).
+    /// </summary>
+    public FormPropertyDef? Definition => _definition;
 
     /// <summary>Makes <paramref name="children"/> this row's parts. Called once, while the grid builds its rows.</summary>
     internal void AdoptChildren(IEnumerable<FormPropertyRow> children)
@@ -331,7 +580,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public bool IsCheckBox => false;
 
-    public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
+    /// <summary>
+    /// ⚠ Not while a merged row is MIXED (slice 6 D-4): an int cannot say "blank" and the NumericUpDown would show a false
+    /// 0 (measured, pre-flight M5) — that row takes the text box (<see cref="IsTextBox"/>). Both flags are raised whenever
+    /// the value changes, so the swap follows the mixedness.
+    /// </summary>
+    public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int && !IsMixed;
 
     /// <summary>
     /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), a
@@ -347,11 +601,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// drop-down since slice 4 D-7: <see cref="IsComboBox"/>.)
     /// </summary>
     public bool IsTextBox => Typed && !IsCollectionEditor &&
-        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
+        (_type == FormPropertyType.Int && IsMixed ||
+         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
             or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction
             or FormPropertyType.CssClasses
             // Slice 4 Task 8: an image/icon path is typed text (Resources/logo.png) — the picker (Task 10) sits beside it.
-            or FormPropertyType.Image or FormPropertyType.Icon;
+            or FormPropertyType.Image or FormPropertyType.Icon);
 
     /// <summary>
     /// An item collection (ComboBox / ListBox / CheckedListBox <c>Items</c>, slice 4 Task 7): VS's read-only
@@ -456,8 +711,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>The picker's result: ONE value through the row's own Commit (Judge decides; a refused value is said).</summary>
     public void ApplyAsset(string value) => Commit(value);
 
-    /// <summary>The font the dialog starts from: the row's value, or — absent — what its control inherits.</summary>
-    public FormFontValue? EffectiveFont => FormCompositeRows.EffectiveFont(this);
+    /// <summary>
+    /// The font the dialog starts from: the row's value, or — absent — what its control inherits. Merged (slice 6 D-4): the
+    /// PRIMARY's effective font — the shared one when the members agree, a useful start when they differ (OK writes one
+    /// whole font to all either way).
+    /// </summary>
+    public FormFontValue? EffectiveFont => _members != null ? _members[^1].EffectiveFont : FormCompositeRows.EffectiveFont(this);
 
     /// <summary>The Font dialog's OK: ONE canonical value through the row's own Commit (fan-in; Judge decides).</summary>
     public void ApplyFont(string canonical) => Commit(canonical);
@@ -621,24 +880,40 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// TabIndex) is always present: it has no default to fall back to.
     /// </summary>
     public bool IsPresent =>
-        _isPresent?.Invoke() ?? (_control != null ? _control.Properties.ContainsKey(Name) : true);
+        _members != null ? _members.Any(m => m.IsPresent)
+        : _isPresent?.Invoke() ?? (_control != null ? _control.Properties.ContainsKey(Name) : true);
 
     /// <summary>The target's default, canonicalised — what an absent row shows. Null = no static default.</summary>
     public string? DefaultValue =>
         _definition?.DefaultFor(_target) is { } d ? _definition.Canonical(d) : null;
 
-    /// <summary>Greyed: the row shows a default the document does not carry.</summary>
-    public bool IsDefaultShown => _definition != null && !IsPresent;
+    /// <summary>
+    /// Greyed: the row shows a default the document does not carry. Merged (slice 6 D-3): every member greyed and not
+    /// mixed — a mixed row is never grey.
+    /// </summary>
+    public bool IsDefaultShown =>
+        _members != null ? !IsMixed && _members.All(m => m.IsDefaultShown)
+        : _definition != null && !IsPresent;
 
     /// <summary>
     /// ⛔ Present AND different from the displayed default. A null default DISPLAYS as empty, so a
     /// present empty Text is not bold while a present "Hi" is.
+    ///
+    /// <para>Merged (slice 6 D-3, VS's merged <c>ShouldSerializeValue</c>): bold when ANY member is bold.</para>
     /// </summary>
-    public bool IsBold => _definition != null && IsPresent &&
-                          !_definition.SameValue(DisplayValue, _definition.Displayed(null, _target));
+    public bool IsBold =>
+        _members != null ? _members.Any(m => m.IsBold)
+        : _definition != null && IsPresent && !_definition.SameValue(DisplayValue, _definition.Displayed(null, _target));
 
-    /// <summary>Offered on present, editable rows that know how to remove themselves.</summary>
-    public bool CanReset => IsEditable && IsPresent && (_reset != null || (_control != null && _definition != null));
+    /// <summary>
+    /// Offered on present, editable rows that know how to remove themselves.
+    ///
+    /// <para>Merged (slice 6 D-3, VS's merged <c>CanResetValue</c>): only when EVERY member can reset — so one member set
+    /// and one absent is bold with no Reset, deliberately. (A frozen member cannot reset, so a frozen set offers none.)</para>
+    /// </summary>
+    public bool CanReset =>
+        _members != null ? _members.All(m => m.CanReset)
+        : IsEditable && IsPresent && (_reset != null || (_control != null && _definition != null));
 
     /// <summary>
     /// Reset (spec §2.7): REMOVE the property from the document — never write the default, which would
@@ -651,6 +926,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // can run this on an absent or frozen row, and it must not report an edit that changed nothing.
         if (!CanReset)
         {
+            return;
+        }
+
+        if (_members != null)
+        {
+            ResetMerged();
             return;
         }
 
@@ -673,9 +954,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     /// <summary>The raw document text for this property, or "" when it carries none.</summary>
     public string RawValue =>
-        _read != null
-            ? _read()
-            : _control != null && _control.Properties.TryGetValue(Name, out var value) ? value : "";
+        _members != null ? Shared(m => m.RawValue)
+        : _read != null ? _read()
+        : _control != null && _control.Properties.TryGetValue(Name, out var value) ? value : "";
 
     /// <summary>
     /// What the editor shows: the document's value in its CANONICAL spelling (spec §2.8) when present —
@@ -684,9 +965,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     ///
     /// <para>⛔ Except when FROZEN: a Degraded row shows the document's text exactly, because its
     /// reason quotes that text and says it is "preserved exactly as written".</para>
+    ///
+    /// <para>Merged (slice 6 D-3): what every member SHOWS when they all show the same, else "" (<see cref="IsMixed"/>) —
+    /// each member applies its own rule above (a frozen member its raw text).</para>
     /// </summary>
     public string DisplayValue =>
-        IsFrozen ? RawValue
+        _members != null ? Shared(m => m.DisplayValue)
+        : IsFrozen ? RawValue
         : _definition != null ? _definition.Displayed(IsPresent ? RawValue : null, _target)
         : RawValue;
 
@@ -712,6 +997,17 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             : EditorText;
         set
         {
+            // ⛔ Slice 6 D-4: an EMPTY push from a merged row's mixed editor is not an edit — blank is how "mixed" LOOKS. A
+            // mixed combo (M4: it pushes null, guarded in Commit) or a mixed text box left without typing must never write
+            // "" into every member (a String would take it; a typed row would read it as Reset). ⚠ Keyed on the EDITOR,
+            // not on today's mixedness, for an Int row: its StringValue is pushed ONLY by the text box it gets while mixed
+            // (the NumericUpDown pushes IntValue), so a text box dying after the row became un-mixed under the focus
+            // still pushes its stale "" here — and is still ignored.
+            if (_members != null && value is "" && (IsMixed || _type == FormPropertyType.Int))
+            {
+                return;
+            }
+
             if (IsEditableReference)
             {
                 CommitReference(value);
@@ -743,7 +1039,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         }
 
         var before = DisplayValue;
-        Commit(BoolValue ? "false" : "true");
+        // Slice 6 D-4: a MIXED merged Bool cycles to VS's first standard value — True for all.
+        Commit(IsMixed ? "true" : BoolValue ? "false" : "true");
         return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
     }
 
@@ -844,6 +1141,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     {
         get
         {
+            // Slice 6 D-4: a mixed merged Anchor says nothing (the box still starts from WinForms' Top, Left).
+            if (IsMixed)
+            {
+                return "";
+            }
+
             var edges = Edges;
             var names = EdgeOrder.Where(e => edges.HasFlag(e)).Select(e => e.ToString()).ToList();
             return names.Count == 0 ? "None" : string.Join(", ", names);
@@ -892,12 +1195,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public string DockValue => string.IsNullOrWhiteSpace(RawValue) ? "None" : RawValue.Trim();
 
-    public bool IsDockedNone => DockValue.Equals("None", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedTop => DockValue.Equals("Top", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedBottom => DockValue.Equals("Bottom", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedLeft => DockValue.Equals("Left", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedRight => DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedFill => DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
+    // Slice 6 D-4: a MIXED merged Dock lights no region and its summary is blank.
+    public bool IsDockedNone => !IsMixed && DockValue.Equals("None", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedTop => !IsMixed && DockValue.Equals("Top", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedBottom => !IsMixed && DockValue.Equals("Bottom", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedLeft => !IsMixed && DockValue.Equals("Left", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedRight => !IsMixed && DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedFill => !IsMixed && DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
 
     private static readonly string[] DockRegions = { "None", "Top", "Bottom", "Left", "Right", "Fill" };
 
@@ -907,7 +1211,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// Display only: never written.
     /// </summary>
     public string DockSummary =>
-        DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
+        IsMixed ? "" : DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
 
     /// <summary>
     /// Sets the dock region. ⚠ <c>None</c> writes the empty string rather than the word, so an
@@ -957,6 +1261,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // another commit, refusal and echo — that would loop.
         if (_editorEcho != null)
         {
+            return;
+        }
+
+        // Slice 6: a merged row commits over its members — pre-judged, all-or-nothing, ONE Edited.
+        if (_members != null)
+        {
+            CommitMerged(value);
             return;
         }
 
@@ -1149,6 +1460,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                  {
                      nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
                      nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset),
+                     // Slice 6: mixedness can change with the value, and these follow it (D-4).
+                     nameof(IsMixed), nameof(IsNumericUpDown), nameof(IsTextBox), nameof(AnchorSummary),
+                     nameof(AnchorTop), nameof(AnchorBottom), nameof(AnchorLeft), nameof(AnchorRight),
+                     nameof(DockValue), nameof(DockSummary), nameof(IsDockedNone), nameof(IsDockedTop),
+                     nameof(IsDockedBottom), nameof(IsDockedLeft), nameof(IsDockedRight), nameof(IsDockedFill),
                      nameof(SwatchColor), nameof(Swatch), nameof(HasUnknownSwatch)
                  })
         {

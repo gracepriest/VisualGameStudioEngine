@@ -288,6 +288,43 @@ public class FormPropertyGridDisplayTests
         });
     }
 
+    /// <summary>Slice 6 D-6, the multi twin of <see cref="TheObjectSelector_ListsTheFormEveryControlAndEveryComponent"/>.</summary>
+    [Test]
+    public void TheObjectSelector_IsBlank_ForAMultiSelection()
+    {
+        var (file, grid) = Open();
+
+        grid.SetSelection(new[] { file.Model.FindById("lbl")!, file.Model.FindById("btn")! });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grid.SelectedObject, Is.Null, "VS shows a blank object selector for several objects");
+            Assert.That(grid.Objects.Select(o => o.Name), Is.EqualTo(new[] { "F", "lbl", "btn", "tmr" }), "still lists everything");
+        });
+    }
+
+    /// <summary>
+    /// Slice 6 D-6, the multi twin of <see cref="PickingAnObject_RequestsTheSelection_AndNeverWritesSelectedControlItself"/>:
+    /// picking one object in a multi-selection REQUESTS that one control — even the primary, which collapses the set, as VS
+    /// does — and still never writes the selection itself.
+    /// </summary>
+    [Test]
+    public void PickingAnObject_InAMultiSelection_RequestsOnlyThatControl()
+    {
+        var (file, grid) = Open();
+        grid.SetSelection(new[] { file.Model.FindById("lbl")!, file.Model.FindById("btn")! });
+        var requests = new List<FormControl?>();
+        grid.SelectionRequested += (_, c) => requests.Add(c);
+
+        grid.SelectedObject = grid.Objects.Single(o => o.Name == "btn"); // the PRIMARY
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(requests, Is.EqualTo(new FormControl?[] { file.Model.FindById("btn") }));
+            Assert.That(grid.SelectedControls, Has.Count.EqualTo(2), "the store answers by collapsing — the grid must not");
+        });
+    }
+
     [Test]
     public void PickingTheForm_RequestsNull()
     {

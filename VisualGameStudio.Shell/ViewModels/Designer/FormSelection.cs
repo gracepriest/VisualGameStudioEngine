@@ -92,6 +92,27 @@ public sealed class FormSelection
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// A plain click on a control that is ALREADY selected (property-grid slice 6 D-13, VS): it becomes the
+    /// <see cref="Primary"/> — moved to the end — and the group is kept; <see cref="Changed"/> is raised ONCE. A no-op that
+    /// raises nothing when the control is already the primary or is not selected.
+    ///
+    /// <para>⛔ The store's own operation, never a <see cref="Toggle"/> + <see cref="Add"/> pair: that raises Changed twice,
+    /// with a transient selection WITHOUT the control in between, and the property grid would rebuild for it.</para>
+    /// </summary>
+    public void Promote(FormControl control)
+    {
+        var at = _controls.FindIndex(c => ReferenceEquals(c, control));
+        if (at < 0 || at == _controls.Count - 1)
+        {
+            return;
+        }
+
+        _controls.RemoveAt(at);
+        _controls.Add(control);
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>Replaces the selection wholesale — the marquee's result.</summary>
     public void SetRange(IEnumerable<FormControl> controls)
     {

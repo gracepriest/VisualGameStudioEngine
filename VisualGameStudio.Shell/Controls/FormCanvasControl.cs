@@ -510,16 +510,6 @@ public class FormCanvasControl : Control
     private Point _marqueeCurrent;
 
     /// <summary>
-    /// A control clicked while it was already part of a multi-selection.
-    ///
-    /// <para>⚠ The selection collapses to it on RELEASE, and only if the pointer never moved — so
-    /// clicking one control of a group and dragging moves the GROUP, while clicking and letting go
-    /// picks that one out of it. Collapsing on press instead makes a multi-selection impossible to
-    /// drag, because the press that begins the drag destroys it.</para>
-    /// </summary>
-    private FormControl? _collapseTo;
-
-    /// <summary>
     /// Every selected control's geometry as the drag began, keyed by control.
     ///
     /// <para>⛔ Re-derived from these and the TOTAL delta on every move, never nudged frame by
@@ -658,34 +648,37 @@ public class FormCanvasControl : Control
         var coarse = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         var step = coarse ? (int)GridStep : 1;
 
-        bool changed;
-        switch (control.Geometry)
+        // ⛔ Slice 6 D-11 (VS): every TOP-LEVEL member of the selection moves (a child whose container is also selected
+        // rides along with it — FormSelectionTopLevel, the helper Delete uses too), each parent-relative; a member with no
+        // geometry (a strip, an item) is skipped by the switch, and a DOCKED pixel member by FormGeometryEdit's own guard —
+        // the ONE docked rule (MoveTo/Resize refuse it), never a second copy here. ONE commit for the press, one undo step.
+        var changed = false;
+        foreach (var member in FormSelectionTopLevel.Of(document, SelectedSet))
         {
-            // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.
-            case GridGeometry grid when !resize:
+            switch (member.Geometry)
             {
-                var col = Math.Max(0, grid.Col + dx);
-                var row = Math.Max(0, grid.Row + dy);
-                changed = col != grid.Col || row != grid.Row;
-                grid.Col = col;
-                grid.Row = row;
-                break;
+                // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.
+                case GridGeometry grid when !resize:
+                {
+                    var col = Math.Max(0, grid.Col + dx);
+                    var row = Math.Max(0, grid.Row + dy);
+                    changed |= col != grid.Col || row != grid.Row;
+                    grid.Col = col;
+                    grid.Row = row;
+                    break;
+                }
+
+                // ⚠ MoveTo, not MoveToForm. A nudge is parent-relative and must NOT re-parent: arrowing
+                // a control one pixel past a Panel's edge should move it one pixel, not move it into
+                // the Panel — a drag says where the pointer is, a keypress says how far.
+                case PixelGeometry pixel:
+                    changed |= resize
+                        ? FormGeometryEdit.Resize(
+                            document, member, FormResizeHandle.BottomRight, dx * step, dy * step)
+                        : FormGeometryEdit.MoveTo(
+                            document, member, pixel.X + (dx * step), pixel.Y + (dy * step));
+                    break;
             }
-
-            // ⚠ MoveTo, not MoveToForm. A nudge is parent-relative and must NOT re-parent: arrowing
-            // a control one pixel past a Panel's edge should move it one pixel, not move it into
-            // the Panel — a drag says where the pointer is, a keypress says how far.
-            case PixelGeometry pixel:
-                changed = resize
-                    ? FormGeometryEdit.Resize(
-                        document, control, FormResizeHandle.BottomRight, dx * step, dy * step)
-                    : FormGeometryEdit.MoveTo(
-                        document, control, pixel.X + (dx * step), pixel.Y + (dy * step));
-                break;
-
-            default:
-                changed = false;
-                break;
         }
 
         if (changed)
@@ -800,8 +793,8 @@ public class FormCanvasControl : Control
     ///
     /// <para>⛔ Clicking a control that is ALREADY part of a multi-selection must not collapse the
     /// selection to it — that is how a drag of three controls becomes a drag of one, and the user
-    /// cannot move a group at all. The selection collapses on RELEASE instead, and only if the
-    /// pointer never moved.</para>
+    /// cannot move a group at all. It PROMOTES the control to primary instead and keeps the group
+    /// (slice 6 D-13, VS).</para>
     /// </summary>
     private void ApplyClickSelection(FormControl? hit, bool extend)
     {
@@ -828,9 +821,12 @@ public class FormCanvasControl : Control
         }
         else
         {
-            // Already selected: keep the group, but make this the primary so align and size use the
-            // control the user just pointed at — which is what VS does.
-            _collapseTo = selection.Controls.Count > 1 ? hit : null;
+            // Already selected: keep the group, and make this the primary so align and size use the
+            // control the user just pointed at — which is what VS does (slice 6 D-13). ⛔ No collapse on
+            // release any more: VS keeps the group (click empty canvas or an unselected control to start
+            // over), and a collapse would destroy the group between the two clicks of a double-click on a
+            // member, before the double-tap could wire every member (D-8).
+            selection.Promote(hit);
         }
 
         SelectedControl = selection.Primary;
@@ -1265,18 +1261,6 @@ public class FormCanvasControl : Control
         _dragHandle = FormResizeHandle.None;
         _formGrip = FormResizeHandle.None;
         e.Pointer.Capture(null);
-
-        // Clicking one control of a multi-selection WITHOUT dragging picks it out of the group.
-        // Deferred to here precisely so the same click could have started a group drag instead.
-        if (_collapseTo is { } single)
-        {
-            _collapseTo = null;
-            if (!_dragChanged)
-            {
-                Selection?.Set(single);
-                SelectedControl = single;
-            }
-        }
 
         if (!wasDragging || !_dragChanged)
         {

@@ -15,8 +15,8 @@ namespace VisualGameStudio.Tests.Shell;
 ///
 /// <para>⛔ The gesture that is easy to get wrong is clicking a control that is ALREADY part of a
 /// group. Collapsing the selection on PRESS makes a multi-selection impossible to drag, because the
-/// press that begins the drag destroys it — so the collapse waits for release, and only happens if
-/// the pointer never moved.</para>
+/// press that begins the drag destroys it. Since property-grid slice 6 (D-13) the click PROMOTES the
+/// control to primary and keeps the group, as VS does — there is no collapse on release either.</para>
 /// </summary>
 [TestFixture]
 public class FormCanvasMultiSelectTests
@@ -139,16 +139,22 @@ public class FormCanvasMultiSelectTests
         });
     }
 
+    /// <summary>
+    /// ⚠ Slice 6 Task 4b: this test used to click A — a MEMBER of {A, B} — and pass only through the collapse-on-release
+    /// that D-13 removed (the pre-flight's "no test pins the collapse" was wrong: this one did, under a name that says
+    /// "unselected"). It now clicks a control that really is unselected; a click on a member is
+    /// <see cref="APlainClickOnAMember_PromotesItToPrimary_AndKeepsTheGroup"/>.
+    /// </summary>
     [AvaloniaTest]
     public void APlainClickOnAnUnselectedControlReplacesTheSelection()
     {
-        var rig = Surface();
+        var (rig, c) = SurfaceOfThree();
         rig.Click(rig.Centre(rig.A));
         rig.Click(rig.Centre(rig.B), RawInputModifiers.Shift);
 
-        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(c));
 
-        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A }));
+        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { c }));
     }
 
     [AvaloniaTest]
@@ -191,6 +197,244 @@ public class FormCanvasMultiSelectTests
             Assert.That(G(rig.B).X, Is.EqualTo(72), "40 + 32");
             Assert.That(G(rig.A).X, Is.EqualTo(72), "moved by the same delta");
             Assert.That(G(rig.A).Y, Is.EqualTo(40), "and not vertically");
+        });
+    }
+
+    // ==================================================================
+    // Slice 6 D-13: a plain click on a MEMBER promotes it to primary and keeps the group (VS)
+    // ==================================================================
+
+    /// <summary>The two-button surface plus a third Button <c>c</c>, well to the right.</summary>
+    private static (Rig Rig, FormControl C) SurfaceOfThree()
+    {
+        var rig = Surface();
+        var c = new FormControl
+        {
+            Kind = "Button", Id = "c",
+            Geometry = new PixelGeometry { X = 200, Y = 70, Width = 80, Height = 24 }
+        };
+        rig.Doc.Controls.Add(c);
+        rig.Canvas.InvalidateVisual();
+        return (rig, c);
+    }
+
+    /// <summary>
+    /// ⛔ D-13: select A, B, C with Ctrl+clicks, then a PLAIN click on A — the group stays {B, C, A} with A the primary
+    /// (the old collapse-on-release picked A out of the group: VS does not, and the first click of a double-click on a
+    /// member would have collapsed the group before the double-tap arrived). Align-lefts then lines up on A.
+    /// </summary>
+    [AvaloniaTest]
+    public void APlainClickOnAMember_PromotesItToPrimary_AndKeepsTheGroup()
+    {
+        var (rig, c) = SurfaceOfThree();
+        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
+        rig.Click(rig.Centre(c), RawInputModifiers.Control);
+        Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.A, rig.B, c }), "precondition");
+
+        rig.Click(rig.Centre(rig.A) + new Point(5, 0)); // offset: not a double-click with the first press
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Selection.Controls, Is.EqualTo(new[] { rig.B, c, rig.A }), "still all three, A promoted");
+            Assert.That(rig.Canvas.SelectedControl, Is.SameAs(rig.A), "the primary is what the property grid shows");
+        });
+
+        FormArrange.Apply(rig.Doc, FormArrangeKind.AlignLeft, rig.Selection.Controls, rig.Selection.Primary);
+
+        Assert.That(new[] { G(rig.B).X, G(c).X, G(rig.A).X }, Is.All.EqualTo(40), "aligned to A's left (40), not C's (200)");
+    }
+
+    /// <summary>D-13: a drag that starts on a member (promoting it) still moves the WHOLE group.</summary>
+    [AvaloniaTest]
+    public void DraggingFromANonPrimaryMember_MovesTheWholeGroup()
+    {
+        var (rig, c) = SurfaceOfThree();
+        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(rig.B), RawInputModifiers.Control);
+        rig.Click(rig.Centre(c), RawInputModifiers.Control);
+
+        var from = rig.Centre(rig.A) + new Point(3, 0);
+        rig.Drag(from, from + new Point(32, 0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X, G(c).X }, Is.EqualTo(new[] { 72, 72, 232 }), "every member by +32");
+            Assert.That(rig.Selection.Controls, Has.Count.EqualTo(3), "the group survives the drag");
+        });
+    }
+
+    // ==================================================================
+    // Slice 6 D-11: arrow keys over the WHOLE selection — top-level members only, docked members skipped, one commit
+    // ==================================================================
+
+    private sealed class Counter : System.Windows.Input.ICommand
+    {
+        public int Executions { get; private set; }
+
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
+
+        public bool CanExecute(object? parameter) => true;
+
+        public void Execute(object? parameter) => Executions++;
+    }
+
+    private static void PressKey(Rig rig, Avalonia.Input.Key key, RawInputModifiers modifiers = RawInputModifiers.None)
+    {
+        rig.Canvas.Focus();
+        rig.Window.KeyPress(key, modifiers);
+        rig.Window.KeyRelease(key, modifiers);
+    }
+
+    [AvaloniaTest]
+    public void AnArrow_NudgesEveryMember_WithOneCommit_AndCtrlCoarsens_AndShiftResizesThemAll()
+    {
+        var rig = Surface();
+        var commits = new Counter();
+        rig.Canvas.CommitGeometryCommand = commits;
+        rig.Selection.SetRange(new[] { rig.A, rig.B });
+
+        PressKey(rig, Avalonia.Input.Key.Right);
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X }, Is.All.EqualTo(41), "both by 1");
+            Assert.That(commits.Executions, Is.EqualTo(1), "ONE commit for the press (one undo step)");
+        });
+
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Control);
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Shift);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { G(rig.A).X, G(rig.B).X }, Is.All.EqualTo(49), "Ctrl: one grid step (8) for both");
+            Assert.That(new[] { G(rig.A).Width, G(rig.B).Width }, Is.All.EqualTo(81), "Shift: both grow by 1");
+            Assert.That(commits.Executions, Is.EqualTo(3));
+        });
+    }
+
+    [AvaloniaTest]
+    public void OnAWebGridPage_AnArrow_MovesEveryMemberOneCell()
+    {
+        var doc = new FormDocument
+        {
+            Target = FormTarget.Web, Name = "T",
+            Layout = new FormLayout { Kind = FormLayoutKind.Grid, Cols = "1fr,1fr,1fr", Rows = "auto,auto" }
+        };
+        var a = new FormControl { Kind = "Button", Id = "a", Geometry = new GridGeometry { Col = 0, Row = 0 } };
+        var b = new FormControl { Kind = "Button", Id = "b", Geometry = new GridGeometry { Col = 1, Row = 1 } };
+        doc.Controls.Add(a);
+        doc.Controls.Add(b);
+        var selection = new FormSelection();
+        var commits = new Counter();
+        var canvas = new FormCanvasControl { Document = doc, Selection = selection, CommitGeometryCommand = commits };
+        var window = new Window { Width = 600, Height = 500, Content = canvas };
+        try
+        {
+            window.Show();
+            selection.SetRange(new[] { a, b });
+            canvas.Focus();
+            int Col(FormControl c) => ((GridGeometry)c.Geometry!).Col;
+
+            window.KeyPress(Avalonia.Input.Key.Left, RawInputModifiers.None);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Col(a), Is.Zero, "a at column 0 clamps — it does not stop b");
+                Assert.That(Col(b), Is.Zero, "b moved one cell left");
+                Assert.That(commits.Executions, Is.EqualTo(1), "ONE commit for the press");
+            });
+
+            window.KeyPress(Avalonia.Input.Key.Right, RawInputModifiers.None);
+            Assert.Multiple(() =>
+            {
+                Assert.That(new[] { Col(a), Col(b) }, Is.All.EqualTo(1), "both one cell right");
+                Assert.That(commits.Executions, Is.EqualTo(2));
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// ⛔ D-11 ancestor/descendant: a Panel and its own child Button both selected (Ctrl+click can) — one Right arrow moves
+    /// the Panel by 1 and leaves the Button's CONTAINER-RELATIVE X alone: it moved once, with its container.
+    /// </summary>
+    [AvaloniaTest]
+    public void ANudge_OfAPanelAndItsOwnChild_MovesTheChildOnlyWithItsContainer()
+    {
+        var rig = Surface();
+        var panel = new FormControl
+        {
+            Kind = "Panel", Id = "pnl", Geometry = new PixelGeometry { X = 200, Y = 150, Width = 150, Height = 100 }
+        };
+        var child = new FormControl
+        {
+            Kind = "Button", Id = "kid", Geometry = new PixelGeometry { X = 10, Y = 10, Width = 60, Height = 24 }
+        };
+        panel.Children.Add(child);
+        rig.Doc.Controls.Add(panel);
+        rig.Selection.SetRange(new[] { panel, child });
+
+        PressKey(rig, Avalonia.Input.Key.Right);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(G(panel).X, Is.EqualTo(201), "the Panel moved");
+            Assert.That(G(child).X, Is.EqualTo(10), "the child is container-relative: it rode along, never moved twice");
+        });
+    }
+
+    /// <summary>D-11: a docked member (a MenuStrip) is skipped by a nudge — its edge is a Dock property, not a rect.</summary>
+    [AvaloniaTest]
+    public void ANudge_SkipsADockedMember_AndMovesTheRest()
+    {
+        var rig = Surface();
+        var strip = new FormControl { Kind = "MenuStrip", Id = "ms" };
+        strip.Properties["Dock"] = "Top";
+        rig.Doc.Controls.Add(strip);
+        // A docked PIXEL member too: a Panel with Dock="Fill" has a rect, but its place comes from docking — FormGeometryEdit's
+        // own docked guard (the one rule) refuses to move it. ⚠ Its stored rect has ROOM to move (review of dd01b127): a
+        // rect that filled the form would be clamped anyway, and the guard's deletion survived that version of this test.
+        var filled = DockedPanelWithRoom(rig);
+        rig.Selection.SetRange(new[] { filled, rig.A, strip }); // the STRIP is the primary
+
+        PressKey(rig, Avalonia.Input.Key.Down);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((G(filled).X, G(filled).Y), Is.EqualTo((200, 200)), "the Dock=Fill Panel is not nudged");
+            Assert.That(G(rig.A).Y, Is.EqualTo(41), "the Button moved down");
+            Assert.That(strip.Geometry, Is.Null, "the strip gained no geometry");
+            Assert.That(strip.Properties["Dock"], Is.EqualTo("Top"), "and keeps its Dock");
+        });
+    }
+
+    private static FormControl DockedPanelWithRoom(Rig rig)
+    {
+        var filled = new FormControl
+        {
+            Kind = "Panel", Id = "fill",
+            Geometry = new PixelGeometry { X = 200, Y = 200, Width = 100, Height = 40, Dock = "Fill" }
+        };
+        rig.Doc.Controls.Add(filled);
+        return filled;
+    }
+
+    /// <summary>D-11 + FormGeometryEdit's Resize guard: Shift+arrow grows the Button and never the docked Panel.</summary>
+    [AvaloniaTest]
+    public void AShiftArrowResize_SkipsADockedPixelMember_AndResizesTheRest()
+    {
+        var rig = Surface();
+        var filled = DockedPanelWithRoom(rig);
+        rig.Selection.SetRange(new[] { filled, rig.A });
+
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Shift);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((G(filled).Width, G(filled).Height), Is.EqualTo((100, 40)), "the docked Panel is not resized");
+            Assert.That(G(rig.A).Width, Is.EqualTo(81), "the Button grew by 1");
         });
     }
 

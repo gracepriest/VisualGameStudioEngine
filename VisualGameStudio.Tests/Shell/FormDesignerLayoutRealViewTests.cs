@@ -332,6 +332,64 @@ public class FormDesignerLayoutRealViewTests
     }
 
     /// <summary>
+    /// Slice 6 Task 4: the same rule for every MERGED row's editor of a {Button, Label} selection — parts expanded, so the
+    /// mixed Width part's TEXT box (D-4) is swept too — at two sizes.
+    /// </summary>
+    [AvaloniaTest]
+    public void EveryMergedRowsEditor_OfAButtonAndALabel_FitsBetweenTheDividerAndTheColumnsRightEdge_AtTwoSizes()
+    {
+        var doc = WinDoc.Replace("</Controls>",
+            "  <Label Id=\"lbl\" X=\"120\" Y=\"16\" Width=\"100\" Height=\"23\" TabIndex=\"1\" Text=\"Hello\"/>\n  </Controls>");
+        foreach (var (w, h) in TwoSizes)
+        {
+            using var rig = Open(doc, "WinForm", FormTarget.WinForms, w, h);
+            rig.Vm.Selection.SetRange(new[] { rig.Vm.DesignDocument!.FindById("btn")!, rig.Vm.DesignDocument.FindById("lbl")! });
+            Dispatcher.UIThread.RunJobs();
+            rig.Window.UpdateLayout();
+            Assert.That(rig.GridVm.IsMultiSelection, Is.True, "precondition: two controls selected");
+            foreach (var composite in rig.GridVm.Rows.Where(r => r.IsComposite))
+            {
+                composite.IsExpanded = true;
+            }
+
+            Dispatcher.UIThread.RunJobs();
+            var kinds = new Dictionary<string, int>();
+            var mixedWidthIsATextBox = false;
+
+            Assert.Multiple(() =>
+            {
+                foreach (var row in rig.GridVm.DisplayItems.OfType<FormPropertyRow>().ToList())
+                {
+                    var container = rig.Container(row);
+                    var divider = rig.InWindow(rig.Divider(container));
+                    var cellRect = rig.InWindow(rig.ValuePanel(container));
+                    var editors = rig.ValuePanel(container).GetVisualDescendants().OfType<Control>()
+                        .Where(c => c is TextBox or ComboBox or NumericUpDown or FormColorDropDown or Button { Name: "FontEllipsis" })
+                        .Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0)
+                        .Where(c => c.FindAncestorOfType<NumericUpDown>() == null);
+                    foreach (var editor in editors)
+                    {
+                        var kind = editor is Button { Name: { } named } ? named : editor.GetType().Name;
+                        kinds[kind] = kinds.GetValueOrDefault(kind) + 1;
+                        mixedWidthIsATextBox |= row.Name == "Width" && editor is TextBox;
+                        var r = rig.InWindow(editor);
+                        Assert.That(r.Left, Is.GreaterThanOrEqualTo(divider.Right), $"{w}x{h} {row.Name}: {kind} starts left of the divider ({r})");
+                        Assert.That(r.Right, Is.LessThanOrEqualTo(cellRect.Right + 0.5), $"{w}x{h} {row.Name}: {kind} overruns its column ({r})");
+                    }
+                }
+            });
+
+            TestContext.WriteLine($"[{w}x{h} merged editors] {string.Join(", ", kinds.Select(k => $"{k.Key}={k.Value}"))}");
+            Assert.Multiple(() =>
+            {
+                Assert.That(kinds.Keys, Is.SupersetOf(new[] { "TextBox", "ComboBox", "NumericUpDown", nameof(FormColorDropDown), "FontEllipsis" }),
+                    $"{w}x{h}: precondition: the sweep saw the merged rows' editors");
+                Assert.That(mixedWidthIsATextBox, Is.True, $"{w}x{h}: the mixed Width part renders as a text box (D-4)");
+            });
+        }
+    }
+
+    /// <summary>
     /// Slice 5: the Events tab's handler cell obeys the same rule — every event row's editable combo (and the text box
     /// inside it) starts right of the divider and ends inside the row, for a control's events and the form's, at two sizes.
     /// </summary>
