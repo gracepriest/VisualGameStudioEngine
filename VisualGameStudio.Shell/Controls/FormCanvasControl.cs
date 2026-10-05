@@ -649,17 +649,12 @@ public class FormCanvasControl : Control
         var step = coarse ? (int)GridStep : 1;
 
         // ⛔ Slice 6 D-11 (VS): every TOP-LEVEL member of the selection moves (a child whose container is also selected
-        // rides along with it — FormSelectionTopLevel, the helper Delete uses too), each parent-relative; a DOCKED member
-        // (its edge is a Dock property, not a rect — the drag's own test) and a member with no geometry are skipped. ONE
-        // commit for the press, so one undo step.
+        // rides along with it — FormSelectionTopLevel, the helper Delete uses too), each parent-relative; a member with no
+        // geometry (a strip, an item) is skipped by the switch, and a DOCKED pixel member by FormGeometryEdit's own guard —
+        // the ONE docked rule (MoveTo/Resize refuse it), never a second copy here. ONE commit for the press, one undo step.
         var changed = false;
         foreach (var member in FormSelectionTopLevel.Of(document, SelectedSet))
         {
-            if (FormDockLayout.EdgeOf(member) != null)
-            {
-                continue;
-            }
-
             switch (member.Geometry)
             {
                 // One CELL per press; Shift does nothing, because a cell has no size of its own to grow.

@@ -135,6 +135,11 @@ public partial class FormPropertyGridMultiSelectTests
         Assert.That(EventRow(grid, "Click").Handler, Is.EqualTo("Shared"), "both bound to it: shown");
     }
 
+    /// <summary>
+    /// ⚠ Today the intersection changes nothing: a shared row is the SAME event under <c>SameEvent</c> (name, args, name on
+    /// the target, handler shape), so every owner's <c>FittingHandlers</c> is the same list. The intersection is the
+    /// defence for a future fitting rule that depends on the owner; this test pins the list and its instance stability.
+    /// </summary>
     [Test]
     public void TheChoices_AreTheHandlersEveryMemberFits_TheSameInstanceWhileUnchanged()
     {
@@ -227,7 +232,19 @@ public partial class FormPropertyGridMultiSelectTests
         };
         var files = new Mock<IFileService>();
         files.Setup(f => f.ReadFileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Returns((string p, CancellationToken _) => Task.FromResult(contents[p]));
+            .Returns((string p, CancellationToken _) =>
+            {
+                // A slow disk on demand: the NEXT read of the .bas waits on the gate (then the gate clears), its continuation
+                // running synchronously on the thread that opens it (the test's).
+                if (_readGate is { } gate && p.EndsWith(".bas", StringComparison.Ordinal))
+                {
+                    _readGate = null;
+                    return gate.Task.ContinueWith(_ => contents[p], CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
+
+                return Task.FromResult(contents[p]);
+            });
         files.Setup(f => f.FileExistsAsync(It.IsAny<string>())).Returns((string p) => Task.FromResult(contents.ContainsKey(p)));
         files.Setup(f => f.WriteFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns((string p, string text, CancellationToken _) =>
@@ -236,7 +253,11 @@ public partial class FormPropertyGridMultiSelectTests
                 return Task.CompletedTask;
             });
 
-        var vm = new CodeEditorDocumentViewModel(files.Object, new Mock<IEventAggregator>().Object)
+        var events = new Mock<IEventAggregator>();
+        _diagnostics = new List<DesignerDiagnosticsEvent>();
+        var diagnostics = _diagnostics;
+        events.Setup(e => e.Publish(It.IsAny<DesignerDiagnosticsEvent>())).Callback((DesignerDiagnosticsEvent e) => diagnostics.Add(e));
+        var vm = new CodeEditorDocumentViewModel(files.Object, events.Object)
         {
             FilePath = "/proj/" + scaffold.DocumentFileName
         };
@@ -246,6 +267,12 @@ public partial class FormPropertyGridMultiSelectTests
         vm.PropertyGrid.IsEventsMode = true;
         return (vm, contents);
     }
+
+    /// <summary>When set, the next .bas read waits on it (see <see cref="OpenHost"/>).</summary>
+    [ThreadStatic] private static TaskCompletionSource<bool>? _readGate;
+
+    /// <summary>What the host published to the Error List in the last <see cref="OpenHost"/>.</summary>
+    [ThreadStatic] private static List<DesignerDiagnosticsEvent>? _diagnostics;
 
     private static int Count(string text, string what)
     {
@@ -302,15 +329,64 @@ public partial class FormPropertyGridMultiSelectTests
         });
     }
 
+    /// <summary>
+    /// The HOST route (review of f4d8007d, item 5): the grid passed a typed name (its pushed code-behind did not have it),
+    /// but the code-behind on disk has a <c>DoIt</c> that does not fit Click — the host's own check refuses it, first for
+    /// the NON-primary owner btn. The refusal reaches the merged row (its pane says why, the cell reverts) and NOTHING
+    /// reaches the Error List; nothing is written.
+    /// </summary>
     [Test]
-    public void AHostRefusalOfATypedName_ReachesTheMergedRow()
+    public void AHostRefusalOfATypedName_ForANonPrimaryOwner_RevertsTheMergedCell_AndNeverReachesTheErrorList()
+    {
+        var (vm, files) = OpenHost(MultiDoc, FormTarget.WinForms,
+            WithSubs(FormTarget.WinForms, "Private Sub DoIt(sender As Object, e As MouseEventArgs)"), "btn", "btn2");
+        vm.PropertyGrid.CodeBehindText = WithSubs(FormTarget.WinForms); // the grid's view: no DoIt yet
+        var click = vm.PropertyGrid.EventRows.Single(r => r.Name == "Click");
+        var reverted = new List<FormHandlerCellRevert>();
+        vm.PropertyGrid.HandlerCellReverted += (_, r) => reverted.Add(r);
+        var code = files["/proj/GridForm.bas"];
+        var text = vm.Text;
+
+        click.Commit("DoIt");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(click.Refusal, Is.Not.Null.And.Contains("DoIt"), "the merged row's pane says why");
+            Assert.That(reverted.Select(r => r.Row), Has.Member(click), "the merged cell reverts");
+            Assert.That(_diagnostics, Is.Empty, "nothing in the Error List");
+            Assert.That(files["/proj/GridForm.bas"], Is.EqualTo(code), "no stub written");
+            Assert.That(vm.Text, Is.EqualTo(text), "no bind written");
+        });
+    }
+
+    /// <summary>
+    /// Review of f4d8007d, item 2: the gesture queue's de-dupe key covers EVERY owner. Two requests for the same event with
+    /// the same primary (btn2) but a different NON-primary owner — {btn, btn2} then {lbl, btn2} — while the first is still
+    /// waiting on a slow disk: BOTH run (the second binds lbl too). Keyed on the primary alone, the second was dropped.
+    /// </summary>
+    [Test]
+    public async Task TwoRequestsDifferingOnlyInANonPrimaryOwner_BothRun()
     {
         var (vm, _) = OpenHost(MultiDoc, FormTarget.WinForms, WithSubs(FormTarget.WinForms), "btn", "btn2");
-        var click = vm.PropertyGrid.EventRows.Single(r => r.Name == "Click");
+        var gate = new TaskCompletionSource<bool>();
+        _readGate = gate;
 
-        Assert.That(vm.PropertyGrid.RefuseHandler(new FormBindOwner(vm.DesignDocument!, vm.DesignDocument!.FindById("btn")!),
-            click.Event, "nope"), Is.True, "a NON-primary owner's refusal finds the merged row");
-        Assert.That(click.Refusal, Is.EqualTo("nope"));
+        vm.PropertyGrid.EventRows.Single(r => r.Name == "Click").RequestHandler(); // waits on the gate
+        vm.Selection.SetRange(new[] { vm.DesignDocument!.FindById("lbl")!, vm.DesignDocument.FindById("btn2")! });
+        vm.PropertyGrid.EventRows.Single(r => r.Name == "Click").RequestHandler(); // queued behind it
+        gate.SetResult(true);
+
+        var lbl = vm.DesignDocument!.FindById("lbl")!;
+        for (var i = 0; i < 250 && lbl.Binds.Count == 0; i++)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.DesignDocument!.FindById("btn")!.Binds.SingleOrDefault()?.Handler, Is.EqualTo("btn2_Click"), "the first ran");
+            Assert.That(lbl.Binds.SingleOrDefault()?.Handler, Is.EqualTo("btn2_Click"), "the second ran too — never de-duped away");
+        });
     }
 
     [Test]

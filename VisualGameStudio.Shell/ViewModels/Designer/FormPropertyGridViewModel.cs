@@ -347,20 +347,28 @@ public partial class FormPropertyGridViewModel : ObservableObject
         }
 
         var wired = owners.Select(o => FormEvents.WiredOn(o.Definition!, form.Target).ToList()).ToList();
+        var primary = owners[^1];
         foreach (var evt in wired[^1])
         {
-            if (wired.All(list => list.Any(e => SameEvent(e, evt, form.Target))))
+            if (owners.Select((o, i) => (Owner: o, Wired: wired[i]))
+                .All(x => x.Wired.Any(e => SameEvent(x.Owner, e, primary, evt, form.Target))))
             {
                 yield return (evt, owners);
             }
         }
     }
 
-    /// <summary>The same event on <paramref name="target"/>: WinForms name, handler args, and the name a bind stores.</summary>
-    public static bool SameEvent(FormEventDef a, FormEventDef b, FormTarget target) =>
+    /// <summary>
+    /// The same event on <paramref name="target"/>: WinForms name, handler args, the name a bind stores — and the handler
+    /// SHAPE (<see cref="FormHandlers.Shape"/>, the single signature site; review of f4d8007d), so the ONE stub a shared row
+    /// writes always fits every member it is bound on.
+    /// </summary>
+    public static bool SameEvent(FormBindOwner aOwner, FormEventDef a, FormBindOwner bOwner, FormEventDef b, FormTarget target) =>
         string.Equals(a.Name, b.Name, StringComparison.Ordinal) &&
         string.Equals(a.WinFormsArgs ?? "EventArgs", b.WinFormsArgs ?? "EventArgs", StringComparison.Ordinal) &&
-        string.Equals(FormEvents.NameOn(a, target), FormEvents.NameOn(b, target), StringComparison.Ordinal);
+        string.Equals(FormEvents.NameOn(a, target), FormEvents.NameOn(b, target), StringComparison.Ordinal) &&
+        string.Equals(FormHandlers.Shape(aOwner, a, target).ParameterList, FormHandlers.Shape(bOwner, b, target).ParameterList,
+            StringComparison.Ordinal);
 
     /// <summary>The object selector's entries: the form, every control, every tray component.</summary>
     public ObservableCollection<FormObjectItem> Objects { get; } = new();

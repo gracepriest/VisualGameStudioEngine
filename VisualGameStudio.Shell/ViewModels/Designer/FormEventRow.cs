@@ -178,8 +178,8 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         }
 
         // The bound name again, in any case, is the same member to BasicLang: nothing to do (no Edited, no undo step). For
-        // several owners only when they ALL have it (Handler is blank otherwise).
-        if (string.Equals(typed, Handler, StringComparison.OrdinalIgnoreCase) && Handler.Length > 0)
+        // several owners only when they ALL have it (Handler is blank otherwise — and `typed` is never blank here).
+        if (string.Equals(typed, Handler, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }

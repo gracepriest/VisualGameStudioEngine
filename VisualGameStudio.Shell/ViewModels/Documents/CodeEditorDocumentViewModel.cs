@@ -1037,12 +1037,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         OpenDocumentLookup?.Invoke(codePath) is { } open && !ReferenceEquals(open, this) ? open : null;
 
     /// <summary>
-    /// Wires <paramref name="handler"/> to the owner's event: replaces the handler of an existing bind of that event (a
-    /// typed new name in the Events tab), else adds the bind. Returns whether the document changed.
-    /// </summary>
-    /// <summary>
     /// Slice 6 D-8: whether <paramref name="other"/> wires the event the primary's plan binds (<paramref name="eventName"/>,
-    /// the name on <paramref name="target"/>) as the SAME event — WinForms name, args, name on the target
+    /// the name on <paramref name="target"/>) as the SAME event — WinForms name, args, name on the target, handler shape
     /// (<c>FormPropertyGridViewModel.SameEvent</c>, the Events tab's own rule).
     /// </summary>
     private static bool SharesPlannedEvent(
@@ -1056,9 +1052,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         var planned = BasicLang.Forms.FormEvents.WiredOn(primaryDef, target).FirstOrDefault(e =>
             string.Equals(BasicLang.Forms.FormEvents.NameOn(e, target), eventName, StringComparison.OrdinalIgnoreCase));
         return planned != null && BasicLang.Forms.FormEvents.WiredOn(otherDef, target)
-            .Any(e => ViewModels.Designer.FormPropertyGridViewModel.SameEvent(e, planned, target));
+            .Any(e => ViewModels.Designer.FormPropertyGridViewModel.SameEvent(other, e, primary, planned, target));
     }
 
+    /// <summary>
+    /// Wires <paramref name="handler"/> to the owner's event: replaces the handler of an existing bind of that event (a
+    /// typed new name in the Events tab), else adds the bind. Returns whether the document changed.
+    /// </summary>
     private static bool BindHandler(BasicLang.Forms.FormBindOwner owner, string eventName, string handler)
     {
         var bound = owner.Binds.FirstOrDefault(b => !b.UsesReservedDataBinding &&

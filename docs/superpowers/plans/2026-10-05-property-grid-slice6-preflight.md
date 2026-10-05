@@ -1108,6 +1108,32 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   the VM), Task 4b 2/2, review fixes 4 reds, Task 5 2/2, Task 6 2/2, Task 7 2/2 — every starred mutant killed.
 - No gate here: the slice's ONE gate is Task 9 step 3, on the merged tree.
 
+### Review fixes for a438688f / f4d8007d / 14f93c20 (changes requested, no Critical; base `43b70df3`)
+
+1. `BindHandler`'s doc comment, which had landed above `SharesPlannedEvent` (two summaries on one, none on the other),
+   is back above `BindHandler`.
+2. **The de-dupe key's "primary only" mutant survived** — now pinned: `TwoRequestsDifferingOnlyInANonPrimaryOwner_BothRun`
+   (the first request waits on a gated .bas read while a second, {lbl, btn2} vs {btn, btn2}, queues; both must run).
+   Mutant re-applied: KILLED ("the second ran too").
+3. `SameEvent` also requires the same handler SHAPE (`FormHandlers.Shape(owner, evt, target).ParameterList`, the single
+   signature site) for every owner, so the one stub always fits each. ⚠ EQUIVALENT today: within one form the shape is a
+   function of the event's args and the target, both already compared — recorded, not testable without a catalog row
+   that maps one args type to two shapes.
+4. The canvas nudge's own docked skip is DROPPED: `FormGeometryEdit.MoveTo`/`Resize`'s guard is the one rule. The docked
+   test now also selects a `Dock="Fill"` Panel WITH pixel geometry (not nudged); geometry-less strips fall out of the
+   switch.
+5. The host-refusal test drives the HOST route: the grid's pushed code-behind lacks `DoIt`, the disk has a `DoIt` that
+   does not fit Click, so the host refuses (first for the non-primary btn) — the merged row's pane says why, its cell
+   reverts, the Error List gets nothing, nothing is written. Mutant "Fail always reports to the Error List": KILLED (and
+   slice 5's twin with it).
+6. `FormEventRow.Commit`'s dead `&& Handler.Length > 0` removed. 7. `TheChoices_…` says the intersection changes nothing
+   under `SameEvent` today. 8. The web-grid nudge test asserts ONE commit per press and the clamp at column 0, and closes
+   its window in `finally`. 9. `MultiDelete_DropsAnAcceptButtonNamingANonPrimaryMember_…` pins the reference going with
+   a NON-primary member, one undo restoring both.
+- Green: `FormPropertyGridMultiSelectTests` + `FormCanvasMultiSelectTests` 80/80; RE-CHECK (`TestCategory!=Integration`
+  over `FormEventGrid*`, `FormHandlerGestureTests`, `FormHandlerPlanTests`, `FormPropertyGrid*`, `FormCanvas*`,
+  `FormTray*`) — **687/687**; `FormMultiSelectAcceptanceTests` re-run after the `SameEvent` change — 2/2.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

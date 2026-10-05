@@ -321,20 +321,39 @@ public class FormCanvasMultiSelectTests
             Layout = new FormLayout { Kind = FormLayoutKind.Grid, Cols = "1fr,1fr,1fr", Rows = "auto,auto" }
         };
         var a = new FormControl { Kind = "Button", Id = "a", Geometry = new GridGeometry { Col = 0, Row = 0 } };
-        var b = new FormControl { Kind = "Button", Id = "b", Geometry = new GridGeometry { Col = 0, Row = 1 } };
+        var b = new FormControl { Kind = "Button", Id = "b", Geometry = new GridGeometry { Col = 1, Row = 1 } };
         doc.Controls.Add(a);
         doc.Controls.Add(b);
         var selection = new FormSelection();
-        var canvas = new FormCanvasControl { Document = doc, Selection = selection };
+        var commits = new Counter();
+        var canvas = new FormCanvasControl { Document = doc, Selection = selection, CommitGeometryCommand = commits };
         var window = new Window { Width = 600, Height = 500, Content = canvas };
-        window.Show();
-        selection.SetRange(new[] { a, b });
-        canvas.Focus();
+        try
+        {
+            window.Show();
+            selection.SetRange(new[] { a, b });
+            canvas.Focus();
+            int Col(FormControl c) => ((GridGeometry)c.Geometry!).Col;
 
-        window.KeyPress(Avalonia.Input.Key.Right, RawInputModifiers.None);
+            window.KeyPress(Avalonia.Input.Key.Left, RawInputModifiers.None);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Col(a), Is.Zero, "a at column 0 clamps — it does not stop b");
+                Assert.That(Col(b), Is.Zero, "b moved one cell left");
+                Assert.That(commits.Executions, Is.EqualTo(1), "ONE commit for the press");
+            });
 
-        Assert.That(new[] { ((GridGeometry)a.Geometry!).Col, ((GridGeometry)b.Geometry!).Col }, Is.All.EqualTo(1));
-        window.Close();
+            window.KeyPress(Avalonia.Input.Key.Right, RawInputModifiers.None);
+            Assert.Multiple(() =>
+            {
+                Assert.That(new[] { Col(a), Col(b) }, Is.All.EqualTo(1), "both one cell right");
+                Assert.That(commits.Executions, Is.EqualTo(2));
+            });
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     /// <summary>
@@ -374,12 +393,21 @@ public class FormCanvasMultiSelectTests
         var strip = new FormControl { Kind = "MenuStrip", Id = "ms" };
         strip.Properties["Dock"] = "Top";
         rig.Doc.Controls.Add(strip);
-        rig.Selection.SetRange(new[] { rig.A, strip }); // the STRIP is the primary
+        // A docked PIXEL member too: a Panel with Dock="Fill" has a rect, but its place comes from docking — FormGeometryEdit's
+        // own docked guard (the one rule) refuses to move it.
+        var filled = new FormControl
+        {
+            Kind = "Panel", Id = "fill",
+            Geometry = new PixelGeometry { X = 0, Y = 0, Width = 400, Height = 300, Dock = "Fill" }
+        };
+        rig.Doc.Controls.Add(filled);
+        rig.Selection.SetRange(new[] { filled, rig.A, strip }); // the STRIP is the primary
 
         PressKey(rig, Avalonia.Input.Key.Down);
 
         Assert.Multiple(() =>
         {
+            Assert.That(G(filled).Y, Is.Zero, "the Dock=Fill Panel is not nudged");
             Assert.That(G(rig.A).Y, Is.EqualTo(41), "the Button moved down");
             Assert.That(strip.Geometry, Is.Null, "the strip gained no geometry");
             Assert.That(strip.Properties["Dock"], Is.EqualTo("Top"), "and keeps its Dock");

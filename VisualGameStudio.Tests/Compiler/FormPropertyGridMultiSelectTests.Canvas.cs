@@ -65,6 +65,31 @@ public partial class FormPropertyGridMultiSelectTests
         });
     }
 
+    /// <summary>
+    /// Review of 14f93c20, item 9: a multi-Delete goes through <c>FormDocument.RemoveControl</c> for EVERY member, so a Form
+    /// reference naming a NON-primary member (AcceptButton → btn, the primary is btn2) goes with it in the same write — and
+    /// one undo puts both back.
+    /// </summary>
+    [Test]
+    public void MultiDelete_DropsAnAcceptButtonNamingANonPrimaryMember_AndOneUndoRestoresIt()
+    {
+        var doc = MultiDoc.Replace("""Text="GridForm">""", """Text="GridForm" AcceptButton="btn">""");
+        var vm = OpenVm(doc, "btn", "btn2");
+        Assert.That(vm.Text, Does.Contain("AcceptButton=\"btn\""), "precondition: the Form names btn");
+        var before = vm.Text;
+
+        vm.DeleteControlCommand.Execute(vm.Selection.Primary); // btn2
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.DesignDocument!.FindById("btn"), Is.Null);
+            Assert.That(vm.Text, Does.Not.Contain("AcceptButton"), "the reference went with the non-primary member");
+        });
+
+        vm.UndoDesignerEditCommand.Execute(null);
+        Assert.That(vm.Text, Is.EqualTo(before), "one undo restores the member AND the reference");
+    }
+
     [Test]
     public void TheTopLevelHelper_DropsAMemberWhoseAncestorIsSelected_InSelectionOrder()
     {
