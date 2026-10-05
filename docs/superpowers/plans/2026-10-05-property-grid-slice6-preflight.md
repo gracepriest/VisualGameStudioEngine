@@ -1149,6 +1149,13 @@ No decision changed, so no commit of its own; recorded here with Task 1.
 - The Task 7 roster note now says why an acceptance fixture is not in the JS execution-tier roster.
 - Green: `FormCanvasMultiSelectTests` 16/16.
 
+### Task 9 — the programme's Closing
+
+- **Step 1 (this commit, FIRST):** HANDOFF NEWEST section (slice 6, "the programme is COMPLETE", where each slice's record
+  lives, the 20-step click-through); the parent plan's slice-6 "EXPANDED AND EXECUTED" banner; the IDE drop — `dotnet
+  clean` + Release build of the Shell, `robocopy … IDE /E` (never `/MIR`); 8 binaries changed; `IDE\lib\js\dom-core.bli`
+  hash `7B8E4E95…87FE` before and after (byte-identical). HANDOFF is not edited again: the gate numbers land below.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
