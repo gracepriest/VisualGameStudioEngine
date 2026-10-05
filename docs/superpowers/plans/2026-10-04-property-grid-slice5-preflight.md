@@ -1281,6 +1281,49 @@ Ansi/Unicode rows were green on arrival and stand as guards.
 | Charset matched by token type / gesture catch removed | the `Auto` row / `AGestureWhoseFailureReportThrows…` |
 | BL8038 back to BL8026 / fallback ignores `_` continuations | the shared-handler row / the differential (declaration shapes, classes and namespaces) |
 
+### Task 9 — records, gate, IDE drop, click-through (base `2813205d`)
+- **Gate** (Windows, Release, `dotnet clean` of the Shell first, both streams captured):
+  - **Fast subset:** 12424 total, 12399 passed, 6 failed, 19 skipped. The sorted failure NAMES equal Task 0's:
+    `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
+    `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`, `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+    `SearchSnippets_EmptyQuery_ReturnsAll`, `SearchSnippets_WhitespaceQuery_ReturnsAll`.
+  - **The named Integration set** (all 14 classes of §5): 289 total, 288 passed, 0 failed, 1 skipped. The skip is the
+    inverse-gated `Build_CppLanguageProject_NoToolchain_IsHardErrorNotSourceOnlySuccess`, as in slice 4. Edge was present;
+    its rows ran.
+  - The broader `Form*`/`WinFormsCatalog*` Integration run on `fdb625b3`: 349/350, the machine-culture
+    `Expected_IsWhatDotNetPrints` only.
+- **Not done, on the coordinator's instruction:** §5's trial merges of `origin/master` and `origin/feat/portable-controls`
+  ("do NOT merge master"). The coordinator resolves the merge, `docs/HANDOFF.md`'s NEWEST section included.
+- **IDE drop:** `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E` (exit 3, no `/MIR`), 8 binaries refreshed.
+  `IDE\lib\js\dom-core.bli` is present and byte-identical.
+- **Records:** `docs/form-designer-followups.md` §36–43. Those are D-2's divergence table copied whole, full `#If` through
+  piece 2's `ProcessForEditor`, the "handler does not fit" code (D-7), KeyPress keys and the `KeyChar` hand-off, the
+  reserved `VgsOn_` prefix, M7's untyped Extern members, the lexer's raw `OverflowException`, and the small findings.
+- **Owner click-through** (`VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`):
+  1. Select a Button; click the lightning bolt. Its events show, Action first; Categorized/A-Z and search work. Properties
+     brings the property rows back.
+  2. Double-click the empty Click cell. The code opens at `btnX_Click(sender As Object, e As EventArgs)` and the cell shows
+     the name; click back on the canvas and the wiring stays. F5: clicking the button runs it.
+  3. Double-click MouseDown: `e As MouseEventArgs`.
+  4. Write `Private Sub AnyClick(sender As Object, e As EventArgs)`. Another Button's Click drop-down offers it; a
+     `KeyEventArgs` Sub is offered for KeyDown, not Click. Pick it: the code is unchanged.
+  5. Clear the cell: the wiring goes, the Sub stays. Ctrl+Z restores the wiring.
+  6. Type `DoIt` + Enter: the handler is created and opened. Type `Dim` + Enter: refused in the description pane, and the
+     cell reverts. Type a name, then Esc: reverted, nothing written.
+  7. Double-click the form's background: `<Form>_Load` opens; F5, and Load runs before the window shows. Double-click the
+     grey canvas OUTSIDE the form: nothing happens.
+  8. On a WEB form, wire a TextBox KeyPress that appends to a label. Letters, Enter, Backspace and Esc run it; Shift and the
+     arrows do not. Wire a Panel's Enter: tabbing between two TextBoxes inside it does not run it; tabbing in from outside
+     does.
+  9. On a WEB form, a Panel shows no Paint, and its Click creates `pnl_Click(e As DomEvent)` above the region. The Form's
+     events are Load/Resize/Click/KeyDown/KeyUp/KeyPress only. A Load that writes a label shows on the page; resizing the
+     browser runs Resize.
+  10. Retarget a WinForms form with a Load and a Button MouseDown to the web. The pair builds, the page runs both, and
+      FormClosing is reported as not crossing. With Load and the Button's Click sharing ONE handler, the Button gets its
+      own `btn_Click` plus a BL8038 warning, and the pair still builds.
+  11. Leave the `.bas` half-typed (an unclosed string, `x = 99999999999999999999L`, a Sub with no `End Sub`) and open an
+      Events drop-down. It still lists the fitting Subs; nothing throws.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
