@@ -497,7 +497,7 @@ public class InterfaceAccessorBatchTests
             Is.EqualTo("rg"));
 
     // ====================================================================================
-    // Structure-typed interface property (Q1) — C#/C++ OK; MSIL known-wrong; JS BL7005.
+    // Structure-typed interface property (Q1) — C#/C++/MSIL OK (MSIL since #192); JS BL7005.
     // ====================================================================================
 
     private const string StructureProperty =
@@ -534,19 +534,17 @@ public class InterfaceAccessorBatchTests
             Is.EqualTo("7"));
 
     /// <summary>
-    /// Q1 pinned known-wrong on MSIL: a <c>Structure</c>-typed interface property is treated as
-    /// a class (heap reference), and the generated program throws
-    /// <c>NullReferenceException</c> rather than printing 7. This REPRODUCES WITHOUT AN
-    /// INTERFACE — it is a pre-existing MSIL Structure defect the interface batch exposes, not
-    /// one it introduces, and it is out of the D1 batch's scope.
+    /// Q1 was pinned known-wrong on MSIL: a <c>Structure</c>-typed interface property was treated
+    /// as a class (heap reference), and the generated program threw
+    /// <c>NullReferenceException</c> rather than printing 7. It reproduced WITHOUT AN INTERFACE — a
+    /// pre-existing MSIL Structure defect the interface batch exposed, not one it introduced. #192
+    /// spelled a Structure a <c>valuetype</c>, so the property's backing field is a value, the
+    /// setter copies it in and the getter copies it out: MSIL prints 7, through the CLI, the CLI
+    /// with <c>--optimize</c> and <c>CompileProjectFiles</c> (<see cref="TempExec"/>).
     /// </summary>
     [Test]
-    public void AStructureTypedInterfaceProperty_ThrowsNullReferenceOnMsil() // Q1
-    {
-        var run = MsilHarness.Run(StructureProperty);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed));
-        Assert.That(run.Output, Does.Contain("NullReferenceException"));
-    }
+    public void AStructureTypedInterfaceProperty_RunsOnMsil() // Q1
+        => TempExec.AssertMatchesInEveryEntryPoint(Bk.Msil, StructureProperty, "7", "Q1 a Structure-typed interface property");
 
     /// <summary>Q1 pinned known-failing on JS: BL7005, a Structure has no JS lowering (value semantics).</summary>
     [Test]
