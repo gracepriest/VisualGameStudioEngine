@@ -1038,6 +1038,66 @@ reserved `VgsOn_` prefix, and M7's finding that an Extern class's undeclared mem
 | Collision only when the Sub exists | `AComputedName_BoundByAnotherOwner_WhoseSubIsMissing_…` |
 | Suffix ignores existing Subs | `TheSuffix_SkipsATaken_1` |
 
+### Task 6 — the view, the gestures, both entry points into a handler (base `a5c5955c`)
+⚠ **Code first, then tests** for the production half (AXAML, code-behind, host route, canvas command), so the evidence is
+mutation kills rather than red-before; the two new tests written AFTER a fix this task made (below) were red under the
+corresponding mutant.
+- **One host route.** `ActivateHandlerAsync(FormBindOwner, FormEventDef?, string?)` serves the canvas control double-click,
+  the new `[RelayCommand] ActivateFormAsync` (D-9, attribute directly above its method), and the grid's `HandlerRequested`
+  (a double-clicked row, a typed new name). A typed name is re-refused by `DescribeUnusableHandler` before anything is
+  written; a Bind that already exists for the event has its handler REPLACED (`BindHandler`), else `EnsureBind`.
+- **Freshness.** `PushCodeBehindTextAsync` (open tab first, else disk, missing = "") runs on every panel sync, after every
+  handler gesture, and when a handler drop-down OPENS (the view calls `RequestCodeBehindRefresh` → host). **Fixed this task:**
+  `WriteCodeBehindAsync` set the grid's code BEFORE the disk write, so a failed write left the grid offering a Sub that
+  existed nowhere; it now sets it after the write (and after the open-tab apply).
+- **Canvas D-9.** A double-click that hits no control runs `ActivateFormCommand` only when the point is inside
+  `FormCanvasTransform.SurfaceRect`; outside the form, nothing. `CodeEditorDocumentView.axaml` binds it.
+- **View.** Properties | Events in their own panel (bolt = vector `Path`, automation names "Properties"/"Events"); the
+  `FormEventRow` template is name | editable `ComboBox` ("Handler for {event}"); Enter (list tunnel) commits, a pick commits
+  only while the drop-down is open, LostFocus commits, a double-click on an event row (not inside an open drop-down)
+  requests the handler.
+- **Measured (recorded in the code):** (1) an EDITABLE combo opens only from its 12px glyph — its centre is the text box,
+  and 8px in from the right edge is background that opens nothing; the real-view helper clicks the glyph. (2) Two glyph
+  clicks with no time between are a DOUBLE-click to the headless pipeline, which on an Events row requests the handler
+  (it wrote `btn_Click` mid-test); the tests pick from the same open. (3) The slice-4 popup trap needs a combo that
+  shows a SELECTED item — an editable combo with nothing selected brings nothing into view, so the guard mutant survived
+  the first version of the test; the target row is now pre-bound. (4) Radio grouping: all four radios in ONE panel did
+  not couple (clicking Events left Categorized checked) — EQUIVALENT mutant — yet with Events' binding one-way the mode
+  still followed (Properties let go). The AXAML comment states both and leans on neither; the test now also drives the
+  mode → bolt direction. (5) `Private Sub End(...)` compiles (C#, `Me.End(...)`): bare `End` is not a lexer keyword, so
+  the keyword-refusal test types `Dim`.
+- Tests: `FormPropertyGridEventsRealViewTests.cs` (new partial, 10 tests, real clicks/keys; zoom-dependent ones at
+  `TwoZooms`): (a) bolt → the seam's rows; (b) double-click the empty Click value → stub below the region + Bind; (c)
+  MouseDown → `MouseEventArgs`; (g) form Load; canvas form surface → `GridForm_Load`, outside → nothing; (d)/(e) the
+  drop-down offers only `Fits` (not a wrong-shape Sub, a ByRef Sub, a Function), a pick binds, clearing unbinds, `.bas`
+  byte-identical, ONE undo restores the Bind; the scrolled second drop-down stays open and binds; (h) `Dim` refused and
+  said, `DoIt` + Enter creates and binds; (f) web Panel: no Paint, `pnl_Click(e As DomEvent)` above the region, bind
+  `click`; (i) an UNSAVED open tab's Sub is offered on open, picking it binds, disk untouched, tab still dirty.
+  `FormCanvasDoubleClickTests` — the background test rewritten into the surface/outside pair at two zooms (the canvas's
+  transform is the one its last RENDER fitted, so the fixture pumps a frame per size). `FormPropertyGridViewTests` —
+  automation names, `FormEventRow` template, the mode test, two views' modes, the `DesignCanvas` binding + generated
+  commands. `FormDesignerLayoutRealViewTests` — every event row's combo between divider and row edge, two sizes.
+  `FormHandlerGestureTests` — a failed stub write: no Bind, document text and grid code unchanged, nothing opened, said.
+- NavigateToFileEvent with the caret line stays covered by `FormHandlerGestureTests` (the real-view rig's aggregator is a
+  bare mock).
+
+| Mutation | Killed by |
+|---|---|
+| Pair inside the sort panel | EQUIVALENT on 11.3.13 (measured, above) — replaced by: Events toggle unbound → `ClickingEvents_…_AndPropertiesComesBack` |
+| Events toggle `OneWay` | survived (Properties' two-way binding carries the click) — equivalent, recorded |
+| `HandlerRequested` unwired | 5 real-view rows (b, c, f, g, h) |
+| Form-surface double-click not routed | `DoubleClickingTheFormSurface_…` + the real-view canvas Load row |
+| Surface bounds check removed | `DoubleClickingTheCanvasOutsideTheForm_OpensNothing` + the real-view canvas row |
+| Drop-down open does not refresh | (i) + the drop-down row |
+| Push reads disk, not the open tab | (i) |
+| Bind before the stub write | `AFailedStubWrite_…` |
+| Grid code set before the write | `AFailedStubWrite_…` |
+| Popup guard skips event rows | `ASecondDropDown_OnARowScrolledIntoView_…` (after the pre-bind fix) |
+
+RE-CHECK green (224 in the run): `TheDocumentView_NoLongerCarriesTheGridsOwnBindings`, the toolbar automation names,
+`FormTrayViewTests`, `FormStripCanvasTests`, `FormTypeHereEditorTests`, `FormHandlerGestureTests`, `FormEventGrid*`, the
+binding walker (the new template's bindings included).
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

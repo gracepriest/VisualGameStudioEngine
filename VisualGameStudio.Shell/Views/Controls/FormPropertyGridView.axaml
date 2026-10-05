@@ -93,6 +93,29 @@
            a name locked the dispatcher in an endless check/uncheck loop between their bindings.
            Unnamed radios group by their PARENT panel: one group per view.
            (FormPropertyGridViewTests.TwoGridViewsInOneWindow_SortIndependently) -->
+      <!-- Slice 5 D-5: Properties | Events (VS's lightning bolt), in their OWN StackPanel. ⚠ Two measurements on Avalonia
+           11.3.13 that do not tell one simple story: with all four radios in ONE panel, clicking Events still left
+           Categorized checked; and with Events' binding made one-way, clicking it still switched the mode (Properties let
+           go). So do not lean on radio grouping either way — the separate panel keeps the pairs apart whatever a version
+           does (FormPropertyGridViewTests.ClickingEvents_LeavesCategorizedChecked_AndPropertiesComesBack). Never give them
+           a GroupName: that is window-wide, and two designers' grids would become one group. The bolt is a vector Path —
+           no glyph, so no font and no escape trap — named for assistive tech, and a tooltip says what it is. -->
+      <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="2" Margin="4,0,4,2">
+        <RadioButton x:Name="PropertiesButton" AutomationProperties.Name="Properties"
+                     Theme="{StaticResource {x:Type ToggleButton}}"
+                     Padding="6,1" FontSize="11"
+                     IsChecked="{Binding IsPropertiesMode, Mode=TwoWay}"
+                     ToolTip.Tip="Properties" Content="Properties"/>
+        <RadioButton x:Name="EventsButton" AutomationProperties.Name="Events"
+                     Theme="{StaticResource {x:Type ToggleButton}}"
+                     Padding="6,1"
+                     IsChecked="{Binding IsEventsMode, Mode=TwoWay}"
+                     ToolTip.Tip="Events">
+          <Path Data="M7,0 L2,9 L6,9 L4,16 L12,6 L8,6 L10,0 Z" Fill="{DynamicResource IdeFg}"
+                Width="10" Height="13" Stretch="Uniform"/>
+        </RadioButton>
+      </StackPanel>
+
       <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="2" Margin="4,0,4,2">
         <RadioButton x:Name="CategorizedButton" AutomationProperties.Name="Categorized"
                      Theme="{StaticResource {x:Type ToggleButton}}"
@@ -321,6 +344,30 @@
                            FontFamily="Cascadia Code, Consolas, monospace"
                            IsVisible="{Binding IsFrozen}"/>
                 </Panel>
+              </Grid>
+            </Border>
+          </DataTemplate>
+
+          <!-- Slice 5 D-5: one Events-tab row — the event's name | an EDITABLE combo of the handlers that fit it. Picking one
+               binds it; typing a name and pressing Enter (or leaving the cell) commits it — a new name asks the host for
+               the stub; clearing unbinds. A double-click on the row creates-or-navigates its handler (OnListDoubleTapped).
+               The combo's drop-down asks for a fresh code-behind as it opens (OnHandlerDropDownOpened), so a Sub typed
+               into an unsaved tab is offered. ⚠ Text is OneWay: what the user types is committed by the code-behind, never
+               pushed into the model per keystroke. -->
+          <DataTemplate DataType="{x:Type designerVm:FormEventRow}" x:DataType="designerVm:FormEventRow">
+            <Border BorderBrush="{DynamicResource IdeBorder}" BorderThickness="0,0,0,1" Background="Transparent">
+              <Grid ColumnDefinitions="96,1,*" MinHeight="22">
+                <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="11" VerticalAlignment="Center"
+                           Margin="4,0,4,0" TextTrimming="CharacterEllipsis"/>
+                <Border Grid.Column="1" Background="{DynamicResource IdeBorder}"/>
+                <ComboBox x:Name="HandlerCombo" Grid.Column="2" Margin="4,1,4,1" FontSize="11"
+                          IsEditable="True" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                          ItemsSource="{Binding Choices}"
+                          Text="{Binding Handler, Mode=OneWay}"
+                          AutomationProperties.Name="{Binding Name, StringFormat='Handler for {0}'}"
+                          DropDownOpened="OnHandlerDropDownOpened"
+                          SelectionChanged="OnHandlerPicked"
+                          LostFocus="OnHandlerLostFocus"/>
               </Grid>
             </Border>
           </DataTemplate>

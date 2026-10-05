@@ -26,6 +26,9 @@ public class FormHandlerGestureTests
         public readonly Dictionary<string, string> Contents = new(StringComparer.Ordinal);
         public readonly List<string> Writes = new();
 
+        /// <summary>Every write throws (a read-only or locked file), as the disk can.</summary>
+        public bool FailWrites;
+
         public IFileService Service
         {
             get
@@ -41,6 +44,11 @@ public class FormHandlerGestureTests
                 mock.Setup(f => f.WriteFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                     .Returns((string p, string text, CancellationToken _) =>
                     {
+                        if (FailWrites)
+                        {
+                            return Task.FromException(new IOException($"'{p}' is read-only"));
+                        }
+
                         Contents[p] = text;
                         Writes.Add(p);
                         return Task.CompletedTask;
@@ -205,6 +213,32 @@ public class FormHandlerGestureTests
             Assert.That(notice!.Id, Is.EqualTo(DesignCodes.DefaultEventNotOnTarget));
             Assert.That(notice.Severity, Is.EqualTo(VisualGameStudio.Core.Models.DiagnosticSeverity.Info));
             Assert.That(notice.Message, Does.Contain("Paint"));
+        });
+    }
+
+    /// <summary>
+    /// Slice 5 Task 6: ⛔ the Bind is written only AFTER the stub is. A code-behind write that fails (read-only, locked)
+    /// leaves the document unwired — a Bind to a Sub that exists nowhere is a form that stops building — the Events tab
+    /// offering nothing new, nothing opened, and the failure said.
+    /// </summary>
+    [Test]
+    public async Task AFailedStubWrite_LeavesTheDocumentUnbound_AndTheGridsCodeUnchanged_AndIsReported()
+    {
+        var h = Open(FormTarget.WinForms);
+        var textBefore = h.Vm.Text;
+        var gridCodeBefore = h.Vm.PropertyGrid.CodeBehindText;
+        h.Files.FailWrites = true;
+
+        await ActivateAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Control.Binds, Is.Empty, "no Bind to a Sub that was never written");
+            Assert.That(h.Vm.Text, Is.EqualTo(textBefore), "the document text is untouched");
+            Assert.That(h.Vm.PropertyGrid.CodeBehindText, Is.EqualTo(gridCodeBefore), "the grid never saw the unwritten stub");
+            Assert.That(h.Navigations, Is.Empty, "nothing to open");
+            Assert.That(h.Diagnostics.SelectMany(d => d.Diagnostics).Select(d => d.Message),
+                Has.Some.Contains("read-only"), "the failure is said");
         });
     }
 

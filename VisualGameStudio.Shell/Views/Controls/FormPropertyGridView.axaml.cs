@@ -341,6 +341,18 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListDoubleTapped(object? sender, TappedEventArgs e)
     {
+        // Slice 5 D-5: a double-click on an Events-tab row (its name, or its value cell) creates-or-navigates its handler —
+        // the host decides which (bound → navigate; empty → write <Id>_<Event>). Not inside an OPEN drop-down: a
+        // double-click there picks an item.
+        if (e.Source is Visual eventSource &&
+            eventSource.FindAncestorOfType<ListBoxItem>(includeSelf: true) is { DataContext: FormEventRow eventRow } &&
+            eventSource.FindAncestorOfType<ComboBoxItem>(includeSelf: true) == null)
+        {
+            eventRow.RequestHandler();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Source is not Visual source ||
             source.FindAncestorOfType<TypedValueEditor>(includeSelf: true) != null ||
             source.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: FormPropertyRow row })
@@ -352,6 +364,40 @@ public partial class FormPropertyGridView : UserControl
         if (row.ToggleBool())
         {
             e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// An Events-tab handler drop-down is opening (D-5 freshness): ask the host for the code-behind as it is NOW — the open
+    /// tab's unsaved text first, then the disk — so the list offers a Sub typed a moment ago.
+    /// </summary>
+    private void OnHandlerDropDownOpened(object? sender, EventArgs e)
+    {
+        if (DataContext is FormPropertyGridViewModel grid)
+        {
+            grid.RequestCodeBehindRefresh();
+        }
+    }
+
+    /// <summary>
+    /// A handler was PICKED from the drop-down: bind it (the row's commit rules). ⚠ Only while the drop-down is open — the
+    /// combo also re-selects when its items or text change underneath it (a refresh), which is not a pick.
+    /// </summary>
+    private void OnHandlerPicked(object? sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { DataContext: FormEventRow row, IsDropDownOpen: true, SelectedItem: string picked })
+        {
+            row.Commit(picked);
+        }
+    }
+
+    /// <summary>Leaving the handler cell commits what was typed, as Enter does (VS). The same text as bound is a no-op.</summary>
+    private void OnHandlerLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ComboBox { DataContext: FormEventRow row, IsDropDownOpen: false } combo &&
+            !combo.IsKeyboardFocusWithin)
+        {
+            row.Commit(combo.Text);
         }
     }
 
@@ -397,6 +443,17 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListKeyDown(object? sender, KeyEventArgs e)
     {
+        // Slice 5: Enter in an Events-tab row's handler combo COMMITS what was typed (a fitting Sub binds, a new name asks
+        // the host for the stub, an empty cell unbinds). On the TUNNEL, before the editable combo takes Enter for itself.
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && e.Source is Visual typedIn &&
+            typedIn.FindAncestorOfType<ComboBox>(includeSelf: true) is { DataContext: FormEventRow eventRow } combo)
+        {
+            eventRow.Commit(combo.Text);
+            combo.IsDropDownOpen = false;
+            e.Handled = true;
+            return;
+        }
+
         // A COMPOSITE row (Font, Size, Location, Padding) expands with Right and collapses with Left, as in VS — only when
         // focus is on the row's CONTAINER itself: in its editor the arrows move the caret.
         if (e.KeyModifiers == KeyModifiers.None && e.Source is ListBoxItem { DataContext: FormPropertyRow { IsComposite: true } row } &&

@@ -103,6 +103,15 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     public event EventHandler<FormHandlerRequest>? HandlerRequested;
 
+    /// <summary>
+    /// A handler drop-down is opening (D-5 freshness): the host re-reads the code-behind — the open tab first, then the
+    /// disk — and pushes it into <see cref="CodeBehindText"/>, so a Sub typed into an UNSAVED tab is offered.
+    /// </summary>
+    public event EventHandler? CodeBehindRefreshRequested;
+
+    /// <summary>Asks the host for a fresh <see cref="CodeBehindText"/> (the view calls this on a drop-down's open).</summary>
+    public void RequestCodeBehindRefresh() => CodeBehindRefreshRequested?.Invoke(this, EventArgs.Empty);
+
     public FormPropertyGridViewModel()
     {
         // A collapse that hid the described row: the pane must not describe a row nobody can see.
