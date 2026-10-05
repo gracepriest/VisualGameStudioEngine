@@ -1169,6 +1169,9 @@ namespace BasicLang.Compiler.IR
                 _functionResultVariable = CreateVariable($"{node.Name}_FnResult", returnType, _nextVersion++);
                 _currentFunction.LocalVariables.Add(_functionResultVariable);
                 ReserveInCurrentFunction(_functionResultVariable.Name);   // ADR-0018 D1: a lowering's declared name
+                // Attributed to the Function's own line — it otherwise inherited whatever line was tracked last
+                // (a stale #line on C#).
+                TrackSourceLine(node);
                 EmitInstruction(new IRAssignment(_functionResultVariable, CreateDefaultValue(returnType)));
             }
 
@@ -6282,6 +6285,13 @@ namespace BasicLang.Compiler.IR
             // Check for different call types
             if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
+                // Task 7e: `p.Name(1)` — a String member's default property, Chars(1).
+                if (_semanticAnalyzer.IsStringCharIndex(node))
+                {
+                    EmitStringChars(memberExpr, node, tempName);
+                    return;
+                }
+
                 // #187: `d.Invoke(args)` on a user-delegate value is `d(args)`, as the analyzer
                 // types it — lowered to the SAME IR, so no backend has to know a delegate has an
                 // Invoke member (a std::function and a JavaScript function have none: measured,
@@ -6622,26 +6632,10 @@ namespace BasicLang.Compiler.IR
                 var symbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
                 var calleeType = _semanticAnalyzer.GetNodeType(node.Callee);
 
-                // Task 7e: `s(i)` on a String value — VB's default Chars(i) — as the one-character built-in
-                // Mid(s, i + 1, 1), flagged intrinsic so no user `Mid` captures it. The value is read exactly as the
-                // bare name is (a property through its accessor, ADR-0007).
+                // Task 7e: `s(i)` on a String value — VB's default Chars(i). See EmitStringChars.
                 if (_semanticAnalyzer.IsStringCharIndex(node))
                 {
-                    var stringType = new TypeInfo("String", TypeKind.Primitive);
-                    var integerType = new TypeInfo("Integer", TypeKind.Primitive);
-                    idExpr.Accept(this);
-                    var text = _expressionResult;
-                    node.Arguments[0].Accept(this);
-                    var start = new IRBinaryOp(_currentFunction.GetNextTempName(), BinaryOpKind.Add,
-                        _expressionResult, new IRConstant(1, integerType), integerType);
-                    EmitInstruction(start);
-                    var chars = new IRCall(tempName ?? _currentFunction.GetNextTempName(), "Mid", stringType) { IsIntrinsic = true };
-                    chars.Arguments.Add(text);
-                    chars.Arguments.Add(start);
-                    chars.Arguments.Add(new IRConstant(1, integerType));
-                    chars.ByRefArguments.AddRange(new[] { false, false, false });
-                    EmitInstruction(chars);
-                    _expressionResult = chars;
+                    EmitStringChars(idExpr, node, tempName);
                     return;
                 }
 
@@ -6747,6 +6741,31 @@ namespace BasicLang.Compiler.IR
                     delegateSymbol: null);
             }
         }
+
+        /// <summary>
+        /// Task 7e: <c>s(i)</c> — a String value's default property, VB's <c>Chars(i)</c> — as the intrinsic
+        /// <see cref="StringCharsIntrinsic"/> call over the value and the zero-based index. The value is read exactly as
+        /// its expression is otherwise read (a bare property through its accessor, ADR-0007; <c>p.Name</c> as a member
+        /// read). Each backend indexes and THROWS past the end, as VB does (a one-character Mid answered "" there).
+        /// </summary>
+        private void EmitStringChars(ExpressionNode valueExpression, CallExpressionNode node, string tempName)
+        {
+            valueExpression.Accept(this);
+            var text = _expressionResult;
+            node.Arguments[0].Accept(this);
+            var index = _expressionResult;
+            var chars = new IRCall(tempName ?? _currentFunction.GetNextTempName(), StringCharsIntrinsic,
+                new TypeInfo("String", TypeKind.Primitive)) { IsIntrinsic = true };
+            chars.Arguments.Add(text);
+            chars.Arguments.Add(index);
+            chars.ByRefArguments.AddRange(new[] { false, false });
+            EmitInstruction(chars);
+            _expressionResult = chars;
+        }
+
+        /// <summary>The IR name of VB's String default property (<c>s(i)</c> = <c>s.Chars(i)</c>); every backend lowers it
+        /// (C# <c>s[i].ToString()</c>, JavaScript a checked index, C++ <c>.at(i)</c>).</summary>
+        internal const string StringCharsIntrinsic = "Chars";
 
         /// <summary>
         /// Whether a bare callee bound to <paramref name="symbol"/> is a delegate VALUE — a local, a

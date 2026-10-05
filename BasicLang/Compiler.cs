@@ -117,6 +117,10 @@ namespace BasicLang.Compiler
         /// </summary>
         internal Func<Net.NetTypeResolver> NetResolverFactory { get; set; }
 
+        /// <summary>Task 7d: <see cref="NetResolverFactory"/> was armed for a <c>UseWindowsForms</c> project (the WindowsDesktop
+        /// pack in the closure). The analyzer keys the WinForms behaviour on THIS, not on whether a Form resolves.</summary>
+        internal bool NetResolutionIsWinForms { get; set; }
+
         /// <summary>
         /// P2a-2 Task 4 (spec §6.3's C#-backend warning row): arms .NET name resolution over the
         /// project's reference closure — the SAME closure/resolver machinery the native path
@@ -159,6 +163,7 @@ namespace BasicLang.Compiler
                 var desktop = Net.NetReferenceResolver.WindowsDesktopAssemblies;
                 if (desktop.Count == 0)
                     return;
+                NetResolutionIsWinForms = true;
                 NetResolverFactory = () => resolver ??= Net.NetTypeResolver.CreateShared(
                     Net.NetReferenceResolver.WithWindowsDesktop(
                         Net.NetReferenceResolver.Resolve(project, projectFilePath ?? project.FilePath, packageAssemblies).All,
@@ -804,6 +809,7 @@ namespace BasicLang.Compiler
                     _options.NetResolverFactory,
                     nativeBackend: string.Equals(_options.TargetBackend, "cpp",
                                                  StringComparison.OrdinalIgnoreCase));
+                analyzer.ConfigureWinFormsResolution(_options.NetResolutionIsWinForms);
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);

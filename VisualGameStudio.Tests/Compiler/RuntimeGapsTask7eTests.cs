@@ -115,6 +115,71 @@ public class RuntimeGapsTask7eTests
         End Module
         """, "abc4az");
 
+    /// <summary>⛔ <c>Exit Function</c> in a Function that never assigns its name returns the type's DEFAULT (VB): 0, and
+    /// Nothing for a String (printed as empty). It returned NOTHING at all from a Function before Task 7e.</summary>
+    [Test]
+    public void ExitFunction_WithoutAnAssignment_ReturnsTheDefault() => RunsOnCsJsCpp("""
+        Module Program
+            Function F(b As Boolean) As Integer
+                If b Then Exit Function
+                Return 7
+            End Function
+            Function G(b As Boolean) As String
+                If b Then Exit Function
+                Return "seven"
+            End Function
+            Sub Main()
+                Console.WriteLine(F(True))
+                Console.WriteLine(F(False))
+                Console.WriteLine("[" & G(True) & "]")
+                Console.WriteLine(G(False))
+            End Sub
+        End Module
+        """, "0\n7\n[]\nseven");
+
+    /// <summary>⛔ <c>p.Name(1)</c> — a String property reached THROUGH A MEMBER — is Chars(1) too; it was still emitted as a
+    /// call (C# CS1955, JavaScript TypeError). Piece 2's controls (<c>txt.Text(0)</c>) need it.</summary>
+    [Test]
+    public void IndexingAStringMember_ThroughAReceiver_IsItsCharacter() => RunsOnCsJsCpp("""
+        Class P
+            Public Name As String
+            Private _t As String
+            Public Sub New()
+                Name = "abc"
+                _t = "xyz"
+            End Sub
+            Public Property Text As String
+                Get
+                    Return _t
+                End Get
+                Set(v As String)
+                    _t = v
+                End Set
+            End Property
+        End Class
+        Module Program
+            Sub Main()
+                Dim p As New P()
+                Console.WriteLine(p.Name(1) & p.Text(0))
+            End Sub
+        End Module
+        """, "bx");
+
+    /// <summary>⛔ <c>s(i)</c> past the end throws, as VB's Chars does (C# threw; JavaScript answered an empty string).</summary>
+    [Test]
+    public void IndexingAStringPastItsEnd_Throws_OnJavaScript()
+    {
+        var outcome = JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.Compile("""
+            Module Program
+                Sub Main()
+                    Dim s As String = "ab"
+                    Console.WriteLine(s(5))
+                End Sub
+            End Module
+            """));
+        Assert.That(outcome.ExitCode, Is.Not.Zero, "an out-of-range Chars index must throw, not print an empty line");
+    }
+
     /// <summary>⛔ C++ emitted bare <c>Beep()</c> / <c>FileCopy(…)</c> / <c>FileLen(…)</c> calls to names nothing defines — a late
     /// native-compile failure. Run on C++ and C# (JavaScript has no file system: those are refused there by design).</summary>
     [Test]

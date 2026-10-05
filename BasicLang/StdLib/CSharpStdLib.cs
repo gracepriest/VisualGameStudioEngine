@@ -65,6 +65,8 @@ namespace BasicLang.Compiler.StdLib.CSharp
             // VB's Val/Str (Task 7d review): the call was emitted as a bare `Val(x)` nothing defines.
             ["Val"] = new StdLibFunction { Name = "Val", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Double" },
             ["Str"] = new StdLibFunction { Name = "Str", Category = StdLibCategory.String, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
+            // Task 7e: VB's String default property (`s(i)` = s.Chars(i)) — IRBuilder.StringCharsIntrinsic.
+            ["Chars"] = new StdLibFunction { Name = "Chars", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "Integer" }, ReturnType = "String" },
 
             // Math
             ["Abs"] = new StdLibFunction { Name = "Abs", Category = StdLibCategory.Math, ParameterTypes = new[] { "Double" }, ReturnType = "Double" },
@@ -353,6 +355,8 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 // and Str's leading space for a non-negative number are its rules, not a re-implementation.
                 "val" => $"Microsoft.VisualBasic.Conversion.Val({args[0]})",
                 "str" => $"Microsoft.VisualBasic.Conversion.Str({args[0]})",
+                // C#'s indexer throws IndexOutOfRangeException past the end, exactly as VB's Chars does.
+                "chars" => $"({args[0]})[{args[1]}].ToString()",
                 _ => null
             };
         }

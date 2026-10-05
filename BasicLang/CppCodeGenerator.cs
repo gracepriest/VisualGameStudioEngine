@@ -4175,6 +4175,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // VB's Val / Str (Task 7d review) — BasicLang::VbVal / VbStr in the BCL runtime. Str's
                 // number text is the ONE shared stringifier's, so it cannot drift from CStr / Concat.
                 "val" => $"BasicLang::VbVal({args[0]})",
+                // Task 7e: VB's String default property (`s(i)` = s.Chars(i), IRBuilder.StringCharsIntrinsic);
+                // .at() throws std::out_of_range past the end, as VB's Chars throws.
+                "chars" => $"std::string(1, std::string({args[0]}).at(static_cast<size_t>({args[1]})))",
                 // Task 7e: emitted to undefined names before (a late native-compile failure).
                 "beep" => "BasicLang::VbBeep()",
                 "filecopy" => $"BasicLang::VbFileCopy({args[0]}, {args[1]})",

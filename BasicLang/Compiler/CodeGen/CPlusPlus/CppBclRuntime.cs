@@ -314,10 +314,16 @@ inline void VbFileCopy(const std::string& source, const std::string& destination
 inline int64_t VbFileLen(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), ""rb"");
     if (!f) throw std::runtime_error(""FileNotFoundException: Could not find file '"" + path + ""'."");
-    std::fseek(f, 0, SEEK_END);
-    const long size = std::ftell(f);
+    /* 64-bit offsets: a `long` ftell is 32 bits on Windows and wraps past 2 GB. */
+#ifdef _WIN32
+    _fseeki64(f, 0, SEEK_END);
+    const int64_t size = _ftelli64(f);
+#else
+    fseeko(f, 0, SEEK_END);
+    const int64_t size = static_cast<int64_t>(ftello(f));
+#endif
     std::fclose(f);
-    return static_cast<int64_t>(size);
+    return size;
 }
 
 /* VB's Str(n): the number's text, with a leading space where a non-negative number has no sign, and a

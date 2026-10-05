@@ -1954,6 +1954,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "replace" when args.Count == 3:
                     result = $"{Recv()}.split({args[1]}).join({args[2]})"; return true;
 
+                // Task 7e: VB's String default property (`s(i)` = s.Chars(i), IRBuilder.StringCharsIntrinsic) —
+                // CHECKED: a JavaScript index past the end answers undefined, VB throws.
+                case "chars" when args.Count == 2:
+                    result = "((s, i) => { if (i < 0 || i >= s.length) throw new RangeError("
+                             + "\"IndexOutOfRangeException: Index was outside the bounds of the array.\"); "
+                             + $"return s[i]; }})({args[0]}, {args[1]})";
+                    return true;
+
                 case "chr" when args.Count == 1:
                     result = $"String.fromCharCode({args[0]})"; return true;
                 case "asc" when args.Count == 1:

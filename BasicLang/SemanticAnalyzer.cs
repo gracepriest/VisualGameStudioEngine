@@ -2357,6 +2357,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         internal bool IsStringCharIndex(CallExpressionNode node) => node != null && _stringCharIndexes.Contains(node);
 
+        /// <summary>
+        /// Task 7e: <c>Name(0)</c> / <c>p.Name(0)</c> on a String value (a field, property, constant, local or parameter)
+        /// is VB's default property, <c>Chars(0)</c>. Recorded for the IR builder (<see cref="IsStringCharIndex"/>) and
+        /// typed String — ⚠ VB's result is a Char, but Char is not yet a type every backend has (JavaScript gains it in
+        /// piece 2, 2.0b); the text is the same. It used to fall to the call arm: C# CS1955, JavaScript a wrong result.
+        /// </summary>
+        private bool TryStringChars(CallExpressionNode node, Symbol calleeSymbol, TypeInfo calleeType)
+        {
+            var valueType = calleeSymbol.Type ?? calleeType;
+            if (calleeSymbol.Kind is not (SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property
+                    or SymbolKind.Constant)
+                || !string.Equals(valueType?.Name, "String", StringComparison.OrdinalIgnoreCase)
+                || valueType.ArrayRank != 0 || node.Arguments.Count != 1)
+                return false;
+
+            node.Arguments[0].Accept(this);
+            var indexType = GetNodeType(node.Arguments[0]);
+            if (indexType != null && !indexType.IsIntegral())
+                Error($"A String index must be an integer, got '{indexType}'", node.Arguments[0].Line, node.Arguments[0].Column);
+            _stringCharIndexes.Add(node);
+            SetNodeType(node, _typeManager.StringType);
+            return true;
+        }
+
         /// <summary>Every built-in function, for the test that enumerates the VB-qualified spellings.</summary>
         internal IReadOnlyCollection<Symbol> StdLibSymbolsForTest => _stdLibSymbols.Values;
 
@@ -3336,6 +3360,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _netNativeBackend = nativeBackend;
         }
 
+        /// <summary>Task 7d: the closure is a <c>UseWindowsForms</c> project's (<c>CompilerOptions.NetResolutionIsWinForms</c>)
+        /// — read by <see cref="IsWinFormsArmed"/>, so the project's own setting decides, never whether a Form resolves.</summary>
+        internal void ConfigureWinFormsResolution(bool winForms) => _netResolutionIsWinForms = winForms;
+
+        private bool _netResolutionIsWinForms;
+
         private NetTypeResolver NetResolver()
         {
             if (!_netResolverCreated)
@@ -3656,13 +3686,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 line, column);
         }
 
-        /// <summary>Whether the armed closure includes WinForms — a <c>UseWindowsForms</c> project with the WindowsDesktop
-        /// pack (<c>CompilerOptions.EnableNetResolution</c>). Cached: asked on every .NET warning.</summary>
-        private bool IsWinFormsArmed() =>
-            _winFormsArmed ??= _netResolverFactory != null
-                && NetResolver().ResolveTypeDetailed("System.Windows.Forms.Form").Outcome == NetTypeLookupOutcome.Resolved;
-
-        private bool? _winFormsArmed;
+        /// <summary>Whether resolution is armed for a <c>UseWindowsForms</c> project (<c>CompilerOptions.EnableNetResolution</c>
+        /// with the WindowsDesktop pack) — the project's own setting, never inferred from what resolves.</summary>
+        private bool IsWinFormsArmed() => _netResolverFactory != null && _netResolutionIsWinForms;
 
         private static bool IsWinFormsTypeName(string fullName) =>
             fullName != null && fullName.StartsWith("System.Windows.Forms.", StringComparison.Ordinal);
@@ -12742,6 +12768,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // PROPERTY is that property's read; any other argument list on such a value is BC30471. Both used
             // to fall through to the Object-typed call below, which lowered a CALL to a function of that name —
             // the Module's, when one existed (`Value()` beside a base's Property Value ran Util.Value()).
+            // Task 7e review: `p.Name(1)` — a String MEMBER reached through a receiver — is Chars(1) too.
+            if (node.Callee is MemberAccessExpressionNode && calleeSymbol != null && !calleeIsCallable
+                && TryStringChars(node, calleeSymbol, calleeType))
+                return;
+
             if (node.Callee is IdentifierExpressionNode valueCallee && calleeSymbol != null && !calleeIsCallable)
             {
                 if (calleeSymbol.Kind == SymbolKind.Property && node.Arguments.Count == 0)
@@ -12749,24 +12780,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     SetNodeType(node, calleeSymbol.Type ?? calleeType ?? _typeManager.ObjectType);
                     return;
                 }
-                // Task 7e: `Name(0)` on a String value is VB's default property, Chars(0). Lowered by the IR builder
-                // as the one-character Mid (IsStringCharIndex) and typed String — ⚠ VB's result is a Char, but Char
-                // is not yet a type every backend has (JavaScript gains it in piece 2, 2.0b); the text is the same.
-                // It used to fall to the call arm: C# `Name(0)` CS1955, JavaScript a wrong result.
-                var valueType = calleeSymbol.Type ?? calleeType;
-                if (calleeSymbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property
-                        or SymbolKind.Constant
-                    && string.Equals(valueType?.Name, "String", StringComparison.OrdinalIgnoreCase)
-                    && valueType.ArrayRank == 0 && node.Arguments.Count == 1)
-                {
-                    node.Arguments[0].Accept(this);
-                    var indexType = GetNodeType(node.Arguments[0]);
-                    if (indexType != null && !indexType.IsIntegral())
-                        Error($"A String index must be an integer, got '{indexType}'", node.Arguments[0].Line, node.Arguments[0].Column);
-                    _stringCharIndexes.Add(node);
-                    SetNodeType(node, _typeManager.StringType);
-                    return;
-                }
+                if (TryStringChars(node, calleeSymbol, calleeType)) return;
                 if (calleeSymbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property
                         or SymbolKind.Constant
                     && IsScalarValueType(calleeType))

@@ -8,30 +8,47 @@ namespace BasicLang.Net
     internal sealed partial class NetTypeResolver
     {
         /// <summary>
-        /// One resolver per distinct reference closure, shared across compilations in this process — keyed on
-        /// every path WITH its size and write time, so a rebuilt referenced assembly is a new key, never stale.
+        /// One resolver per distinct reference closure, shared across compilations in this process; a rebuilt
+        /// referenced assembly (a changed size or write time) is never served stale.
         ///
         /// <para>⛔ Task 7d review (perf): a WinForms closure is ~230 assemblies; building its resolver, and the
         /// extension-method scan behind <see cref="DeclaresNameableMember"/>, cost ~390 ms on EVERY compile
         /// (each <c>CompilerOptions</c> made its own). The class remarks already say "build ONE per reference
         /// closure and keep it"; this is the keeping. Used for the WinForms closure only — the other routes keep
         /// their per-options instance.</para>
+        ///
+        /// <para>⚠ Keyed on the PATH SET, the stamps stored beside it: a changed stamp REPLACES the entry (the old
+        /// resolver dropped), so one closure never accumulates a resolver per rebuild of a referenced assembly — the
+        /// cache holds one entry per distinct set of paths (Task 7d review).</para>
         /// </summary>
         internal static NetTypeResolver CreateShared(IReadOnlyList<string> assemblyPaths)
         {
-            var key = string.Join("|", assemblyPaths.Select(p =>
-            {
-                try
-                {
-                    var info = new System.IO.FileInfo(p);
-                    return info.Exists ? $"{p}*{info.Length}*{info.LastWriteTimeUtc.Ticks}" : p;
-                }
-                catch (Exception) { return p; }
-            }));
-            return SharedResolvers.GetOrAdd(key, _ => new Lazy<NetTypeResolver>(() => Create(assemblyPaths))).Value;
+            var key = string.Join("|", assemblyPaths);
+            var stamps = string.Join("|", assemblyPaths.Select(StampOf));
+            var entry = SharedResolvers.AddOrUpdate(key,
+                _ => new SharedEntry(stamps, new Lazy<NetTypeResolver>(() => Create(assemblyPaths))),
+                (_, existing) => existing.Stamps == stamps
+                    ? existing
+                    : new SharedEntry(stamps, new Lazy<NetTypeResolver>(() => Create(assemblyPaths))));
+            return entry.Resolver.Value;
         }
 
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<NetTypeResolver>> SharedResolvers = new();
+        private static string StampOf(string path)
+        {
+            try
+            {
+                var info = new System.IO.FileInfo(path);
+                return info.Exists ? $"{info.Length}*{info.LastWriteTimeUtc.Ticks}" : "-";
+            }
+            catch (Exception) { return "?"; }
+        }
+
+        private sealed record SharedEntry(string Stamps, Lazy<NetTypeResolver> Resolver);
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SharedEntry> SharedResolvers = new();
+
+        /// <summary>Entries in the shared cache — for the test that a changed stamp REPLACES rather than adds.</summary>
+        internal static int SharedResolverCountForTest => SharedResolvers.Count;
 
         /// <summary>
         /// Whether a member named <paramref name="name"/> (VB's case-insensitive match) is NAMEABLE on
