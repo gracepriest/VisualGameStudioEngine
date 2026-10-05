@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #196 TESTED — a C++ `Array<T>` has a real null state (ADR-0011 D3(c); `CppArrayRuntime.is_nothing()`, `CppCodeGenerator.EmitNullTest`; `git log --grep '#196'`)
+- **Tests (11 new, 2 moved):** `CppArrayNothingExecutionTests` (Integration, 11 rows of vbc-answered probes, C++ only, x CLI / `--optimize` / `CompileProjectFiles`; in `NotJavaScriptExecution`, roster still 116). MOVED: the named divergence test is now `IsIsNotOperatorExecutionTests.CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet` (String row still True on C++, array row False), and the `Case Is Nothing` text pin expects `(x).is_nothing()`. ADR-0011 carries a one-line amendment. Mutants M1-M3 each killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,675 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 11, `IsIsNot` 91, `Identity` 148, `Array` 324 (+2 skipped), `ReDim` 17, `WhenGuard` 70, `NothingConversion` 81, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): `UBound(Nothing)` throws NullReferenceException where VB throws ArgumentNullException (C# too); `Dim d(-1)` is Nothing, not an empty array, on every backend (#284); the C++ String `Is Nothing` is still emptiness; jagged arrays are refused by the front end.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #194 TESTED — a .NET class widens to its .NET base classes and interfaces (`SymbolTable.IsAssignableFrom` + `SemanticAnalyzer.WithNetWidening` + `NetTypeResolver.WidensByReference`; front end only)
 - **Tests (12):** `NetSubtypeWideningExecutionTests` (Integration, 7: 12 vbc-answered probes on C# x CLI / `-O` / `CompileProjectFiles`, a two-file build in both orders, the Exception base also on MSIL; in `NotJavaScriptExecution`, roster still 116) + `NetSubtypeWideningFrontEndTests` (fast, 5: the accepted widenings, vbc's refusals BC30512 / BC30311, a user type that shadows a .NET name). Mutants M1-M3 killed. ⚠ `TempExec.Emit`'s project leg does NOT arm .NET resolution (the CLI and the IDE's BuildService do), so widening is refused there; the fixture arms its own.
 - **Gates (Linux):** fast 0 failed / 12,680 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 12, `NetConversion` 36, `NetTypeResolver` 67, `NetStrictResolution` 24, `ModuleResolver` 8, `Coercion` 69, `LSP` 470, `JsExecutionTierRoster` 5. Full suite NOT run.

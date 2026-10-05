@@ -588,6 +588,8 @@ public class JsExecutionTierRosterTests
         // Runs user operators on C# and C++ only — JavaScript refuses them (BL7006), which
         // UserOperatorTests asserts without spawning Node.
         "UserOperatorExecutionTests",
+        // Task #196: a C++-only fixture. A C++ array is Nothing (unsized Dim, a field, a Function result) and an empty one is not, run through the CLI, --optimize and CompileProjectFiles with a C++ compiler - no Node.
+        "CppArrayNothingExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

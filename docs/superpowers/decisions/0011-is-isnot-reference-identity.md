@@ -125,3 +125,5 @@ list. Filed separately: `Not` precedence; `Array<T>` null state; #193; `TypeOf`.
 `Array<T>` gains a real null state (D3(c)): the C++ `EmitNullTest` array arm then becomes a null
 test and the named divergence test flips for arrays. If `Not` moves to VB precedence, D1's `Not`
 diagnostic is retired.
+
+**Amendment (task #196):** D3(c) has landed for arrays. The C++ `EmitNullTest` array arm is now a real null test (`(x).is_nothing()` on a handle that owns no storage; an empty array is not Nothing), and the named divergence test flipped for its array row: only the String row still diverges.

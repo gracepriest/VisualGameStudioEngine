@@ -474,8 +474,9 @@ public class NothingConversionExecutionTests
     //    divergence (Nothing is distinguishable from "" only through `Is`). #185 (ADR-0011) has
     //    since made `Is`/`IsNot` parse everywhere; the divergence itself is now directly
     //    observable and measured — see IsIsNotOperatorExecutionTests
-    //    .CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet (probe P12): `"" Is Nothing` and
-    //    an empty array `Is Nothing` are True on C++ only, False on C#/JS/MSIL.
+    //    .CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet (probe P12):
+    //    `"" Is Nothing` is True on C++ only, False on C#/JS/MSIL. (An empty array `Is Nothing` was
+    //    the second row until #196 gave the C++ array a real null state: it is False everywhere now.)
     //
     //    ⛔ #189 DONE (fix commit 381b95ff): JavaScript used to print the real word `null` here
     //    (string concatenation with a JS `null`) where every other backend printed "" — pinned
