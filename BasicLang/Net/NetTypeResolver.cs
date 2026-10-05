@@ -465,6 +465,28 @@ namespace BasicLang.Net
         internal bool IsRefLikeType(string fullName) => Lookup(fullName).Symbol?.IsRefLikeType == true;
 
         /// <summary>
+        /// #194: whether a value of <paramref name="sourceFullName"/> converts to
+        /// <paramref name="targetFullName"/> implicitly BY REFERENCE, or is the same type — a class
+        /// to each of its base classes and to every interface it implements, an interface to its
+        /// base interfaces, generic variance included. That is C#'s implicit reference conversion,
+        /// and VB widens every one of them (legal under Option Strict On).
+        ///
+        /// <para>Both names are this class's C# spellings, a construction included
+        /// (<c>System.Collections.Generic.List&lt;System.Int32&gt;</c>), resolved through
+        /// <see cref="ConstructedTypeSymbol"/>. False when either does not resolve to a closed type,
+        /// and for a value-type source: boxing is not a reference conversion.</para>
+        /// </summary>
+        internal bool WidensByReference(string sourceFullName, string targetFullName)
+        {
+            var source = ConstructedTypeSymbol(sourceFullName);
+            var target = ConstructedTypeSymbol(targetFullName);
+            if (source == null || target == null || !source.IsReferenceType) return false;
+
+            var conversion = _compilation.ClassifyConversion(source, target);
+            return conversion.IsImplicit && (conversion.IsIdentity || conversion.IsReference);
+        }
+
+        /// <summary>
         /// The metadata full name of an ENUM's underlying integral type
         /// (<c>System.Int32</c> for <c>System.IO.FileMode</c>), or null when
         /// <paramref name="fullName"/> does not resolve or is not an enum.

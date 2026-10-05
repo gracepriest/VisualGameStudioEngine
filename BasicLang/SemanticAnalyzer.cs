@@ -1129,7 +1129,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var genericType = _typeManager.CreateGenericType(typeRef.Name, typeArgs);
                 if (genericType == null)
                 {
-                    genericType = new TypeInfo(typeRef.Name, TypeKind.Class);
+                    genericType = WithNetWidening(new TypeInfo(typeRef.Name, TypeKind.Class));
                     genericType.GenericArguments.AddRange(typeArgs);
                 }
                 if (IsDelegateTypeName(typeRef.Name))
@@ -1157,7 +1157,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return symbol.Type;
             }
 
-            return _typeManager.GetType(name) ?? new TypeInfo(name, TypeKind.Class);
+            return _typeManager.GetType(name) ?? WithNetWidening(new TypeInfo(name, TypeKind.Class));
         }
 
         /// <summary>
@@ -2799,7 +2799,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // create a synthetic generic type for .NET types like List, Dictionary, etc.
                 if (genericType == null && IsNetType(typeRef.Name))
                 {
-                    genericType = new TypeInfo(typeRef.Name, TypeKind.Class);
+                    genericType = WithNetWidening(new TypeInfo(typeRef.Name, TypeKind.Class));
                     genericType.GenericArguments.AddRange(typeArgs);
                     // P2a-1 §6.5: warning-only. Arity is known here, which is what lets an
                     // UNCLAIMED generic (Queue(Of T), SortedDictionary(Of K,V), …) be asked for
@@ -3099,10 +3099,53 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ProbeNetTypeReference(name, 0);
 
                 // Create a synthetic type for .NET types
-                return new TypeInfo(name, TypeKind.Class);
+                return WithNetWidening(new TypeInfo(name, TypeKind.Class));
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// #194: arms a type minted for a .NET name with its widening fact
+        /// (<see cref="TypeInfo.NetWidensTo"/>, judged by <see cref="NetWidens"/>). Lazy: nothing is
+        /// resolved until <see cref="TypeInfo.IsAssignableFrom"/> has refused by every other rule,
+        /// so a program that compiles today never builds the resolver for this. A no-op without a
+        /// resolver factory — the LSP and every un-armed path keep today's answer.
+        /// </summary>
+        private TypeInfo WithNetWidening(TypeInfo type)
+        {
+            if (_netResolverFactory != null)
+                type.NetWidensTo = target => NetWidens(type, target);
+            return type;
+        }
+
+        /// <summary>
+        /// #194: whether <paramref name="source"/>, a type minted for a .NET name, WIDENS to
+        /// <paramref name="target"/> by the .NET facts — VB's widening from a class to its base
+        /// classes and the interfaces it implements, legal under Option Strict On
+        /// (<c>Dim s As Stream = New MemoryStream()</c>,
+        /// <c>Dim e As IEnumerable(Of Integer) = New List(Of Integer)()</c>,
+        /// <c>Dim ex As Exception = New ArgumentException("x")</c>). The resolver decides
+        /// (<see cref="NetTypeResolver.WidensByReference"/>); no type is listed here.
+        ///
+        /// <para>Both sides are spelled as .NET exactly as a call argument is
+        /// (<see cref="TryMapNetArgumentType"/>: the unit's <c>Using</c>s, the ambient namespaces,
+        /// generic arity), so a user type on either side is never judged. The target must be a
+        /// class or an interface: a source never widens to <c>String</c>, a numeric or an array by
+        /// this rule. A narrowing (<c>Stream</c> → <c>MemoryStream</c>, BC30512) and an unrelated
+        /// pair (<c>ArrayList</c> → <c>Stream</c>, BC30311) are not implicit reference conversions,
+        /// so their refusals stand.</para>
+        /// </summary>
+        private bool NetWidens(TypeInfo source, TypeInfo target)
+        {
+            if (source == null || target == null) return false;
+            if (target.Kind != TypeKind.Class && target.Kind != TypeKind.Interface) return false;
+
+            // The TARGET first: a user type answers before any metadata is read, so asking about
+            // one never builds the resolver.
+            if (!TryMapNetArgumentType(target, out var to, out _)) return false;
+            if (!TryMapNetArgumentType(source, out var from, out _)) return false;
+            return NetResolver()?.WidensByReference(from, to) == true;
         }
 
         private static bool IsTypeSymbolKind(SymbolKind kind) =>
