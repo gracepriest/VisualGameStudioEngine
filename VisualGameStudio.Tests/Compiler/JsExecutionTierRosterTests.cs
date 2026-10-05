@@ -507,6 +507,8 @@ public class JsExecutionTierRosterTests
         // Compile and run real C++ through CppToolchain — nothing to do with Node.
         "CppFinallyExecutionTests",
         "CppExitForExecutionTests",
+        // Task #134: builds a Release C++ .blproj and compiles its obj/gen with clang++/g++ (CppCompile).
+        "CppReleaseProjectExecutionTests",
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
         "CSharpInlinedOperandExecutionTests",

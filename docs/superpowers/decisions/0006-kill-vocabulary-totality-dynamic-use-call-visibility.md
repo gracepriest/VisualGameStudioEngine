@@ -320,6 +320,7 @@ definition in a preheader and a Guard-name write placed after the in-loop
 use fails the verifier. Because a C++ Release `.blproj` runs the standard
 pipeline (#134), these probes are exercised only through CLI `--optimize`;
 the verifier must run after the aggressive pipeline in test builds.
+*(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline.)*
 
 NOTE (clarifying, not a ruling change): L5 (a lambda-captured local
 written in the loop) prints 6 on C++ at EVERY entry point, including the

@@ -49,12 +49,14 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⛔ THE PROOF REQUIRES BOTH SHIPPING ENTRY POINTS, PER CLAUDE.md - a fix seen only through
 //  the non-optimizing/in-fixture helper can still break through the CLI or the IDE build. For
-//  C++ specifically, a Release .blproj build runs the STANDARD pipeline (task #134 - LICM is
-//  aggressive-only and a Release C++ build does not take AddAggressivePasses), so a C++
-//  Release-.blproj leg CANNOT see this regression; BclE2E.CompileToCppAggressive or the CLI's
-//  own `--optimize` flag are the two routes that do. MSIL's Release .blproj DOES take the
-//  aggressive pipeline (Program.cs:502 maps `Configurations["Release"].OptimizationsEnabled`
-//  to CompilerOptions.OptimizeAggressive), so the one Release-.blproj leg below is MSIL, on L1.
+//  C++ specifically, a Release .blproj build used to run the STANDARD pipeline (task #134 - LICM
+//  is aggressive-only and a Release C++ build did not take AddAggressivePasses), so a C++
+//  Release-.blproj leg could not see this regression. FIXED by #134: a C++ Release .blproj now
+//  takes the aggressive pipeline too (CppProjectOptimizerPipelineTests pins it). The one
+//  Release-.blproj leg below is still MSIL, on L1, because a BasicLang native C++ build always
+//  needs MSVC and so cannot run on Linux; MSIL's Release .blproj takes the aggressive pipeline
+//  (Program.cs maps `Configurations["Release"].OptimizationsEnabled` to
+//  CompilerOptions.OptimizeAggressive via ProjectFile.OptimizationsEnabledFor).
 // =====================================================================================
 
 /// <summary>BASIC sources for the probes, verbatim from scratchpad/f111g/licm/L1..L6.bas.</summary>
@@ -493,9 +495,10 @@ public class LicmKillVocabularyExecutionTests
         });
 
     /// <summary>
-    /// The ONE Release-.blproj leg the brief asks for (task #134's note: a C++ Release build takes
-    /// the STANDARD pipeline and cannot see this regression at all — MSIL's Release build DOES take
-    /// the aggressive one, so it is the backend that can actually stand in for "a Release build" here).
+    /// The ONE Release-.blproj leg the brief asks for (task #134's note: a C++ Release build used to
+    /// take the STANDARD pipeline and could not see this regression at all; #134 FIXED that, but a
+    /// BasicLang native build still needs MSVC and so cannot run on Linux — MSIL's Release build takes
+    /// the aggressive pipeline, so it is the backend that stands in for "a Release build" here).
     /// Drives the real deployed <c>BasicLang.exe build App.blproj -c Release</c>, matching
     /// <c>MsilBinaryOperandCoercionTests.BuildReleaseMsilAndRun</c>'s pattern.
     /// </summary>
@@ -536,9 +539,9 @@ public class LicmKillVocabularyExecutionTests
 
             Assert.That(FourBackends.Norm(MsilHarness.RunIlExpectingSuccess(File.ReadAllText(ilFiles[0]), "App")),
                 Is.EqualTo(LicmKillVocabularyShapes.Expected12),
-                "task #134 — a C++ Release .blproj runs the STANDARD pipeline (no LICM) and cannot "
-                + "detect this regression at all; MSIL's Release .blproj DOES take the aggressive "
-                + "pipeline (Program.cs:502), which is why this leg is MSIL rather than C++.");
+                "task #134 — a C++ Release .blproj ran the STANDARD pipeline (no LICM) and could not "
+                + "detect this regression at all (FIXED: it now takes the aggressive one); this leg is "
+                + "MSIL rather than C++ because a native C++ build needs MSVC and cannot run on Linux.");
         }
         finally { try { Directory.Delete(dir, true); } catch { /* temp */ } }
     }
