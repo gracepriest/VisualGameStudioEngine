@@ -1089,7 +1089,9 @@ No decision changed, so no commit of its own; recorded here with Task 1.
     (logged), the HTML both texts `Go`; under node a `click` on each runs the handler twice, the Label `clicked`.
 - Run: this fixture alone — **2/2** (web 2 s, WinForms 11 s). No other Integration fixture (cadence rule).
 - Roster: NOT added to `JsExecutionTierRosterTests` — its guard sweeps `*ExecutionTests`, and the precedent
-  `FormEventAcceptanceTests` (also node in-fixture) is not rostered either; the pin is unchanged (105).
+  `FormEventAcceptanceTests` (also node in-fixture) is not rostered either; the pin is unchanged (105). Acceptance
+  fixtures are DESIGNER gates, not the JavaScript execution tier: `FormEventWebRunTests` is rostered because it is a
+  JS-tier run fixture (it exists to run emitted JavaScript), whereas these run a designed form end to end on both targets.
 - Red before: written after the code (Tasks 3/5) as their acceptance; red is the mutation table.
 - Mutations:
   | Mutant | Result |
@@ -1133,6 +1135,19 @@ No decision changed, so no commit of its own; recorded here with Task 1.
 - Green: `FormPropertyGridMultiSelectTests` + `FormCanvasMultiSelectTests` 80/80; RE-CHECK (`TestCategory!=Integration`
   over `FormEventGrid*`, `FormHandlerGestureTests`, `FormHandlerPlanTests`, `FormPropertyGrid*`, `FormCanvas*`,
   `FormTray*`) — **687/687**; `FormMultiSelectAcceptanceTests` re-run after the `SameEvent` change — 2/2.
+
+### Review of eafb5573 / 43b70df3 / dd01b127 (one Important, else approved; base `dd01b127`)
+
+- **Important:** the docked-nudge test's `Dock="Fill"` Panel filled the 400×300 form, so `MoveTo`'s clamp held it still
+  anyway — the reviewer's mutant deleting `IsDocked` from `FormGeometryEdit.MoveTo` SURVIVED, and since dd01b127 dropped
+  the canvas's own skip nothing guarded docked members. The Panel now has room (200, 200, 100×40, `Dock="Fill"`), and a
+  Shift+arrow case covers `Resize`'s guard. Ledger:
+  | Mutant | Result |
+  |---|---|
+  | `IsDocked` removed from `FormGeometryEdit.MoveTo` | KILLED by `ANudge_SkipsADockedMember_…` ("not nudged") |
+  | `IsDocked` removed from `FormGeometryEdit.Resize` | KILLED by `AShiftArrowResize_SkipsADockedPixelMember_…` ("not resized") |
+- The Task 7 roster note now says why an acceptance fixture is not in the JS execution-tier roster.
+- Green: `FormCanvasMultiSelectTests` 16/16.
 
 ## 7. Tests to re-check (consolidated)
 

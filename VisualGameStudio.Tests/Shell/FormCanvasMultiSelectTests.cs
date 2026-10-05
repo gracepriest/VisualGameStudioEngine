@@ -394,23 +394,47 @@ public class FormCanvasMultiSelectTests
         strip.Properties["Dock"] = "Top";
         rig.Doc.Controls.Add(strip);
         // A docked PIXEL member too: a Panel with Dock="Fill" has a rect, but its place comes from docking — FormGeometryEdit's
-        // own docked guard (the one rule) refuses to move it.
-        var filled = new FormControl
-        {
-            Kind = "Panel", Id = "fill",
-            Geometry = new PixelGeometry { X = 0, Y = 0, Width = 400, Height = 300, Dock = "Fill" }
-        };
-        rig.Doc.Controls.Add(filled);
+        // own docked guard (the one rule) refuses to move it. ⚠ Its stored rect has ROOM to move (review of dd01b127): a
+        // rect that filled the form would be clamped anyway, and the guard's deletion survived that version of this test.
+        var filled = DockedPanelWithRoom(rig);
         rig.Selection.SetRange(new[] { filled, rig.A, strip }); // the STRIP is the primary
 
         PressKey(rig, Avalonia.Input.Key.Down);
 
         Assert.Multiple(() =>
         {
-            Assert.That(G(filled).Y, Is.Zero, "the Dock=Fill Panel is not nudged");
+            Assert.That((G(filled).X, G(filled).Y), Is.EqualTo((200, 200)), "the Dock=Fill Panel is not nudged");
             Assert.That(G(rig.A).Y, Is.EqualTo(41), "the Button moved down");
             Assert.That(strip.Geometry, Is.Null, "the strip gained no geometry");
             Assert.That(strip.Properties["Dock"], Is.EqualTo("Top"), "and keeps its Dock");
+        });
+    }
+
+    private static FormControl DockedPanelWithRoom(Rig rig)
+    {
+        var filled = new FormControl
+        {
+            Kind = "Panel", Id = "fill",
+            Geometry = new PixelGeometry { X = 200, Y = 200, Width = 100, Height = 40, Dock = "Fill" }
+        };
+        rig.Doc.Controls.Add(filled);
+        return filled;
+    }
+
+    /// <summary>D-11 + FormGeometryEdit's Resize guard: Shift+arrow grows the Button and never the docked Panel.</summary>
+    [AvaloniaTest]
+    public void AShiftArrowResize_SkipsADockedPixelMember_AndResizesTheRest()
+    {
+        var rig = Surface();
+        var filled = DockedPanelWithRoom(rig);
+        rig.Selection.SetRange(new[] { filled, rig.A });
+
+        PressKey(rig, Avalonia.Input.Key.Right, RawInputModifiers.Shift);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((G(filled).Width, G(filled).Height), Is.EqualTo((100, 40)), "the docked Panel is not resized");
+            Assert.That(G(rig.A).Width, Is.EqualTo(81), "the Button grew by 1");
         });
     }
 
