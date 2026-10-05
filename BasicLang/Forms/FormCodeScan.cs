@@ -313,7 +313,11 @@ public static class FormCodeScan
         return new List<LexToken>();
     }
 
-    /// <summary>Every exception but the ones a process cannot recover from — what a scan of a half-typed file may swallow.</summary>
+    /// <summary>
+    /// Every exception but the ones a process cannot recover from — what a scan of a half-typed file may swallow.
+    /// ⚠ <see cref="StackOverflowException"/> and <see cref="ThreadAbortException"/> can never reach a catch on .NET 8 (a
+    /// stack overflow ends the process; thread abort is not supported); they are listed for clarity only.
+    /// </summary>
     private static bool IsNonFatal(Exception e) =>
         e is not (OutOfMemoryException or StackOverflowException or AccessViolationException or ThreadAbortException);
 

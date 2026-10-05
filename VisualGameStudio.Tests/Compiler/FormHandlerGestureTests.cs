@@ -704,11 +704,85 @@ public class FormHandlerGestureTests
         gate.SetResult();
         await Task.WhenAll(control, form);
 
+        AssertNothingAfterClose(h);
+    }
+
+    /// <summary>
+    /// After the tab closed mid-gesture: the write ALREADY IN FLIGHT lands (it cannot be recalled), but nothing is bound
+    /// and nothing opens (round 7: `_closed` is re-checked after the write), and the QUEUED gesture writes nothing at all.
+    /// </summary>
+    private static void AssertNothingAfterClose(Harness h)
+    {
         Assert.Multiple(() =>
         {
+            Assert.That(h.Files.Contents[h.CodePath], Does.Contain("Sub btnLogin_Click("), "the in-flight write landed");
+            Assert.That(h.Control.Binds, Is.Empty, "…but the in-flight gesture bound nothing after the close");
+            Assert.That(h.Vm.DesignDocument!.Binds, Is.Empty, "the queued Load gesture bound nothing");
             Assert.That(h.Files.Contents[h.CodePath], Does.Not.Contain("Sub LoginForm_Load("), "the queued gesture wrote nothing");
-            Assert.That(h.Navigations, Has.Count.LessThanOrEqualTo(1), "only the gesture already in flight may finish");
+            Assert.That(h.Navigations, Is.Empty, "nothing opens for a closed tab");
         });
+    }
+
+    /// <summary>
+    /// ⛔ Who calls MarkClosed (CLAUDE.md: a test must drive the REAL entry point). The tab is closed through a real
+    /// <see cref="VisualGameStudio.Shell.Dock.DockFactory"/>: <c>CloseDockable</c> → <c>DocumentClosed</c> → the shell's
+    /// <c>OnDocumentClosed</c> → <c>CleanupDocumentState</c> → <c>MarkClosed</c>. ⚠ The shell is built with
+    /// <c>GetUninitializedObject</c> (its constructor takes 55 services) and given only the fields the close route reads;
+    /// its real <c>SubscribeToDocumentClose</c> wires the event.
+    /// </summary>
+    [Test]
+    public async Task ClosingTheTabThroughTheDockFactory_StopsAQueuedGesture()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var factory = new VisualGameStudio.Shell.Dock.DockFactory();
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        factory.AddDocument(h.Vm);
+
+        var shellType = typeof(VisualGameStudio.Shell.ViewModels.MainWindowViewModel);
+        var shell = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(shellType);
+        void Set(string field, object value) =>
+            shellType.GetField(field, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(shell, value);
+        object New(string field) =>
+            Activator.CreateInstance(shellType.GetField(field, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.FieldType)!;
+        Set("_dockFactory", factory);
+        Set("_openDocuments", new Dictionary<string, CodeEditorDocumentViewModel>(StringComparer.OrdinalIgnoreCase) { [h.Vm.FilePath!] = h.Vm });
+        foreach (var field in new[] { "_documentCleanupActions", "_filesWithErrors", "_blameCache" })
+        {
+            Set(field, New(field));
+        }
+
+        Set("_autoSaveService", new Mock<IAutoSaveService>().Object);
+        Set("_languageServices", new Mock<ILanguageServiceRegistry>().Object);
+        Set("_extensionService", new Mock<IExtensionService>().Object);
+        shellType.GetMethod("SubscribeToDocumentClose", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(shell, null);
+
+        var gate = new TaskCompletionSource();
+        h.Files.WriteGate = gate;
+        var control = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);
+        var form = h.Vm.ActivateFormCommand.ExecuteAsync(null);
+
+        var tab = FindEditor(root, h.Vm);
+        Assert.That(tab, Is.Not.Null, "precondition: the document is a tab in the dock");
+        factory.CloseDockable(tab!);
+        gate.SetResult();
+        await Task.WhenAll(control, form);
+
+        AssertNothingAfterClose(h);
+    }
+
+    private static VisualGameStudio.Shell.Dock.CodeEditorDocument? FindEditor(
+        Dock.Model.Core.IDockable root, CodeEditorDocumentViewModel vm)
+    {
+        IEnumerable<Dock.Model.Core.IDockable> All(Dock.Model.Core.IDockable d) =>
+            d is Dock.Model.Core.IDock dock && dock.VisibleDockables != null
+                ? new[] { d }.Concat(dock.VisibleDockables.SelectMany(All))
+                : new[] { d };
+        return All(root).OfType<VisualGameStudio.Shell.Dock.CodeEditorDocument>()
+            .FirstOrDefault(e => ReferenceEquals(e.ViewModel, vm));
     }
 
     /// <summary>

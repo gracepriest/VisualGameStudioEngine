@@ -892,6 +892,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 await WriteCodeBehindAsync(codePath, plan.CodeText, CancellationToken.None);
             }
 
+            // ⛔ The tab may have closed WHILE the write was in flight (round 7): the stub is on disk and cannot be recalled,
+            // but a closed document is not bound and nothing is opened for it.
+            if (_closed)
+            {
+                return;
+            }
+
             if (BindHandler(owner, plan.EventName, plan.Handler))
             {
                 WriteDesignerEditBack();

@@ -545,7 +545,7 @@ public partial class MainWindowViewModel : ViewModelBase
         }
 
         // Subscribe to document close event
-        _dockFactory.DocumentClosed += OnDocumentClosed;
+        SubscribeToDocumentClose();
 
         // Auto-save (onFocusChange): switching document tabs counts as an editor
         // focus change in VS Code semantics.
@@ -1261,6 +1261,14 @@ public partial class MainWindowViewModel : ViewModelBase
         // Restore this project's saved window layout + open documents (VS Code style).
         await RestoreWorkspaceStateAsync(e.Project.ProjectDirectory);
     }
+
+    /// <summary>
+    /// The close route: <c>DockFactory.CloseDockable</c> → <c>DocumentClosed</c> → <see cref="OnDocumentClosed"/> →
+    /// <see cref="CleanupDocumentState"/>. Its own method (called from the constructor) so a test can wire it on a real
+    /// <see cref="DockFactory"/> without the view model's fifty-odd constructor dependencies
+    /// (<c>FormHandlerGestureTests.ClosingTheTabThroughTheDockFactory_StopsAQueuedGesture</c>).
+    /// </summary>
+    private void SubscribeToDocumentClose() => _dockFactory.DocumentClosed += OnDocumentClosed;
 
     private void OnDocumentClosed(object? sender, string filePath)
     {
