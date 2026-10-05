@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #191 TESTED — MSIL converts a class / interface / array reference through `&` and binds `Console.Write(object)` (`MSILBackend.cs` `IsNonStringReference`; MSIL only)
+- **Tests (6):** `MsilObjectConcatAndWriteExecutionTests` (Integration, 3: VB rows `Write`/`WriteLine` of a class, interface, array, Structure = vbc's answer; PARITY rows `"k=" & obj`, interface, array, Nothing = the C# backend's answer, each also run on C#; all x CLI / `-O` / `CompileProjectFiles`; in `NotJavaScriptExecution`) and `MsilObjectConcatAndWriteTextTests` (fast, 3: IL text, `Write(char[])`, Decimal never via `Convert.ToString(object)`). Mutants M1-M3 (+ the first-cut `TypeKind` predicate) killed.
+- ⛔ **Owner decision #281 is OPEN:** vbc REFUSES a typed class / interface / array as an `&` operand (BC30452); MSIL now matches C#, and the parity rows pin that, NOT a VB rule. **Gates (Linux):** fast 0 failed / 12,671 passed / 94 skipped; Integration, one filter each, 0 failed: fixture 3, `MsilObject` 105, `MsilString` 75, `MsilClass` 33, `MsilValueToString` 44, `NothingStringText` 34, `AmpersandConcat` 11, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): a default Structure local NREs (#192); a Char array local does not assemble; a generic class is "undefined class 'T'" (#239); C++ fails on `Overrides ToString`, JS prints `[object Object]`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #190 TESTED — `&` converts both operands to String, the VB way, on every backend (`SemanticAnalyzer` + `IRBuilder.ConcatOperandAsString`)
 - **Fixed:** `i & j`, `True & 1`, `c & c`, `o & 1` and `1 & 2 & 3` were refused everywhere. With no String side each operand goes through `CStr`, the Nothing literal is `""`, and `&` is no longer a Decimal context (`m & 1.50` prints `1.51.5`). A class or structure, a foreign `::` value, and an Enum / array / type-parameter / DateTime operand with no String side stay refused.
 - **Tests (11):** `AmpersandConcatExecutionTests` (Integration, 5: 12 vbc-answered probes in 3 groups on every backend each runs on x CLI / `-O` / `CompileProjectFiles`, a table pin, the class refusal; roster now 115) and `AmpersandConcatCompileTests` (fast, 6). Mutants m1-m3 killed. **Gates (Linux):** fast 0 failed / 12,664 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 5, `CppForeignConcat` 5, `Concat` 63, `CStr` 20, `VbConversionIntrinsic` 14, `CharWidensToString` 13, `JsExecutionTierRoster` 5. Full suite NOT run; Windows owes the MSIL/MSVC legs.
