@@ -132,16 +132,19 @@ public static class FormRetarget
         var scaffold = FormScaffolder.Create(document.Name, to);
         var code = scaffold.CodeText;
 
-        foreach (var control in document.AllControls().Concat(document.AllComponents()))
+        // ⛔ One stub per bind that crossed — ANY event wired on both targets crosses (pre-flight B1), so the default
+        // event's stub alone left a crossed non-default bind (a GroupBox's Click beside its Enter) wiring a Sub the pair
+        // never declared (code review 2026-09-29). A control with no bind gets no stub: a stub nothing wires is dead code.
+        // Components too: a web Timer's tick handler is the setInterval callback, and the stub is parameterless. And the
+        // FORM's own crossed binds (slice 5 D-6, the ConvertToPair blocker): a crossed Load wired a Sub the pair never
+        // declared, so the retargeted form stopped compiling.
+        var owners = new[] { new FormBindOwner(document) }
+            .Concat(document.AllControls().Concat(document.AllComponents()).Select(c => new FormBindOwner(document, c)));
+        foreach (var owner in owners)
         {
-            // ⛔ One stub per bind that crossed — ANY event wired on both targets crosses (pre-flight B1), so the
-            // default event's stub alone left a crossed non-default bind (a GroupBox's Click beside its Enter)
-            // wiring a Sub the pair never declared (code review 2026-09-29). A control with no bind gets no stub: a
-            // stub nothing wires is dead code. Components too: a web Timer's tick handler is the setInterval
-            // callback, and the stub is parameterless.
-            foreach (var bind in control.Binds.Where(b => !b.UsesReservedDataBinding).ToList())
+            foreach (var bind in owner.Binds.Where(b => !b.UsesReservedDataBinding).ToList())
             {
-                var plan = FormHandlers.PlanBind(document, control, bind, code);
+                var plan = FormHandlers.PlanBind(document, owner, bind, code);
                 if (plan.Outcome == HandlerOutcome.Created)
                 {
                     code = plan.CodeText;
@@ -297,7 +300,7 @@ public static class FormRetarget
                 Document.UnknownChildren.Add(new XElement(child));
             }
 
-            ConvertRootBinds();
+            CrossBinds("form", "Form", FormControlCatalog.FormRoot, _source.Binds, Document.Binds);
 
             // Components (Task 25) cross in ConvertComponents, with the same kind/property/bind
             // rules as controls and no geometry pass — see FormRetargetTests.
@@ -339,43 +342,6 @@ public static class FormRetarget
             }
         }
 
-        /// <summary>
-        /// The form's own binds (spec §2.3): a bind whose event is wired on the destination crosses under
-        /// the destination's name (through the SAME seam the emitter asks); any other is dropped and NAMED.
-        /// ⚠ The Form has no catalog events until slice 5, so today every root bind is named — and the
-        /// crossing branch below is UNTESTED until then.
-        /// </summary>
-        private void ConvertRootBinds()
-        {
-            // ⚠ SLICE 5: unify with ConvertBinds on FormEvents.WiredOn (one crossing rule).
-            foreach (var bind in _source.Binds)
-            {
-                // Reserved data binding is parsed and round-tripped, never interpreted — including here.
-                if (bind.UsesReservedDataBinding)
-                {
-                    Document.Binds.Add(bind.Clone());
-                    continue;
-                }
-
-                var crossing = FormEvents.WiredOn(FormControlCatalog.FormRoot, _from)
-                    .FirstOrDefault(e => string.Equals(FormEvents.NameOn(e, _from), bind.Event, StringComparison.OrdinalIgnoreCase));
-                var toName = crossing != null && FormEvents.WiredOn(FormControlCatalog.FormRoot, _to).Contains(crossing)
-                    ? FormEvents.NameOn(crossing, _to)
-                    : null;
-
-                if (toName != null)
-                {
-                    Document.Binds.Add(new FormBind { Event = toName, Handler = bind.Handler });
-                    continue;
-                }
-
-                Warn(DesignCodes.RetargetBindLost,
-                    $"'form' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
-                    $"{Describe(_to)} name for that form event. The wiring was dropped; wire {bind.Handler} " +
-                    "by hand on the other side.");
-            }
-        }
-
         private static bool IsRootElementModelledOn(string name, FormTarget target) =>
             target == FormTarget.Web && name is "Layout" or "Literal";
 
@@ -409,7 +375,7 @@ public static class FormRetarget
                 var implied = WiredRunState(source, definition);
 
                 ConvertProperties(source, control, definition, implied);
-                ConvertBinds(source, control, definition);
+                CrossBinds(source.Id, source.Kind, definition, source.Binds, control.Binds);
                 CrossRunState(source, control, definition, implied);
 
                 foreach (var unknown in source.UnknownChildren)
@@ -522,22 +488,25 @@ public static class FormRetarget
             }
         }
 
-        private void ConvertBinds(FormControl source, FormControl control, FormControlDef definition)
+        /// <summary>
+        /// ⛔ THE one crossing rule (slice 5 D-6) — for controls, components AND the form itself (<paramref name="owner"/>
+        /// <c>form</c>, <see cref="FormControlCatalog.FormRoot"/>): a bind crosses iff the event it names in
+        /// <c>WiredOn(definition, from)</c> is also in <c>WiredOn(definition, to)</c> — ANY such event, the default or
+        /// not (crossing on the default event only dropped working binds, pre-flight B1) — under the DESTINATION's name,
+        /// the user's handler name kept. Any other is dropped and NAMED (BL8026) with the owner, the event, the handler and
+        /// the events that do cross; never carried as an unwired bind. Reserved data binding is cloned, never interpreted.
+        /// </summary>
+        private void CrossBinds(
+            string owner, string kind, FormControlDef definition, IEnumerable<FormBind> from, List<FormBind> into)
         {
-            // ⛔ Through the ONE seam (slice 3 pre-flight B1, pulled forward from slice 5 Task 5.6 for controls): a bind
-            // crosses when its event is wired on BOTH targets, under the destination's name. It used to cross on the
-            // DEFAULT event only — so when GroupBox's default became Enter (owner decision O3) every existing GroupBox
-            // Click bind would have been dropped. ⚠ SLICE 5: ConvertRootBinds applies the same rule to the form; the two
-            // stay separate only because their findings name different owners.
             var wiredFrom = FormEvents.WiredOn(definition, _from);
             var wiredTo = FormEvents.WiredOn(definition, _to);
 
-            foreach (var bind in source.Binds)
+            foreach (var bind in from)
             {
-                // Reserved data binding is parsed and round-tripped, never interpreted — including here.
                 if (bind.UsesReservedDataBinding)
                 {
-                    control.Binds.Add(bind.Clone());
+                    into.Add(bind.Clone());
                     continue;
                 }
 
@@ -546,7 +515,7 @@ public static class FormRetarget
 
                 if (crossing != null && wiredTo.Contains(crossing))
                 {
-                    control.Binds.Add(new FormBind { Event = FormEvents.NameOn(crossing, _to)!, Handler = bind.Handler });
+                    into.Add(new FormBind { Event = FormEvents.NameOn(crossing, _to)!, Handler = bind.Handler });
                     continue;
                 }
 
@@ -555,8 +524,8 @@ public static class FormRetarget
                     .ToList();
 
                 Warn(DesignCodes.RetargetBindLost,
-                    $"'{source.Id}' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
-                    $"{Describe(_to)} name for that event on a {source.Kind} — " +
+                    $"'{owner}' wires its '{bind.Event}' event to {bind.Handler}, and the catalog knows no " +
+                    $"{Describe(_to)} name for that event on a {kind} — " +
                     (both.Count > 0
                         ? $"only {string.Join(", ", both)} {(both.Count == 1 ? "has" : "have")} a measured name on both sides. "
                         : "none of its events has a measured name on both sides. ") +
@@ -574,19 +543,27 @@ public static class FormRetarget
         // (FormWebScript.Implies); this is the one place that applies it, in both directions.
         // ==============================================================
 
-        /// <summary>The row's implied property, when the source is wired on the event that crosses; else null.</summary>
+        /// <summary>
+        /// The row's implied property when the source is WIRED in the web sense; else null. Through the seam (slice 5 D-6):
+        /// a source bind that resolves, through <c>WiredOn(definition, from)</c>, to an event in <c>WiredOn(definition,
+        /// Web)</c> — a component's web wiring IS its template's default event, so that is what "wired means running"
+        /// asks. ⚠ Equivalent to the old default-event test on today's catalog (every script component wires only its
+        /// default on the page); it stops being so the day a component wires a second event.
+        /// </summary>
         private FormImpliedProperty? WiredRunState(FormControl source, FormControlDef definition)
         {
             var implied = definition.WebScript?.Implies;
-            var fromEvent = definition.DefaultEvent(_from);
-            if (implied == null || fromEvent == null)
+            if (implied == null)
             {
                 return null;
             }
 
+            var wiredFrom = FormEvents.WiredOn(definition, _from);
+            var wiredOnWeb = FormEvents.WiredOn(definition, FormTarget.Web);
             var wired = source.Binds.Any(b =>
                 !b.UsesReservedDataBinding && !string.IsNullOrEmpty(b.Handler) &&
-                string.Equals(b.Event, fromEvent, StringComparison.OrdinalIgnoreCase));
+                wiredFrom.FirstOrDefault(e => string.Equals(FormEvents.NameOn(e, _from), b.Event, StringComparison.OrdinalIgnoreCase))
+                    is { } evt && wiredOnWeb.Contains(evt));
 
             return wired ? implied : null;
         }

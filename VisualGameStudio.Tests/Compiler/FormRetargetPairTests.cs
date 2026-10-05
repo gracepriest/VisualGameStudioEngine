@@ -105,6 +105,30 @@ public class FormRetargetPairTests
         </WebForm>
         """;
 
+    /// <summary>Slice 5 Task 7: a form wired on its OWN Load and on a control's NON-default MouseDown.</summary>
+    private const string WinFormsRootWired = """
+        <Form Name="Login" Version="1" Width="400" Height="300" Text="Login">
+          <Bind Event="Load" Handler="Login_Load"/>
+          <Controls>
+            <Button Id="btn" Text="Go" X="20" Y="20" Width="100" Height="30" TabIndex="0">
+              <Bind Event="MouseDown" Handler="btn_MouseDown"/>
+            </Button>
+          </Controls>
+        </Form>
+        """;
+
+    private const string WebRootWired = """
+        <WebForm Name="Login" Version="1">
+          <Bind Event="load" Handler="Login_Load"/>
+          <Layout Kind="Grid" Cols="1fr" Rows="auto"/>
+          <Controls>
+            <Button Id="btn" Text="Go" Col="0" Row="0" TabIndex="0">
+              <Bind Event="mousedown" Handler="btn_MouseDown"/>
+            </Button>
+          </Controls>
+        </WebForm>
+        """;
+
     private FormDocument Read(string xml, string fileName)
     {
         var file = FormDocumentReader.Read(Path.Combine(_dir, fileName), xml);
@@ -346,6 +370,69 @@ public class FormRetargetPairTests
         var (exit, output) = BuildWebPair(pair, "GroupForm");
 
         Assert.That(exit, Is.Zero, $"the real CLI refused the retargeted pair.\n{output}");
+    }
+
+    /// <summary>
+    /// Slice 5 Task 7 (the <c>ConvertToPair</c> blocker): the ROOT's crossed bind gets its stub too — <c>Login_Load</c> in the
+    /// web Load signature — beside the control's non-default <c>btn_MouseDown(e As DomEvent)</c>, both ABOVE the init region
+    /// (the web ordering rule), and nothing is refused or named lost.
+    /// </summary>
+    [Test]
+    public void ToWeb_ARootLoadBind_AndANonDefaultControlBind_BothGetStubsAboveTheRegion()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WinFormsRootWired, "Login.blform"), FormTarget.Web);
+        var code = pair.CodeText;
+        var init = InitMarkerLine(code);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(code, Does.Contain("Private Sub Login_Load()"), "the root's Load stub, in the page's Load signature");
+            Assert.That(code, Does.Contain("Private Sub btn_MouseDown(e As DomEvent)"));
+            Assert.That(LineOf(code, "Sub Login_Load("), Is.LessThan(init), "above the region that wires it");
+            Assert.That(LineOf(code, "Sub btn_MouseDown("), Is.LessThan(init), "above the region that wires it");
+            Assert.That(pair.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.RetargetBindLost));
+        });
+    }
+
+    /// <summary>
+    /// ⛔ The same pair BUILT by the real CLI and RUN under node: the root Load stub (with the user's one line) runs on load,
+    /// and the crossed MouseDown wiring compiles to a Sub that exists.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void ToWeb_TheRootWiredPair_BuildsWithTheRealCli_AndItsLoadRunsUnderNode()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WinFormsRootWired, "Login.blform"), FormTarget.Web);
+        var signature = pair.CodeText.Split('\n').First(l => l.Contains("Sub Login_Load("));
+        var withLine = pair with { CodeText = pair.CodeText.Replace(signature, signature + "\n        Console.WriteLine(\"LOAD RAN\")") };
+
+        var (exit, output) = BuildWebPair(withLine, "Login");
+        Assert.That(exit, Is.Zero, $"the real CLI refused the retargeted pair.\n{output}");
+
+        var ran = FormDesignerAcceptanceTests.RunPageUnderNode(Path.Combine(_dir, "bin", "Debug", "net8.0"), formName: "Login");
+        if (ran == null)
+        {
+            Assert.Ignore("node is not on PATH, so the emitted page cannot be executed here");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Does.Not.Contain("ReferenceError"), "the retargeted page threw on load:\n" + ran);
+            Assert.That(ran, Does.Contain("LOAD RAN"), "the crossed root Load did not reach its stub:\n" + ran);
+        });
+    }
+
+    /// <summary>The reverse pair (a page wired on load and mousedown → a window) through the real compiler and csc.</summary>
+    [Test]
+    [Category("Integration")]
+    public void ToWinForms_TheRootWiredPair_CompilesThroughTheRealCompilerAndCsc()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WebRootWired, "Login.blwebform"), FormTarget.WinForms);
+        Assert.That(pair.CodeText, Does.Contain("Sub Login_Load(sender As Object, e As EventArgs)"), "the root's stub");
+
+        var csharp = WinFormsCatalogSweepTests.CompileToCSharp(pair.CodeText);
+        WinFormsCompile.AssertCompiles(csharp,
+            "a retargeted window wired on its own Load and a Button's MouseDown must be one csc accepts.");
     }
 
     /// <summary>Writes a web pair into a JavaScript project and builds it with the real CLI.</summary>

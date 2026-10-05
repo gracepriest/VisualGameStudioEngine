@@ -613,6 +613,78 @@ public class FormRetargetTests
             "the sweep reaches most kinds, or it passes by absence");
     }
 
+    /// <summary>Slice 5 Task 7 (D-6): the same sweep for the FORM's own events — the root crosses by the one rule.</summary>
+    [Test]
+    public void EveryRootEventWiredOnBothTargets_Crosses_UnderTheDestinationsName(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var there = FormEvents.WiredOn(FormControlCatalog.FormRoot, to);
+        var crossing = FormEvents.WiredOn(FormControlCatalog.FormRoot, from).Where(e => there.Contains(e)).ToList();
+        Assert.That(crossing, Is.Not.Empty, "precondition: the Form has events on both targets");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var evt in crossing)
+            {
+                var source = new FormDocument { Target = from, Name = "Sweep" };
+                source.Binds.Add(new FormBind { Event = FormEvents.NameOn(evt, from)!, Handler = "Sweep_Handler" });
+
+                var result = FormRetarget.Convert(source, to);
+
+                Assert.That(result.Document.Binds.Select(b => b.Event), Is.EqualTo(new[] { FormEvents.NameOn(evt, to) }),
+                    $"Form.{evt.Name} {from}→{to}");
+                Assert.That(result.Document.Binds.Single().Handler, Is.EqualTo("Sweep_Handler"), $"Form.{evt.Name}: handler kept");
+                Assert.That(Of(result, DesignCodes.RetargetBindLost), Is.Empty, $"Form.{evt.Name} {from}→{to}");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Slice 5 Task 7 (D-6), catalog-driven: EVERY event wired only on the SOURCE — on every kind that crosses, and on the
+    /// Form — is dropped (never carried as an unwired bind) and NAMED with its owner and handler. With the both-sides sweep
+    /// above this covers every wired event of every kind in both directions.
+    /// </summary>
+    [Test]
+    public void EveryEventWiredOnlyOnTheSource_IsDroppedAndNamed(
+        [Values(FormTarget.WinForms, FormTarget.Web)] FormTarget from)
+    {
+        var to = Other(from);
+        var exercised = 0;
+
+        Assert.Multiple(() =>
+        {
+            foreach (var definition in FormControlCatalog.For(from).Where(d => d.SupportsTarget(to)).Append(FormControlCatalog.FormRoot))
+            {
+                var isRoot = ReferenceEquals(definition, FormControlCatalog.FormRoot);
+                var there = FormEvents.WiredOn(definition, to);
+                foreach (var evt in FormEvents.WiredOn(definition, from).Where(e => !there.Contains(e)))
+                {
+                    var source = new FormDocument { Target = from, Name = "Sweep" };
+                    var binds = isRoot ? source.Binds : FormCatalogShapes.Canonical(source, definition, "c").Binds;
+                    binds.Add(new FormBind { Event = FormEvents.NameOn(evt, from)!, Handler = "Lost_Handler" });
+
+                    var result = FormRetarget.Convert(source, to);
+                    var crossedBinds = isRoot
+                        ? result.Document.Binds
+                        : result.Document.AllControls().Concat(result.Document.AllComponents()).Single(c => c.Kind == definition.Kind).Binds;
+
+                    Assert.That(crossedBinds, Is.Empty, $"{definition.Kind}.{evt.Name} {from}→{to}: never carried");
+                    Assert.That(Of(result, DesignCodes.RetargetBindLost).SingleOrDefault()?.Message,
+                        Does.Contain(isRoot ? "'form'" : "'c'").And.Contain("Lost_Handler").And.Contain(FormEvents.NameOn(evt, from)!),
+                        $"{definition.Kind}.{evt.Name} {from}→{to}: named");
+                    exercised++;
+                }
+            }
+        });
+
+        // ⚠ Measured: every event wired on the WEB is wired on WinForms too (the page's vocabulary is the subset), so the
+        // web → WinForms direction has nothing to drop today — its lost arm is pinned on an event the kind does not declare
+        // (FormRootRetargetTests' `beforeunload`). WinForms → web must reach real single-target events (Paint, FormClosing…).
+        Assert.That(exercised, from == FormTarget.WinForms ? Is.GreaterThan(0) : Is.GreaterThanOrEqualTo(0),
+            "the sweep reached the single-target events, or it passes by absence");
+    }
+
     // ==================================================================
     // Web → WinForms: cells become pixels by a rule the finding can state
     // ==================================================================

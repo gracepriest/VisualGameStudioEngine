@@ -1144,6 +1144,33 @@ Red first: 29 of 61 failed, each for its own reason (the CRITICAL real-view row:
 `dotnet clean` was run on the Shell after the AXAML change. The non-Integration Form set: 4353 total, 1 failure — the known
 `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`.
 
+### Task 7 — retarget: one rule, the root, the pair (base `c7ba23c5`)
+- `CrossBinds(owner, kind, definition, from, into)` is the ONE crossing rule. It serves controls, components and the form
+  (`"form"`, `FormRoot`). `ConvertRootBinds`/`ConvertBinds` are deleted. The root's lost-bind finding now carries the
+  both-sides list, as a control's does.
+- `ConvertToPair` stubs every crossed bind of every owner, the form first (`PlanBind(FormBindOwner)`): a crossed Load used to
+  wire a Sub the pair never declared.
+- `WiredRunState` goes through the seam: a bind resolved via `WiredOn(def, from)` to an event in `WiredOn(def, Web)`.
+- Red first: 6 of 110 failed. The root-lost rows lacked the both-sides list, the three root-wired pair rows had no
+  `Login_Load`, and the Web direction of the only-on-source sweep fails a "> 0" guard. Fixed. **Measured:** every event wired
+  on the web is also wired on WinForms, so that direction has nothing to drop. Its lost arm stays on `beforeunload`, and the
+  guard is `>= 0` for Web, `> 0` for WinForms.
+- `ARootLoadBind_Crosses_BothWays_KeepingItsHandler` and `EveryRootEventWiredOnBothTargets_…` were green before the change.
+  The old root code already crossed on `WiredOn`, so they are pins, proven by the root-crossing mutant.
+- Integration: the WinForms Login (root Load + `btn` MouseDown) → web pair BUILDS through the CLI and RUNS under node,
+  printing `LOAD RAN` (the harness needs `formName: "Login"`). The reverse pair passes csc.
+
+| Mutation | Killed by |
+|---|---|
+| Crossing on the default event only | both sweeps (controls + root), the GroupBox rows, the pair rows (9) |
+| Root crossing removed | the Load rows, the root sweep, the three root-wired pair rows (7) |
+| Root stubs skipped in `ConvertToPair` | the pair row + both root-wired Integration rows |
+| Source event name kept | 14 rows, incl. BL8032 refusals and csc CS1061 `'load'` |
+| `WiredRunState` back on `DefaultEvent(_from)` | **EQUIVALENT**, survived 244 Retarget/Timer/Component rows. Every script component wires only its default on today's catalog, as the pre-flight predicted |
+
+RE-CHECK green: `FormRootRetargetTests` (doc updated), `FormRetargetTests`, the Timer BL8027 rows, the IDE Retarget command
+tests (`SolutionExplorerRetargetTests`). 141/141 for `FullyQualifiedName~Retarget`.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
