@@ -2343,7 +2343,68 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             GlobalScope.Define(symbol);
+            _stdLibSymbols[name] = symbol;
         }
+
+        /// <summary>The built-in functions by name — kept apart from GlobalScope, where a user procedure of
+        /// the same name replaces the entry, so a QUALIFIED built-in (<see cref="QualifiedIntrinsic"/>) still
+        /// reaches the built-in.</summary>
+        private readonly Dictionary<string, Symbol> _stdLibSymbols = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Every built-in function, for the test that enumerates the VB-qualified spellings.</summary>
+        internal IReadOnlyCollection<Symbol> StdLibSymbolsForTest => _stdLibSymbols.Values;
+
+        /// <summary>Calls written as a VB-qualified built-in (<c>Strings.Left(…)</c>), with the built-in each
+        /// names; read by the IR builder, which lowers them exactly as the bare built-in.</summary>
+        private readonly Dictionary<CallExpressionNode, Symbol> _qualifiedIntrinsicCalls = new();
+
+        /// <summary>The built-in a VB-qualified call (<c>Strings.Left(s, 2)</c>,
+        /// <c>Microsoft.VisualBasic.Left(s, 2)</c>, <c>Microsoft.VisualBasic.Strings.Left(s, 2)</c>) names, or
+        /// null for every other call. See <see cref="VbIntrinsicQualifiers"/>.</summary>
+        internal Symbol QualifiedIntrinsicFor(CallExpressionNode node) =>
+            node != null && _qualifiedIntrinsicCalls.TryGetValue(node, out var intrinsic) ? intrinsic : null;
+
+        /// <summary>
+        /// Task 7c review: <paramref name="node"/> written as a VB-qualified built-in, or null. The qualifier
+        /// must be one VB accepts for the function's module and its first word must not be the user's own
+        /// declaration (a variable, type or Module named <c>Strings</c> keeps its meaning).
+        /// </summary>
+        private Symbol QualifiedIntrinsic(CallExpressionNode node)
+        {
+            if (node.Callee is not MemberAccessExpressionNode access) return null;
+            var qualifier = DottedNameOf(access.Object);
+            if (!VbIntrinsicQualifiers.LooksLikeAQualifier(qualifier)) return null;
+            if (!_stdLibSymbols.TryGetValue(access.MemberName ?? "", out var intrinsic)) return null;
+
+            var head = qualifier.Split('.')[0];
+            if (_currentScope.Resolve(head) != null || _typeManager.GetType(head) != null
+                || _moduleMembers.ContainsKey(head) || (_projectSymbols?.HasModule(head) ?? false))
+                return null;
+
+            return VbIntrinsicQualifiers.IsQualifierFor(qualifier, VbIntrinsicQualifiers.ModuleOf(intrinsic))
+                ? intrinsic
+                : null;
+        }
+
+        /// <summary>
+        /// The way out VB offers when a member hides a built-in of the same name (the Form.Left gotcha):
+        /// " To call the built-in function, use Strings.Left(…)." — or empty when the name is no
+        /// VB-qualifiable built-in.
+        /// </summary>
+        private string ShadowedIntrinsicHint(string name)
+        {
+            if (string.IsNullOrEmpty(name) || !_stdLibSymbols.TryGetValue(name, out var intrinsic)) return "";
+            var module = VbIntrinsicQualifiers.ModuleOf(intrinsic);
+            return module == null ? "" : $" To call the built-in function, use {module}.{intrinsic.Name}(…).";
+        }
+
+        /// <summary><c>A.B.C</c> for a chain of plain identifiers and member accesses, otherwise null.</summary>
+        private static string DottedNameOf(ExpressionNode expression) => expression switch
+        {
+            IdentifierExpressionNode { IsForeignQualified: false } id => id.Name,
+            MemberAccessExpressionNode member when DottedNameOf(member.Object) is { } left => left + "." + member.MemberName,
+            _ => null
+        };
 
         private void Error(string message, int line, int column)
         {
@@ -7762,8 +7823,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Saved and restored rather than cleared, so nothing outlives this body.
             var outerConstructorScope = _constructorScope;
             var outerConstructorIsShared = _constructorIsShared;
+            var outerStaticContext = _inStaticContext;
             _constructorScope = constructorScope;
             _constructorIsShared = node.IsShared;
+            // Task 7c review: a Shared Sub New is a Shared context — a bare instance member there is
+            // BC30469, exactly as in a Shared method (VB).
+            if (node.IsShared) _inStaticContext = true;
             try
             {
                 VisitConstructorBody(node);
@@ -7772,6 +7837,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 _constructorScope = outerConstructorScope;
                 _constructorIsShared = outerConstructorIsShared;
+                _inStaticContext = outerStaticContext;
             }
         }
 
@@ -11850,7 +11916,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>
         /// ⭐ THE class-scope rule for a BARE call, shared by the analyzer (which binds and
         /// type-checks the call by it, <see cref="ClassScopeCallee"/>) and the IR builder (which spells
-        /// the call by it, <c>IRBuilder.IsCurrentClassProcedure</c>) so the two cannot disagree: the
+        /// the call by it, <c>IRBuilder.IsCurrentClassScopeMember</c> and <c>AccessorMemberOf</c>) so the two cannot disagree: the
         /// member named <paramref name="name"/> that <paramref name="classType"/> declares —
         /// whatever its access — or, failing that, the nearest base declares with an access other than
         /// <c>Private</c> (a base's Private member is inaccessible, and VB skips it). Null when none does.
@@ -12018,11 +12084,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 // A BasicLang class declares its members in source; only a type with none recorded can be .NET.
                 if (type.DeclaredMemberNames != null || (type.Members != null && type.Members.Count > 0)) continue;
+                // An unresolved (or member-less) link says nothing about the chain above it — go on.
                 if (ResolveNetType(type.Name, type.GenericArguments?.Count ?? 0, out var fullName)
                     != NetTypeLookupOutcome.Resolved)
-                    return false;
-                return NetResolver().GetMembers(fullName)
-                    .Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+                    continue;
+                if (NetResolver().GetMembers(fullName)
+                    .Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    return true;
             }
             return false;
         }
@@ -12317,12 +12385,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            node.Callee.Accept(this);
+            // Task 7c review: `Strings.Left(s, 2)` — a VB-qualified built-in, reachable where a class member
+            // hides the bare name. Bound straight to the built-in (no member lookup, no .NET probe of a
+            // receiver named Strings) and checked below exactly as the bare call is.
+            _qualifiedIntrinsicCalls.Remove(node);
+            var qualifiedIntrinsic = QualifiedIntrinsic(node);
+            if (qualifiedIntrinsic != null)
+            {
+                _qualifiedIntrinsicCalls[node] = qualifiedIntrinsic;
+                SetNodeSymbol(node.Callee, qualifiedIntrinsic);
+                SetNodeType(node.Callee, qualifiedIntrinsic.ReturnType);
+            }
+            else
+            {
+                node.Callee.Accept(this);
+            }
 
             var calleeType = GetNodeType(node.Callee);
-            Symbol calleeSymbol = null;
+            Symbol calleeSymbol = qualifiedIntrinsic;
 
-            if (node.Callee is IdentifierExpressionNode idExpr)
+            if (qualifiedIntrinsic == null && node.Callee is IdentifierExpressionNode idExpr)
             {
                 calleeSymbol = _currentScope.Resolve(idExpr.Name);
                 // Task 7b: inside a class, the class and its bases come BEFORE module scope — the rule
@@ -12371,7 +12453,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         RefuseHiddenProcedure(calleeSymbol, calleeSymbol.SourceModule, node.Line, node.Column);
                 }
             }
-            else if (node.Callee is MemberAccessExpressionNode memberExpr)
+            else if (qualifiedIntrinsic == null && node.Callee is MemberAccessExpressionNode memberExpr)
             {
                 calleeSymbol = GetNodeSymbol(memberExpr);
 
@@ -12395,6 +12477,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // `MakeList[3]`. Only VALUE receivers (variables/parameters/fields) index.
             bool calleeIsCallable = calleeSymbol != null &&
                 (calleeSymbol.Kind == SymbolKind.Function || calleeSymbol.Kind == SymbolKind.Subroutine);
+
+            // Task 7c review: an EVENT named bare with an argument list is VB's BC32022 — it is raised,
+            // never called. Before, `Changed(5)` fell through to the call arm and lowered a call to a
+            // function of that name (a Module's, when one existed).
+            if (node.Callee is IdentifierExpressionNode eventCallee && calleeSymbol?.Kind == SymbolKind.Event)
+            {
+                foreach (var arg in node.Arguments) arg.Accept(this);
+                VbCodedError("BC32022",
+                    $"'{eventCallee.Name}' is an event, and cannot be called directly. " +
+                    "Use a 'RaiseEvent' statement to raise an event.", node);
+                SetNodeType(node, _typeManager.VoidType);
+                return;
+            }
 
             // Explicit VB indexer `l.Item(i)` / `d.Item(k)` on a collection: type it as the
             // element/value type (like `l(i)`), so `Dim x As Integer = l.Item(0)` type-checks and
@@ -12545,7 +12640,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     foreach (var arg in node.Arguments) arg.Accept(this);
                     VbCodedError("BC30471",
-                        $"'{valueCallee.Name}' is not an array or a method, and cannot have an argument list.", node);
+                        $"'{valueCallee.Name}' is not an array or a method, and cannot have an argument list."
+                        + ShadowedIntrinsicHint(valueCallee.Name), node);
                     SetNodeType(node, calleeType ?? _typeManager.ObjectType);
                     return;
                 }

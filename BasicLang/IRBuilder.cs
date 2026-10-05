@@ -396,7 +396,7 @@ namespace BasicLang.Compiler.IR
         {
             if (callee.IsExtern) return false;
             if (callee.Line == 0 && callee.Column == 0) return false;
-            return !IsCurrentClassProcedure(callee.Name);
+            return !IsCurrentClassScopeMember(callee.Name);
         }
 
         /// <summary>
@@ -411,18 +411,18 @@ namespace BasicLang.Compiler.IR
         /// against a Module's <c>Hello</c> while this spelled it as the base's. ⚠ Any KIND of member
         /// captures the name (Task 7c): a base's Property <c>Value</c> hides a Module's <c>Value()</c>.</para>
         /// </summary>
-        private bool IsCurrentClassProcedure(string name) =>
+        private bool IsCurrentClassScopeMember(string name) =>
             !string.IsNullOrEmpty(_currentClassName)
             && _semanticAnalyzer.ClassScopeMember(_semanticAnalyzer.LookupType(_currentClassName), name, out _) != null;
 
         /// <summary>
         /// Whether a BARE call to <paramref name="name"/> inside the class being built names a member
         /// — a method of the class itself (<see cref="IsCurrentClassMethod"/>, the IR's own list) or an
-        /// accessible one of a base (<see cref="IsCurrentClassProcedure"/>) — rather than a Module's
+        /// accessible member of it or a base (<see cref="IsCurrentClassScopeMember"/>) — rather than a Module's
         /// procedure. The single class-scope-first rule <see cref="ProcedureCallTarget"/> applies.
         /// </summary>
         private bool IsClassScopeProcedure(string name) =>
-            IsCurrentClassMethod(name) || IsCurrentClassProcedure(name);
+            IsCurrentClassMethod(name) || IsCurrentClassScopeMember(name);
 
         /// <summary>An accessor-backed property a bare name denotes: its declared spelling, the
         /// class that declares it, and whether it is Shared. See <see cref="AccessorMemberOf"/>.</summary>
@@ -462,25 +462,19 @@ namespace BasicLang.Compiler.IR
             var symbol = _semanticAnalyzer?.GetNodeSymbol(node);
             if (symbol == null || symbol.Kind != SymbolKind.Property || !symbol.IsAccessorBacked) return null;
 
-            // A member of the class being built or of a base (the walk IsCurrentClassProcedure
-            // makes), which also names the DECLARING class — a Shared property's receiver. The
-            // nearest member of that name must be the property itself: anything else there is
-            // what the name denotes, and the analyzer and the class disagree.
+            // A member of the class being built or of a base — by the ONE class-scope rule
+            // (SemanticAnalyzer.ClassScopeMember, which also skips a base's Private member), which
+            // also names the DECLARING class — a Shared property's receiver. The nearest member of
+            // that name must be the property itself: anything else there is what the name denotes,
+            // and the analyzer and the class disagree.
             // #124: looked up by the DECLARED spelling the analyzer recorded, so the member named is
             // the one it bound, spelled as declared.
             var name = DeclaredSpelling(node);
-            var guard = 0;
-            for (var type = _semanticAnalyzer.LookupType(_currentClassName); type != null && guard++ < 64;)
-            {
-                if (type.Members != null && type.Members.TryGetValue(name, out var member) && member != null)
-                    return member.Kind == SymbolKind.Property
-                        ? new BareAccessorMember(member.Name ?? name, type, symbol.IsShared)
-                        : null;
-
-                var baseType = type.BaseType;
-                type = baseType == null ? null : (_semanticAnalyzer.LookupType(baseType.Name) ?? baseType);
-            }
-            return null;
+            var member = _semanticAnalyzer.ClassScopeMember(
+                _semanticAnalyzer.LookupType(_currentClassName), name, out var declaring);
+            return member?.Kind == SymbolKind.Property
+                ? new BareAccessorMember(member.Name ?? name, declaring, symbol.IsShared)
+                : null;
         }
 
         /// <summary>
@@ -6126,6 +6120,15 @@ namespace BasicLang.Compiler.IR
             // (ADR-0010 D8). A Sub-shaped delegate is typed Void there, so the call has no
             // destination. ⛔ Before, the bare name reached each backend as a call BY NAME and the
             // qualified one as a METHOD call — see IsDelegateMemberInvocation for what each did.
+            // Task 7c review: a VB-qualified built-in (`Strings.Left(s, 2)`) is the BARE built-in's call —
+            // same IR name, no owner — so every backend lowers it through the same builtin table, whatever
+            // member of the class hides the bare name.
+            if (_semanticAnalyzer.QualifiedIntrinsicFor(node) is Symbol qualifiedIntrinsic)
+            {
+                EmitProcedureCall(node, qualifiedIntrinsic, qualifiedIntrinsic.Name, tempName, returnType);
+                return;
+            }
+
             if (_semanticAnalyzer.IsDelegateMemberInvocation(node))
             {
                 EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
@@ -6638,19 +6641,6 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
-        /// Invokes the delegate VALUE <paramref name="callee"/> evaluates to: the value first,
-        /// then the arguments, then one <see cref="IRCall"/> whose <see cref="IRCall.CalleeValue"/>
-        /// is that value — ADR-0010 D8's canonical delegate call, which every backend renders as
-        /// <c>(value)(args)</c>. Shared by every site that invokes a value rather than a named
-        /// procedure: <c>f(a)(b)</c>, <c>x.Invoke(…)</c> on a non-name receiver (#187), and a
-        /// delegate-typed field or property (#188).
-        ///
-        /// <para><paramref name="delegateSymbol"/> is the member being invoked, when there is
-        /// one: a <c>Nothing</c> argument is typed from its delegate's parameters, exactly as
-        /// <see cref="EmitProcedureCall"/> types it for a delegate LOCAL (#173). Null for an
-        /// arbitrary callee, whose arguments were never coerced.</para>
-        /// </summary>
-        /// <summary>
         /// Whether a bare callee bound to <paramref name="symbol"/> is a delegate VALUE — a local, a
         /// parameter or a lambda's parameter of delegate type — rather than a procedure. A delegate
         /// FIELD or PROPERTY never gets here: <c>IsDelegateMemberInvocation</c> answers those first.
@@ -6661,6 +6651,19 @@ namespace BasicLang.Compiler.IR
             && type != null
             && (type.Kind == TypeKind.Delegate || type.DelegateSignature != null);
 
+        /// <summary>
+        /// Invokes the delegate VALUE <paramref name="callee"/> evaluates to: the value first,
+        /// then the arguments, then one <see cref="IRCall"/> whose <see cref="IRCall.CalleeValue"/>
+        /// is that value — ADR-0010 D8's canonical delegate call, which every backend renders as
+        /// <c>(value)(args)</c>. Shared by every site that invokes a value rather than a named
+        /// procedure: <c>f(a)(b)</c>, <c>x.Invoke(…)</c> on a non-name receiver (#187), a
+        /// delegate-typed field or property (#188), and a delegate local or parameter (Task 7c).
+        ///
+        /// <para><paramref name="delegateSymbol"/> is the member being invoked, when there is
+        /// one: a <c>Nothing</c> argument is typed from its delegate's parameters, exactly as
+        /// <see cref="EmitProcedureCall"/> types it for a delegate LOCAL (#173). Null for an
+        /// arbitrary callee, whose arguments were never coerced.</para>
+        /// </summary>
         private void EmitDelegateValueInvocation(ExpressionNode callee, List<ExpressionNode> arguments,
             string tempName, TypeInfo returnType, Symbol delegateSymbol)
         {

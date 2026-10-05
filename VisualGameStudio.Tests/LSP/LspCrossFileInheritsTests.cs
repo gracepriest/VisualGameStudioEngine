@@ -113,6 +113,22 @@ public class LspCrossFileInheritsTests
                 ("Main.bas", "Sub Main()\n D.S()\nEnd Sub\n")),
             Does.Contain("BC30469"));
 
+    /// <summary>
+    /// ⛔ Task 7c review: the editor's cross-file member symbols (<c>LspProjectContext</c>) must carry a SHARED base
+    /// member's shared-ness, or a valid bare use from a Shared method is a false BC30469 in the editor — proved by
+    /// a mutation that nothing caught. One row per member kind the project table records.
+    /// </summary>
+    [TestCase("Public Shared Function Hello() As Integer\n  Return 1\n End Function", "  Dim n As Integer = Hello()\n", TestName = "ASharedBaseFunction_CalledBareFromASharedMethod_IsCleanInTheEditor")]
+    [TestCase("Public Shared Sub Hello()\n End Sub", "  Hello()\n", TestName = "ASharedBaseSub_CalledBareFromASharedMethod_IsCleanInTheEditor")]
+    [TestCase("Public Shared Hello As Func(Of Integer)", "  Dim n As Integer = Hello()\n", TestName = "ASharedBaseDelegateField_InvokedBareFromASharedMethod_IsCleanInTheEditor")]
+    [TestCase("Public Shared ReadOnly Property Hello As Integer\n  Get\n   Return 1\n  End Get\n End Property", "  Dim n As Integer = Hello()\n", TestName = "ASharedBaseProperty_ReadBareFromASharedMethod_IsCleanInTheEditor")]
+    public void ASharedBaseMember_NamedBareFromASharedMethod_IsCleanInTheEditor(string baseMember, string use) =>
+        Assert.That(ErrorsIn("Derived.bas",
+                ("Base.bas", "Public Class Base\n " + baseMember + "\nEnd Class\n"),
+                ("Derived.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n" + use + " End Sub\nEnd Class\n"),
+                ("Main.bas", "Sub Main()\nEnd Sub\n")),
+            Does.Not.Contain("BC30469"));
+
     /// <summary>The matching signature is clean in the editor: the call is typed Integer, by the base.</summary>
     [Test]
     public void ABareCallToAnInheritedFunction_IsTypedByTheBaseInTheEditor() =>

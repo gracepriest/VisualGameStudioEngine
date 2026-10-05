@@ -813,6 +813,80 @@ public class CrossFileBindingTests
         ("Program.bas", "Public Class D\n Inherits Base\n Public Shared Sub S()\n  PrintLine(Hello())\n End Sub\nEnd Class\n" +
                         "Sub Main()\n D.S()\nEnd Sub\n"));
 
+    /// <summary>Task 7c review: a SHARED <c>Sub New</c> is a Shared context — a bare instance member there is BC30469.</summary>
+    [Test]
+    public void ASharedSubNew_NamingAnInstanceMethod_IsBC30469() => RefusedInBothOrders(NamesNonSharedHello,
+        ("Program.bas", UtilHelloString +
+            "Public Class D\n Public Function Hello() As String\n  Return \"own\"\n End Function\n" +
+            " Shared Sub New()\n  PrintLine(Hello())\n End Sub\nEnd Class\n" +
+            "Sub Main()\nEnd Sub\n"));
+
+    /// <summary>Task 7c review: a VALID Shared property accessor naming a Shared sibling bare runs — on JavaScript
+    /// (a static getter) and C#. ⚠ One file: <c>Box.P</c> from a sibling file named <c>Box.bas</c> reads <c>Box</c> as
+    /// the FILE's module ("Module 'Box' does not have a public member 'P'") — pre-existing, in the plan's notes.</summary>
+    [Test]
+    public void ASharedAccessor_NamingASharedSibling_Runs()
+    {
+        var paths = Write(
+            ("Program.bas", "Public Class Box\n Public Shared Function Seed() As Integer\n  Return 20\n End Function\n" +
+                            " Public Shared ReadOnly Property P As Integer\n  Get\n   Return Seed() + 1\n  End Get\n End Property\nEnd Class\n" +
+                            "Sub Main()\n PrintLine(Box.P)\nEnd Sub\n"));
+        foreach (var order in new[] { paths })
+        {
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var result = Compile(order);
+            Assert.That(result.HasErrors, Is.False, $"[{label}] {Messages(result)}");
+            var ir = Optimized(result.CombinedIR!);
+            Assert.Multiple(() =>
+            {
+                var cs = new CSharpCodeGenerator().Generate(ir);
+                Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("21"), $"C# [{label}]\n{cs}");
+                var js = new JavaScriptCodeGenerator().Generate(ir);
+                Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(js)), Is.EqualTo("21"), $"JavaScript [{label}]\n{js}");
+            });
+        }
+    }
+
+    /// <summary>Task 7c review: an EVENT named bare with an argument list is VB's BC32022 — raised, never called.</summary>
+    [Test]
+    public void AnEventCalledBare_IsBC32022() => RefusedInBothOrders(
+        (messages, label) => Assert.That(messages, Does.Contain("BC32022").And.Contain("'Changed'").And.Contain("RaiseEvent"), label),
+        ("Util.bas", "Module Util\n Public Sub Changed(n As Integer)\n  PrintLine(\"module\")\n End Sub\nEnd Module\n"),
+        ("Box.bas", "Public Class Box\n Public Event Changed(n As Integer)\n Public Sub Go()\n  Changed(5)\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\nEnd Sub\n"));
+
+    // ---- Task 7c review item 1: VB's qualified spellings of a built-in, where a class member hides the bare name
+
+    // ⚠ The strings are in LOCALS: C++ lowers Left(s, n) to `s.substr(0, n)`, which does not compile on a bare
+    // literal (`"hello".substr` — const char[6]) — a pre-existing C++ gap for the BARE built-in too (plan notes).
+    private const string CtlWithLeftLenText =
+        "Public Class Ctl\n Public Property Left As Integer\n Public Len As Integer\n Public Property Text As String\n" +
+        " Public Sub Show()\n  Dim h As String = \"hello\"\n  Dim a As String = \"abc\"\n  Dim x As String = \"x\"\n  Dim f As String = \"abcdef\"\n" +
+        "  PrintLine(Strings.Left(h, 2))\n  PrintLine(Microsoft.VisualBasic.Strings.Len(a))\n" +
+        "  PrintLine(Microsoft.VisualBasic.UCase(x))\n  PrintLine(Strings.Mid(f, 2, 3))\n End Sub\nEnd Class\n";
+
+    /// <summary>
+    /// ⛔ Inside a class with <c>Left</c>/<c>Len</c>/<c>Text</c> members — every portable Form and Control — the built-in
+    /// was unreachable: bare <c>Left(…)</c> names the member (BC30471, as in VB), and BasicLang had no
+    /// <c>Strings.Left</c> (BL6017 + an error). All three of VB's spellings now run on every backend.
+    /// </summary>
+    [Test]
+    public void QualifiedBuiltIns_RunInsideAClassWhoseMembersHideThem() => RunsOnEveryBackend("he\n3\nX\nbcd",
+        ("Ctl.bas", CtlWithLeftLenText),
+        ("Main.bas", "Sub Main()\n Dim c As New Ctl()\n c.Show()\nEnd Sub\n"));
+
+    /// <summary>Outside any class the bare built-in still works, beside its qualified spelling.</summary>
+    [Test]
+    public void BareAndQualifiedBuiltIns_BothRunOutsideAClass() => RunsOnEveryBackend("he\nlo",
+        ("Main.bas", "Sub Main()\n Dim h As String = \"hello\"\n PrintLine(Left(h, 2))\n PrintLine(Strings.Right(h, 2))\nEnd Sub\n"));
+
+    /// <summary>The bare built-in inside such a class is BC30471, and the message names VB's way out.</summary>
+    [Test]
+    public void ABareBuiltIn_HiddenByAMember_IsBC30471_NamingStringsLeft() => RefusedInBothOrders(
+        (messages, label) => Assert.That(messages, Does.Contain("BC30471").And.Contain("use Strings.Left(…)"), label),
+        ("Ctl.bas", "Public Class Ctl\n Public Property Left As Integer\n Public Sub Show()\n  PrintLine(Left(\"hello\", 2))\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\nEnd Sub\n"));
+
     // ---- Task 7c item 2: a member of a RESOLVED .NET base shadows a Module procedure
 
     /// <summary>
