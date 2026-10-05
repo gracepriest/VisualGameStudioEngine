@@ -544,11 +544,13 @@ public class NothingStringTextExecutionTests
 
     /// <summary>
     /// E10 — a native (out-of-bounds List index) exception whose message is read once directly
-    /// and once through a lambda captured in the SAME Catch, then compared. C#/C++ agree
-    /// (<c>same=True</c> — the two reads see the same message). MSIL is a PRE-EXISTING, unrelated
-    /// bug: <c>same=False</c> — the captured Catch variable's <c>Message</c>, read from inside the
-    /// lambda, disagrees with the direct read taken before the lambda was even created. Filed
-    /// under #205 (new — no prior HANDOFF mention of an MSIL closure/catch-message inconsistency).
+    /// and once through a lambda captured in the SAME Catch, then compared. All three backends that
+    /// run it print <c>same=True</c> — the two reads see the same message. MSIL used to print
+    /// <c>same=False</c>, filed as #205 and first guessed to be a closure / catch-message bug. It was
+    /// not: MSIL compared Strings with <c>ceq</c>, a REFERENCE compare, and the two reads are two
+    /// separate string objects with equal text. #206 lowers every String equality to
+    /// <c>String.Equals(string, string)</c>, which fixed #205 (<c>StringNothingEqualityExecutionTests</c>'
+    /// P08 is the direct witness).
     /// </summary>
     private const string E10 = """
         Sub Main()
@@ -565,16 +567,16 @@ public class NothingStringTextExecutionTests
         """;
 
     [Test]
-    public void E10_NativeExceptionMessageThroughCapturedLambda_Msil_PinsPreExistingWrongAnswer_Against205()
+    public void E10_NativeExceptionMessageThroughCapturedLambda_EveryBackendPrintsSameTrue_Issue205Fixed()
     {
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E10)), Is.EqualTo("same=True"), "C#");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E10))),
                 Is.EqualTo("same=True"), "C++");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E10)), Is.EqualTo("same=False"),
-                "MSIL — #205. A DIFFERENT answer here (including the correct 'same=True') means " +
-                "#205 moved — update this pin, do not just delete it.");
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E10)), Is.EqualTo("same=True"),
+                "MSIL — #205 was a reference compare (`ceq`) of two equal strings; #206 lowers a String `=` to " +
+                "String.Equals. 'same=False' here means MSIL compares Strings by reference again.");
         });
     }
 
@@ -700,13 +702,14 @@ public class NothingStringTextExecutionTests
     }
 
     // ============================================================================================
-    // 5. E4/E4b — `Nothing = ""`. VB says True; every backend here says False. NOT #189's semantic
-    //    question (filed separately as #206) — pinned so #206's fix flips these visibly, on
-    //    purpose, rather than as a silent side effect of touching this area again.
+    // 5. E4/E4b — `Nothing = ""`. VB says True, and since #206 every backend says True. These two
+    //    were pinned as WRONG ("every backend here says False"; C++ split between its folded and its
+    //    run-time answer) until the owner ruled that BasicLang follows VB's String equality; they now
+    //    assert vbc's answer. StringNothingEqualityExecutionTests is the full matrix.
     // ============================================================================================
 
-    /// <summary>Constant-foldable: the optimizer can fold <c>Nothing = ""</c> at COMPILE time.
-    /// All four backends agree — False, False, True.</summary>
+    /// <summary>Constant-foldable: the optimizer folds <c>s = ""</c> and <c>"" = t</c> at COMPILE time,
+    /// and <c>s Is Nothing</c> is reference identity (ADR-0011). vbc prints True, True, True; so does every backend.</summary>
     private const string E4 = """
         Sub Main()
             Dim s As String = Nothing
@@ -716,22 +719,19 @@ public class NothingStringTextExecutionTests
             Console.WriteLine(s Is Nothing)
         End Sub
         """;
-    private const string E4Expected = "False\nFalse\nTrue";
+    private const string E4Expected = "True\nTrue\nTrue";
 
     [Test]
-    public void E4_NothingEqualsEmptyString_ConstantFolded_AllBackendsAgree_Against206()
+    public void E4_NothingEqualsEmptyString_ConstantFolded_AllBackendsPrintVbcsAnswer()
         => FourBackends.RunsOnEveryBackend(E4, E4Expected);
 
     /// <summary>
     /// Same question, forced through a function call so the optimizer cannot fold it — a REAL
-    /// run-time comparison. C#/JS/MSIL still agree with E4 (False, False, True, True). C++
-    /// DIVERGES from its OWN E4 answer: True, True, False, True — because C++ represents String by
-    /// VALUE (<c>std::string</c>) with no null state, so at RUN TIME <c>Nothing</c> IS <c>""</c> on
-    /// C++ (same root cause as <c>IsIsNotOperatorExecutionTests
-    /// .CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet</c>'s P12). E4 vs E4b together are
-    /// the "folded False vs run-time True" the test-writer brief names: C++'s own answer is
-    /// INTERNALLY inconsistent depending on whether the comparison survives to run time, which is
-    /// exactly what makes #206 worth a deliberate owner decision rather than a quick fix.
+    /// run-time comparison. Before #206 C#/JS/MSIL answered False, False, True, True here and C++
+    /// answered True, True, False, True: its own answer depended on whether the comparison survived
+    /// to run time. Every backend now answers vbc's True, True, False, True: <c>s = ""</c> and
+    /// <c>"" = s</c> read Nothing as "", <c>s &lt;&gt; ""</c> is False, and <c>s Is Nothing</c> is
+    /// True (on C++ because a String has no null state, ADR-0011 D3).
     /// </summary>
     private const string E4b = """
         Function Nada() As String
@@ -747,20 +747,18 @@ public class NothingStringTextExecutionTests
             Check(Nada())
         End Sub
         """;
-    private const string E4bExpectedManaged = "False\nFalse\nTrue\nTrue";
-    private const string E4bExpectedCpp = "True\nTrue\nFalse\nTrue";
+    private const string E4bExpected = "True\nTrue\nFalse\nTrue";
 
     [Test]
-    public void E4b_NothingEqualsEmptyString_Runtime_CppDivergesFromItsOwnFoldedAnswer_Against206()
+    public void E4b_NothingEqualsEmptyString_Runtime_EveryBackendPrintsVbcsAnswer()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E4b)), Is.EqualTo(E4bExpectedManaged), "C#");
-            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(E4b)), Is.EqualTo(E4bExpectedManaged), "JavaScript");
-            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E4b)), Is.EqualTo(E4bExpectedManaged), "MSIL");
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E4b))), Is.EqualTo(E4bExpectedCpp),
-                "C++ — #206. If this now matches E4's answer (False/False/True/True) C++'s " +
-                "fold-vs-runtime split is gone — update this pin to say so, do not just delete it.");
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(E4b)), Is.EqualTo(E4bExpected), "C#");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(E4b)), Is.EqualTo(E4bExpected), "JavaScript");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E4b))), Is.EqualTo(E4bExpected), "C++");
+            // Last: on a machine without ilasm this leg ends the block as Ignored (MsilHarness.RequireIlasm).
+            Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(E4b)), Is.EqualTo(E4bExpected), "MSIL");
         });
     }
 }

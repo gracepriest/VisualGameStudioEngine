@@ -17,6 +17,14 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #206 TESTED — a String `=` / `<>` reads Nothing as "" the VB way on every backend; #205 (MSIL compared Strings with `ceq`) is FIXED by the same change (`IRCompare.IsStringEquality` / `ReadsNothingAsEmpty`; `git log --grep '#206'`)
+- **Tests (12 new, 3 moved):** `StringNothingEqualityExecutionTests` (Integration, 11 rows of vbc-answered probes p01-p16 on C#, C++, JavaScript and MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 117) + `StringNothingEqualityFoldTests` (1, hand-built IR, fast). MOVED to vbc's answer and renamed: `NothingStringTextExecutionTests` E4, E4b, E10 (E10's MSIL `same=False` was #205). Mutants killed: fold off (P01_P02, P03_P04, P05, P12 + Fold test), MSIL `ceq` back (P08), C# `Case Is Nothing` widened (P16).
+- **Gates (Linux):** fast 0 failed / 12,681 passed / 94 skipped; Integration, one filter each, 0 failed, 0 skipped: the fixture 12, `NothingString` 46, `Fold` 307, `StringCompar` 1, `IsIsNot` 91, `SelectCase` 82, `MsilString` 75, `ObjectCompar` 10, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps** (fixture header; P16, P16g, P16r pin the C++ and C# lines): String `<` `>` `<=` `>=` are refused (BL3001); MSIL has no `String.Empty`; C#/JS `Dim s As String` starts as "" so `s Is Nothing` is False (#286); the C++ String `Is Nothing` is emptiness (D3); C# `Case ""` + `Case Is Nothing` in one Select keeps its old arm (CS8120).
+- ⚠ **Supersedes** the "MSIL String `=` is a reference compare (#205)" gap in the #182 section below; `CharWidensToStringExecutionTests` still carves MSIL out of `c = "a"` (`NotMsil`) on that old reason and was NOT re-measured.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #201 TESTED — AddressOf on the C++ by-copy FALLBACK binds a class method and declares its temp up front (`ClosureLowering.ResolveAddressOf`; `CppCodeGenerator.Closures.cs`; `git log --grep '#201'`)
 - **Tests (10 new, 2 moved):** `CppAddressOfFallbackExecutionTests` (Integration, 9 rows of vbc-answered probes, C++ only, x CLI / `--optimize` / `CompileProjectFiles`, each asserting its roots took `ByCopy`; in `NotJavaScriptExecution`, roster still 116) + 1 fast text test in `CppClosurePathTests` (a by-copy `AddressOf obj.M` DOES emit `blTarget`). MOVED: `UserDelegateConversionExecutionTests` E8 / E9e now run (`..._RunsWithVbsAnswer`); `ExpectedByCopy` unchanged. Mutants M1-M3 killed; ADR-0019's #201 follow-up updated.
 - **Gates (Linux):** fast 0 failed / 12,681 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 9, `UserDelegateConversion` 72, `CppClosure` 119 (`CppClosurePath` 76), `ClosureLowering` 100, `AddressOf` 60 (+1 skipped), `NetDelegate` 61 (+2 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
