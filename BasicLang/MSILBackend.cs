@@ -499,6 +499,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // it from here. It used to say `[System.Runtime]`, the only BCL reference in this file
             // not spelled `[mscorlib]`, and it never reached ilasm intact anyway (task #129).
             _typeMap["Decimal"] = DecimalSpec;
+
+            // #192: the same for Date / DateTime — see DateTimeSpec.
+            _typeMap["Date"] = DateTimeSpec;
+            _typeMap["DateTime"] = DateTimeSpec;
+            _typeMap["System.DateTime"] = DateTimeSpec;
         }
 
         /// <summary>
@@ -622,11 +627,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private void GenerateEnum(IREnum irEnum)
         {
             var enumName = SanitizeName(irEnum.Name);
-            var underlyingType = "int32";
-            if (irEnum.UnderlyingType != null)
-            {
-                underlyingType = MapType(irEnum.UnderlyingType);
-            }
+            var underlyingType = EnumUnderlyingSpec(irEnum);
 
             WriteLine($".class public auto ansi sealed {enumName}");
             WriteLine("       extends [mscorlib]System.Enum");
@@ -643,6 +644,51 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
 
             WriteLine($"}} // end of class {enumName}");
+        }
+
+        /// <summary>
+        /// The IL keyword of an Enum's underlying integer — the type of its <c>value__</c> field and
+        /// of every member literal.
+        ///
+        /// <para>⛔ #192: it was <c>MapType(UnderlyingType)</c>, and the IR names an Enum with no
+        /// <c>As</c> clause <c>Int32</c>, which no table here maps — so it came out
+        /// <c>.field … Int32 value__</c> and ilasm refused the file ("syntax error at token
+        /// 'Int32'"). No Enum without an <c>As</c> had ever assembled on this backend.</para>
+        /// </summary>
+        private string EnumUnderlyingSpec(IREnum irEnum)
+        {
+            switch (irEnum?.UnderlyingType?.Name?.ToLowerInvariant())
+            {
+                case "long": case "int64": case "system.int64": return "int64";
+                case "short": case "int16": case "system.int16": return "int16";
+                case "byte": case "system.byte": return "uint8";
+                case "sbyte": case "system.sbyte": return "int8";
+                case "ushort": case "uint16": case "system.uint16": return "uint16";
+                case "uinteger": case "uint32": case "system.uint32": return "uint32";
+                case "ulong": case "uint64": case "system.uint64": return "uint64";
+                default: return "int32";
+            }
+        }
+
+        /// <summary>The Enum this program declares named <paramref name="typeName"/>, if any.</summary>
+        private bool TryFindEnum(string typeName, out IREnum irEnum)
+        {
+            irEnum = null;
+            return _module != null && !string.IsNullOrEmpty(typeName)
+                && _module.Enums.TryGetValue(typeName, out irEnum) && irEnum != null;
+        }
+
+        /// <summary>
+        /// Pushes an Enum value as the integer it IS on the evaluation stack — <c>ldc.i4</c>, or
+        /// <c>ldc.i8</c> for a 64-bit underlying type. A <c>literal</c> field has no storage, so
+        /// <c>ldsfld</c> cannot read one; csc emits the number too.
+        /// </summary>
+        private void EmitEnumLiteral(IREnum irEnum, long value)
+        {
+            var spec = EnumUnderlyingSpec(irEnum);
+            if (spec == "int64" || spec == "uint64") WriteLine($"    ldc.i8 {value}");
+            else EmitLdcI4(unchecked((int)value));
+            _currentStack++;
         }
 
         private void GenerateDelegate(IRDelegate irDelegate)
@@ -711,9 +757,35 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var mapped = MapTypeName(trimmed);
 
             // MapTypeName passes an unknown name through SanitizeName, so anything that did not
-            // land on a complete IL spec (an IL keyword, or Decimal's `valuetype` spec) is a class
-            // reference and needs the `class` prefix.
-            return IlPrimitives.Contains(mapped) ? mapped : "class " + mapped;
+            // land on a complete IL spec (an IL keyword, or a BCL `valuetype` spec) is a type this
+            // program declares or a BCL class — `valuetype` for a Structure or an Enum, `class` for
+            // everything else.
+            if (IlPrimitives.Contains(mapped)) return mapped;
+            return (IsUserValueType(trimmed) ? "valuetype " : "class ") + mapped;
+        }
+
+        /// <summary>
+        /// ⭐ <b>#192: a Structure or an Enum this program declares is a VALUE type</b>, and IL says so
+        /// in every type-spec position: <c>valuetype 'Pt'</c>, never <c>class 'Pt'</c>. This is the one
+        /// answer <see cref="IlTypeSpec(string)"/> asks, so a local, a field, a parameter, a return, an
+        /// array element and a generic argument all spell it the same way.
+        ///
+        /// <para>⛔ What was wrong: both spelled <c>class</c>, and a Structure was DECLARED as a class
+        /// (<c>extends [mscorlib]System.Object</c>). So <c>Dim p As Pt</c> was a null reference and
+        /// the first <c>p.X</c> died with NullReferenceException, assigning or passing one aliased it
+        /// instead of copying, and an Enum local made the type fail to load ("due to value type
+        /// mismatch") or the file fail to assemble. A <c>valuetype</c> local is zeroed by
+        /// <c>.locals init</c> — VB's "every field at its default" — and copied by every
+        /// <c>ldloc</c>/<c>stloc</c>.</para>
+        /// </summary>
+        private bool IsUserValueType(string typeName)
+        {
+            if (_module == null || string.IsNullOrEmpty(typeName)) return false;
+            var name = typeName.Trim();
+            if (name.Length > 1 && name[0] == '\'' && name[name.Length - 1] == '\'')
+                name = name.Substring(1, name.Length - 2);
+            return (_module.Classes.TryGetValue(name, out var cls) && cls != null && cls.IsStruct)
+                || _module.Enums.ContainsKey(name);
         }
 
         /// <summary>
@@ -1071,6 +1143,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private const string DecimalToken = "[mscorlib]System.Decimal";
 
         /// <summary>
+        /// ⭐ <b>System.DateTime as an IL type SPEC (#192)</b> — <c>Date</c> and <c>DateTime</c>. The
+        /// same shape as <see cref="DecimalSpec"/>, a BCL value type with no IL keyword, and listed in
+        /// the same three tables for the same reason: one row each makes it spell right at every site.
+        ///
+        /// <para>⛔ What was wrong: neither name was mapped, so it took the unknown-name path and came
+        /// out <c>class 'Date'</c> / <c>class 'DateTime'</c> — ilasm refused every program declaring
+        /// one ("Reference to undefined class 'Date'"), at the CLI and the CLI with <c>--optimize</c>.</para>
+        /// </summary>
+        private const string DateTimeSpec = "valuetype [mscorlib]System.DateTime";
+
+        /// <summary>System.DateTime as an IL type TOKEN.</summary>
+        private const string DateTimeToken = "[mscorlib]System.DateTime";
+
+        /// <summary>
         /// The complete IL type specs <see cref="MapTypeName"/> can produce — the IL keywords, plus
         /// <see cref="DecimalSpec"/> — anything else is a class.
         ///
@@ -1084,7 +1170,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
             "float32", "float64", "bool", "char", "string", "object", "void", "native int",
-            DecimalSpec,
+            DecimalSpec, DateTimeSpec,
         };
 
         /// <summary>
@@ -1096,6 +1182,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private static readonly Dictionary<string, string> PrimitiveTokens = new(StringComparer.Ordinal)
         {
             [DecimalSpec] = DecimalToken,
+            [DateTimeSpec] = DateTimeToken,
             ["int8"] = "[mscorlib]System.SByte",
             ["uint8"] = "[mscorlib]System.Byte",
             ["int16"] = "[mscorlib]System.Int16",
@@ -1137,6 +1224,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "object": return "object";
                 case "void": return "void";
                 case "decimal": return DecimalSpec;
+                case "date":
+                case "datetime":
+                case "system.datetime": return DateTimeSpec;
             }
 
             // A recognized .NET exception is a BCL type and must be spelled with its assembly, in
@@ -1359,7 +1449,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var isNested = !string.IsNullOrEmpty(irClass.EnclosingClass);
             var visibility = isNested ? "nested public" : "public";
             var declaredName = isNested ? IlName(irClass.Name) : className;
-            WriteLine($".class {visibility} auto ansi{(needsInitializer ? "" : " beforefieldinit")} {declaredName}");
+
+            // ⭐ #192: a Structure is a VALUE type — sealed, laid out in order, and derived from
+            // System.ValueType, as csc declares one. It used to be declared a class, so a Structure
+            // local started null and assigning one aliased it (see IsUserValueType).
+            var layout = irClass.IsStruct ? "sequential ansi sealed" : "auto ansi";
+            if (irClass.IsStruct) extends = "[mscorlib]System.ValueType";
+            WriteLine($".class {visibility} {layout}{(needsInitializer ? "" : " beforefieldinit")} {declaredName}");
             WriteLine($"       extends {extends}{implements}");
             WriteLine("{");
 
@@ -1884,8 +1980,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("          instance void .ctor() cil managed");
             WriteLine("  {");
             WriteLine("    .maxstack 8");
-            WriteLine("    ldarg.0");
-            WriteLine($"    call instance void {baseClass}::.ctor()");
+
+            // #192: a value type's constructor chains to nothing — `this` is a pointer to storage
+            // that is already zeroed. It exists so `New Pt()` (and a Nothing of the type, see
+            // EmitLoadConstant) can `newobj` the zero value.
+            if (!irClass.IsStruct)
+            {
+                WriteLine("    ldarg.0");
+                WriteLine($"    call instance void {baseClass}::.ctor()");
+            }
             EmitInstanceFieldInitialization(irClass);
             WriteLine("    ret");
             WriteLine("  } // end of method .ctor");
@@ -3128,6 +3231,119 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 + "Methods are unaffected: s.ToUpper() and s.Substring(i, n) go out as callvirt "
                 + "through the instance-method path. Add a row to MSILCodeGenerator.StringMembers "
                 + "plus a round-trip test to widen the set.");
+        }
+
+        /// <summary>
+        /// #192: the <c>System.DateTime</c> members read without parentheses, each an <c>int32</c>
+        /// property. The same one-row-to-widen table as <see cref="StringMembers"/>.
+        /// </summary>
+        private static readonly Dictionary<string, CollectionMember> DateTimeMembers =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Year"] = new("get_Year", "int32", ""),
+                ["Month"] = new("get_Month", "int32", ""),
+                ["Day"] = new("get_Day", "int32", ""),
+                ["Hour"] = new("get_Hour", "int32", ""),
+                ["Minute"] = new("get_Minute", "int32", ""),
+                ["Second"] = new("get_Second", "int32", ""),
+                ["Millisecond"] = new("get_Millisecond", "int32", ""),
+                ["DayOfYear"] = new("get_DayOfYear", "int32", ""),
+            };
+
+        /// <summary>
+        /// Resolves a parenthesis-free member read on a <c>Date</c>/<c>DateTime</c> receiver to its
+        /// property accessor; false for every other receiver; throws for a DateTime member outside
+        /// <see cref="DateTimeMembers"/>.
+        ///
+        /// <para>⛔ The refusal is the point, as for <see cref="TryStringMember"/>: System.DateTime has
+        /// no public instance fields, so the <c>ldfld</c> the ordinary path would emit ASSEMBLES — now
+        /// that DateTime is a real type here (#192) — and dies with MissingFieldException.</para>
+        /// </summary>
+        private bool TryDateTimeMember(TypeInfo receiver, string member, out CollectionMember accessor)
+        {
+            accessor = null;
+            if (receiver?.Name == null || MapType(receiver) != DateTimeSpec) return false;
+            if (DateTimeMembers.TryGetValue(member ?? "", out accessor)) return true;
+
+            throw new ForeignFeatureException(
+                $"MSIL: 'DateTime.{member}' is outside the supported DateTime surface ("
+                + string.Join(", ", DateTimeMembers.Keys) + "). System.DateTime has no public instance "
+                + "fields, so an ldfld here would assemble and then fail with MissingFieldException at run "
+                + "time. Add a row to MSILCodeGenerator.DateTimeMembers plus a round-trip test to widen the set.");
+        }
+
+        /// <summary>
+        /// #192: the <c>System.DateTime</c> instance METHODS this backend calls, with the IL signature
+        /// each really has — an argument is widened to it (<see cref="LosslessWidenings"/>).
+        ///
+        /// <para>⛔ Why a table: the ordinary instance-call path spells a BCL signature from the
+        /// ARGUMENTS, and <c>d.AddDays(3)</c> names <c>AddDays(int32)</c>, which does not exist — now
+        /// that DateTime is a real type here that ASSEMBLES and dies with MissingMethodException,
+        /// where before the file did not assemble at all. A member missing from this table is refused.</para>
+        /// </summary>
+        private static readonly Dictionary<string, CollectionMember> DateTimeMethods =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["AddDays"] = new("AddDays", DateTimeSpec, "float64"),
+                ["AddHours"] = new("AddHours", DateTimeSpec, "float64"),
+                ["AddMinutes"] = new("AddMinutes", DateTimeSpec, "float64"),
+                ["AddSeconds"] = new("AddSeconds", DateTimeSpec, "float64"),
+                ["AddMilliseconds"] = new("AddMilliseconds", DateTimeSpec, "float64"),
+                ["AddMonths"] = new("AddMonths", DateTimeSpec, "int32"),
+                ["AddYears"] = new("AddYears", DateTimeSpec, "int32"),
+                ["ToString"] = new("ToString", "string", ""),
+            };
+
+        /// <summary>
+        /// Emits a call to a <see cref="DateTimeMethods"/> member on a Date/DateTime receiver and
+        /// returns true; false for any other receiver; throws for a DateTime method outside the
+        /// table, or an argument that does not widen losslessly to its parameter.
+        /// </summary>
+        private bool TryEmitDateTimeMethodCall(IRInstanceMethodCall methodCall, bool hasReturn)
+        {
+            if (methodCall.Object?.Type?.Name == null || MapType(methodCall.Object.Type) != DateTimeSpec) return false;
+
+            var arguments = methodCall.Arguments ?? new List<IRValue>();
+            var parameters = DateTimeMethods.TryGetValue(methodCall.MethodName ?? "", out var signature)
+                ? signature.Params.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : null;
+            if (parameters == null || parameters.Length != arguments.Count)
+                throw new ForeignFeatureException(
+                    $"MSIL: 'DateTime.{methodCall.MethodName}' with {arguments.Count} argument(s) is outside the "
+                    + "supported DateTime surface (" + string.Join(", ", DateTimeMethods.Keys) + "). The ordinary "
+                    + "call path would spell the signature from the arguments, which assembles and then fails with "
+                    + "MissingMethodException. Add a row to MSILCodeGenerator.DateTimeMethods plus a round-trip test.");
+
+            EmitLoadValue(methodCall.Object);
+            WriteLine($"    box {DateTimeToken}");
+            WriteLine($"    unbox {DateTimeToken}");
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                EmitLoadValue(arguments[i]);
+                var argumentSpec = arguments[i] is IRConstant { Value: { } clr } && arguments[i].Type == null
+                    ? ClrConstantSpec(clr) : MapType(arguments[i].Type);
+                if (argumentSpec == parameters[i]) continue;
+                if (argumentSpec == null || !LosslessWidenings.TryGetValue((argumentSpec, parameters[i]), out var widen))
+                    throw new ForeignFeatureException(
+                        $"MSIL: argument {i + 1} of 'DateTime.{signature.Il}' is '{argumentSpec ?? "?"}', which does not "
+                        + $"widen without loss to the '{parameters[i]}' the method takes.");
+                WriteLine($"    {widen}");
+            }
+
+            WriteLine($"    call instance {signature.Ret} {DateTimeToken}::{signature.Il}({string.Join(", ", parameters)})");
+            _currentStack -= arguments.Count;   // the receiver's slot now holds the result
+
+            if (hasReturn && !string.IsNullOrEmpty(methodCall.Name))
+            {
+                EmitStoreResult(methodCall, signature.Ret == DateTimeSpec
+                    ? new TypeInfo("DateTime", TypeKind.Class) : new TypeInfo("String", TypeKind.Primitive));
+            }
+            else
+            {
+                WriteLine("    pop");
+                _currentStack--;
+            }
+            return true;
         }
 
         private void AllocateTemporaries(IRFunction function)
@@ -4484,8 +4700,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             if (constant.Value == null)
             {
-                WriteLine("    ldnull");
-                _currentStack++;
+                EmitNothingOf(constant.Type);
                 return;
             }
 
@@ -4520,6 +4735,44 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     WriteLine("    ldc.i4.0");
                     break;
             }
+            _currentStack++;
+        }
+
+        /// <summary>
+        /// Pushes <c>Nothing</c> of <paramref name="type"/>: a null reference, or — for a VALUE type
+        /// (#186: a null <see cref="IRConstant"/> of a value type MEANS its default) — that default.
+        ///
+        /// <para>⭐ #192: once a Structure, an Enum and DateTime spell <c>valuetype</c>, <c>ldnull</c>
+        /// into one of their slots is an invalid program. An Enum's default is the integer 0; a
+        /// Structure's is the zero value its parameterless constructor builds (it runs no code, see
+        /// <see cref="GenerateDefaultCtorForClass"/>); DateTime's is <c>.ctor(int64 ticks)</c> of 0,
+        /// which is DateTime.MinValue. Anything else is <c>ldnull</c>, exactly as before.</para>
+        /// </summary>
+        private void EmitNothingOf(TypeInfo type)
+        {
+            if (type?.Name != null && type.Kind != TypeKind.Array)
+            {
+                if (TryFindEnum(type.Name, out var irEnum))
+                {
+                    EmitEnumLiteral(irEnum, 0);
+                    return;
+                }
+                if (IsUserValueType(type.Name))
+                {
+                    WriteLine($"    newobj instance void {IlTypeToken(type)}::.ctor()");
+                    _currentStack++;
+                    return;
+                }
+                if (MapType(type) == DateTimeSpec)
+                {
+                    WriteLine("    ldc.i8 0");
+                    WriteLine($"    newobj instance void {DateTimeToken}::.ctor(int64)");
+                    _currentStack++;
+                    return;
+                }
+            }
+
+            WriteLine("    ldnull");
             _currentStack++;
         }
 
@@ -4735,9 +4988,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <see cref="GetIndirectSuffix"/> answers <c>ref</c> for it, and <c>ldind.ref</c> reads the
         /// first eight bytes of a 16-byte value as an object reference. It is <c>ldobj</c> with the
         /// type's token. Every other type keeps its <c>ldind</c> exactly as before. Keyed on the
-        /// SPEC rather than on Decimal, so it is the shape of the type that decides — and today
-        /// only Decimal spells <c>valuetype</c> (a Structure or an enum still spells
-        /// <c>class</c>, #192).</para>
+        /// SPEC rather than on Decimal, so it is the shape of the type that decides — Decimal,
+        /// DateTime, and since #192 a Structure or an Enum (<see cref="IsValueTypeSpec"/>).</para>
         /// </summary>
         private string IndirectLoad(TypeInfo type) =>
             IsValueTypeSpec(type) ? $"ldobj {IlTypeToken(type)}" : $"ldind.{GetIndirectSuffix(type)}";
@@ -4746,9 +4998,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private string IndirectStore(TypeInfo type) =>
             IsValueTypeSpec(type) ? $"stobj {IlTypeToken(type)}" : $"stind.{GetIndirectSuffix(type)}";
 
-        /// <summary>True when <paramref name="type"/> is spelled as a <c>valuetype</c> spec.</summary>
-        private bool IsValueTypeSpec(TypeInfo type) =>
-            type?.Name != null && MapType(type).StartsWith("valuetype ", StringComparison.Ordinal);
+        /// <summary>True when <paramref name="type"/> is spelled as a <c>valuetype</c> spec — a BCL
+        /// value type (Decimal, DateTime) or, since #192, a Structure or an Enum this program
+        /// declares. Read through the string <see cref="IlTypeSpec(string)"/>, which never throws;
+        /// an ARRAY of them is a reference.</summary>
+        private bool IsValueTypeSpec(TypeInfo type)
+        {
+            if (type?.Name == null || type.Kind == TypeKind.Array) return false;
+            var spec = IlTypeSpec(MapType(type));
+            return spec.StartsWith("valuetype ", StringComparison.Ordinal) && !spec.EndsWith("]", StringComparison.Ordinal);
+        }
 
         private string GetIndirectSuffix(TypeInfo type)
         {
@@ -5572,7 +5831,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private static readonly HashSet<string> BoxableSpecs = new(StringComparer.Ordinal)
         {
             "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
-            "float32", "float64", "bool", "char", DecimalSpec,
+            "float32", "float64", "bool", "char", DecimalSpec, DateTimeSpec,
         };
 
         /// <summary>
@@ -6942,9 +7201,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <para>The IL primitives come from <see cref="PrimitiveTokens"/>; an enum or a Structure
         /// by its kind, through <see cref="IlTypeToken(TypeInfo)"/>. Decimal reaches here as a value
         /// since task #129 and boxes to <see cref="DecimalToken"/> through the same table (its spec
-        /// is a row of <see cref="BoxableSpecs"/> and <see cref="PrimitiveTokens"/>). ⚠ Date still
-        /// does not: <c>Date</c>/<c>DateTime</c> does not resolve as a type on this backend at all,
-        /// which is a type-mapping gap of its own (#192).</para>
+        /// is a row of <see cref="BoxableSpecs"/> and <see cref="PrimitiveTokens"/>), and so does
+        /// DateTime since #192.</para>
         ///
         /// <para>The primitive test reads <c>MapType</c>, which names every primitive exactly as
         /// <see cref="IlTypeSpec(TypeInfo)"/> does but never throws — IlTypeSpec refuses a delegate
@@ -6958,7 +7216,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var spec = MapType(type);
             if (BoxableSpecs.Contains(spec) && PrimitiveTokens.TryGetValue(spec, out var token)) return token;
 
-            if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure) return IlTypeToken(type);
+            if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure
+                || (type.Kind != TypeKind.Array && IsUserValueType(type.Name))) return IlTypeToken(type);
 
             return null;
         }
@@ -7722,6 +7981,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
         }
 
+        /// <summary>#192: the conversion INTO each Enum underlying type (<see cref="EnumUnderlyingSpec"/>).</summary>
+        private static readonly Dictionary<string, string> EnumConv = new(StringComparer.Ordinal)
+        {
+            ["int8"] = "conv.i1", ["uint8"] = "conv.u1", ["int16"] = "conv.i2", ["uint16"] = "conv.u2",
+            ["int32"] = "conv.i4", ["uint32"] = "conv.u4", ["int64"] = "conv.i8", ["uint64"] = "conv.u8",
+        };
+
         /// <summary>
         /// The conversion opcodes of <paramref name="cast"/>, applied to the value already on top
         /// of the stack. Shared by <see cref="Visit(IRCast)"/> and <see cref="EmitInlineValue"/>
@@ -7761,6 +8027,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (castSourceSpec == DecimalSpec || castTargetSpec == DecimalSpec)
             {
                 EmitDecimalConversion(castSourceSpec, castTargetSpec);
+                return;
+            }
+
+            // #192: an integer INTO an Enum, `CType(5, Shade)`. On the stack an Enum IS its
+            // underlying integer, so this is at most a width conversion — the `WARNING: Unknown cast`
+            // comment it used to emit converted nothing, and was right only by luck for an int32.
+            // An Enum already is one; an Object source was unboxed above.
+            if (TryFindEnum(cast.Type?.Name, out var targetEnum))
+            {
+                var underlying = EnumUnderlyingSpec(targetEnum);
+                if (!TryFindEnum(operandType?.Name, out _) && castSourceSpec != underlying
+                    && EnumConv.TryGetValue(underlying, out var enumConv))
+                    WriteLine($"    {enumConv}");
                 return;
             }
 
@@ -7955,6 +8234,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            if (TryEmitDateTimeMethodCall(methodCall, hasReturn)) return;
+
             // Load 'this' reference (the object on which the method is called)
             EmitLoadValue(methodCall.Object);
 
@@ -8131,6 +8412,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            // ⭐ #192: an Enum MEMBER reached by its type name, `Color.Green`. The receiver is a TYPE,
+            // and the member is a `literal` field with no storage: it is the number. This emitted
+            // `// WARNING: Unknown local 'Color'` and `ldfld object 'Color'::'Green'` off an empty
+            // stack. What is pushed is a value OF THE ENUM, so a store into an Object slot boxes it
+            // to the Enum (EmitFieldAccessResult) and it prints its name, as on C#.
+            if (fieldAccess.Object is IRVariable { Name: { } enumTypeName } && !ResolvesAsValue(enumTypeName)
+                && TryFindEnum(enumTypeName, out var accessedEnum))
+            {
+                var enumMember = accessedEnum.Members.FirstOrDefault(m =>
+                    string.Equals(m.Name, fieldAccess.FieldName, StringComparison.OrdinalIgnoreCase));
+                if (enumMember != null)
+                {
+                    EmitEnumLiteral(accessedEnum, Convert.ToInt64(enumMember.Value ?? 0L));
+                    EmitFieldAccessResult(fieldAccess, new TypeInfo(accessedEnum.Name, TypeKind.Enum));
+                    return;
+                }
+            }
+
             // ⛔ A `Shared` field reached as `Counter.Total`. The receiver is a TYPE NAME, not a
             // value: loading it emitted `// WARNING: Unknown local 'Counter'` and pushed nothing,
             // and the `ldfld` that followed read a field off an empty stack — InvalidProgramException.
@@ -8272,6 +8571,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // #192: a DateTime's members are PROPERTIES — see TryDateTimeMember. `this` of a value
+            // type's method is a managed pointer, so the value is boxed and unboxed to one, the way
+            // Visit(IRInstanceMethodCall) calls a Decimal's method.
+            if (TryDateTimeMember(fieldAccess.Object?.Type, fieldAccess.FieldName, out var dateAccessor))
+            {
+                WriteLine($"    box {DateTimeToken}");
+                WriteLine($"    unbox {DateTimeToken}");
+                WriteLine($"    call instance {dateAccessor.Ret} {DateTimeToken}::{dateAccessor.Il}()");
+                EmitFieldAccessResult(fieldAccess, new TypeInfo("Integer", TypeKind.Primitive));
+                return;
+            }
+
             // Load field value from object
             var fieldType = IlTypeSpec(fieldAccess.Type);
             var className = DeclaringFieldToken(fieldAccess.Object?.Type, fieldAccess.FieldName);
@@ -8358,8 +8669,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            // Load object reference
-            EmitLoadValue(fieldStore.Object);
+            // Load object reference — or, for a Structure, the ADDRESS of the variable (#192).
+            EmitFieldStoreReceiver(fieldStore.Object);
 
             // Load value to store
             EmitLoadValue(fieldStore.Value);
@@ -8378,6 +8689,74 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Update stack: pop object + value
             _currentStack -= 2;
+        }
+
+        /// <summary>
+        /// ⭐ #192: the receiver of an instance-field WRITE. A class receiver is its reference, as
+        /// always. A Structure receiver must be the ADDRESS of the storage the write lands in:
+        /// <c>stfld</c> takes an object reference or a managed pointer, never a value, and VB writes
+        /// <c>p.X = 3</c> into <c>p</c> itself. Walked the way the IR spells such a place:
+        /// <list type="bullet">
+        /// <item>a named variable — the ByRef ladder (<see cref="TryResolveByRefTarget"/>): a local
+        /// (<c>ldloca</c>), a parameter (<c>ldarga</c>, or the pointer a ByRef one already holds), a
+        /// field of <c>Me</c> (<c>ldflda</c>), a Shared field or module global (<c>ldsflda</c>);</item>
+        /// <item><c>h.P.X = 3</c> — a field ACCESS of Structure type: the address of that field
+        /// (<c>ldflda</c>) on its own receiver, recursively;</item>
+        /// <item><c>a(1).X = 5</c> — a load through an element address: that address.</item>
+        /// </list>
+        /// <para>⛔ Anything else is REFUSED. The alternative — writing into a copy — assembles, runs
+        /// and drops the write, which is the silent wrong answer this backend refuses elsewhere (VB
+        /// refuses a write to a value, BC30068).</para>
+        /// </summary>
+        private void EmitFieldStoreReceiver(IRValue receiver)
+        {
+            if (receiver?.Type?.Name == null || !IsUserValueType(receiver.Type.Name) || receiver.Type.Kind == TypeKind.Array)
+            {
+                EmitLoadValue(receiver);
+                return;
+            }
+
+            if (!TryEmitStructAddress(receiver))
+                throw new ForeignFeatureException(
+                    $"MSIL: a field of Structure '{receiver.Type.Name}' is written through a value that is "
+                    + "not a variable, a field or an array element, so there is no storage to write it into. "
+                    + "Writing into a copy would assemble, run and drop the write.");
+        }
+
+        /// <summary>Pushes the address of the Structure storage <paramref name="place"/> names, or
+        /// returns false, having emitted nothing. See <see cref="EmitFieldStoreReceiver"/>.</summary>
+        private bool TryEmitStructAddress(IRValue place)
+        {
+            if (place is IRVariable { Name: { } name } && TryResolveByRefTarget(name, out var target))
+            {
+                EmitByRefTarget(target);
+                return true;
+            }
+
+            if (place is IRLoad { Address: IRGetElementPtr elementAddress })
+            {
+                EmitLoadValue(elementAddress);
+                return true;
+            }
+
+            if (place is IRFieldAccess { Object: { } owner } access
+                && DeclaredFieldType(owner.Type, access.FieldName) is { } declared
+                && IsUserValueType(declared.Name))
+            {
+                if (owner.Type?.Name != null && IsUserValueType(owner.Type.Name))
+                {
+                    if (!TryEmitStructAddress(owner)) return false;
+                }
+                else
+                {
+                    EmitLoadValue(owner);
+                }
+
+                WriteLine($"    ldflda {IlTypeSpec(declared)} {DeclaringFieldToken(owner.Type, access.FieldName)}::{SanitizeName(access.FieldName)}");
+                return true;
+            }
+
+            return false;
         }
 
         public override void Visit(IRTupleElement tupleElement)
