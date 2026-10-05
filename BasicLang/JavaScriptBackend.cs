@@ -835,6 +835,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Fields, properties and events of a class AND of its bases — the set an unqualified
         /// reference inside a method must resolve to <c>this.</c>.
+        ///
+        /// <para>⛔ #151: a chain that ends in a PROVIDED exception class
+        /// (<see cref="JsExceptionTypes"/>) also inherits that class's <c>Message</c> getter. The walk
+        /// used to stop at the first base that is not a user class, so a bare <c>Message</c> inside
+        /// <c>Class MyErr : Inherits Exception</c> emitted the bare name — a ReferenceError from a
+        /// green build. <c>Message</c> is the one member the runtime class defines
+        /// (<see cref="EmitExceptionPrelude"/>); nothing else is claimed.</para>
         /// </summary>
         private static HashSet<string> MemberNames(IRClass irClass, IRModule module)
         {
@@ -852,7 +859,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     if (e?.Name != null) names.Add(e.Name);
 
                 if (string.IsNullOrEmpty(current.BaseClass)) break;
-                module.Classes.TryGetValue(current.BaseClass, out current);
+                var baseName = current.BaseClass;
+                if (!module.Classes.TryGetValue(baseName, out current) && JsExceptionTypes.IsProvided(baseName))
+                    names.Add("Message");
             }
 
             return names;

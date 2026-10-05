@@ -17,6 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #151 DONE, JavaScript and MSIL read `Message` on a user `Inherits Exception` class (fix `e0afea6a`, JS + MSIL only)
+
+- **Fixed:** a bare `Message` / `Me.Message` / `e.Message` on a user Exception subclass was a JS ReferenceError and an MSIL InvalidProgramException / MissingFieldException from a green build; both now print vbc's answer (`JavaScriptBackend.MemberNames`, `MSILBackend.TryExceptionMember` + the bare arm in `EmitLoadLocal`).
+- **Tests:** `UserExceptionSubclassExecutionTests` (Integration, 10: 9 vbc-answered rows x JS + MSIL x CLI / `-O` / `CompileProjectFiles`, plus a shape pin; roster now 108) and `UserExceptionSubclassMsilIlShapeTests` (fast, 3, IL text, no ilasm); the P15 pin in `BarePropertyLoweringTests` MOVED to vbc's output. Mutants M1-M4 all killed.
+- **Gates:** fast subset + Integration `UserExceptionSubclass|BarePropertyLowering|Exception|TryCatch|InheritedMember|BaseConstructor|JsExecutionTierRoster` (Linux; MSIL cells run here, skip without ilasm); the full suite was NOT run.
+- ⛔ **Gaps, NO test pins them:** C++ `Inherits Exception` does not compile (`unknown type name 'Exception'`; no runtime exception base class: refuse / base class / throw the shared_ptr is an OWNER decision); JS `Me.Message.ToUpper()` TypeError (a plain Exception's too); `Inherits ApplicationException` ("Unknown base class") and `Catch ... When` (parse error) are front-end; MSIL `e.HelpLink` on a subclass is now refused at compile time.
+
+---
+
 ## 🧪 NEWEST — 2026-10-05: #150 DONE, an Overridable auto-property's override dispatches on JavaScript (fix `bced37a2`)
 
 JavaScript emitted such a property as a class field (own data property, shadows the derived accessor: P16 printed `3,3`, vbc `12,3`); it is now a get/set pair over a `$Class$Prop` slot, and C++'s ReadOnly constructor write stores the data member (was `no member named 'set_P'`).

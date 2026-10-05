@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -661,10 +660,12 @@ internal static class BarePropertyLoweringProbes
 
     internal const string P13Expected = "8,8,8";
 
-    /// <summary>P15 — KNOWN-WRONG, task #151, UNRELATED to and UNCHANGED by ADR-0007: `Message`
-    /// read bare is a BUILT-IN base property (System.Exception), not a property declared in the
-    /// IR module, so AccessorMemberOf/Invariant F do not touch it (F only checks bases PRESENT in
-    /// the IR module) — it is not flagged, so it is not lowered, exactly as before this ADR.</summary>
+    /// <summary>P15 — task #151 (FIXED for JavaScript and MSIL; C++ is a known gap, see
+    /// <see cref="BarePropertyLoweringExecutionTests.P15_ExceptionMessageBareInSubclass_JsAndMsilPrintVbcsAnswer_Task151"/>).
+    /// `Message` read bare is a BUILT-IN base property (System.Exception), not a property declared
+    /// in the IR module, so AccessorMemberOf/Invariant F do not touch it (F only checks bases PRESENT
+    /// in the IR module) — it is not flagged, so it is not lowered; ADR-0007 left it as it was, and
+    /// #151 fixed it in the two backends that crashed on it.</summary>
     internal const string P15 = """
         Class MyErr
             Inherits Exception
@@ -1007,29 +1008,39 @@ public class BarePropertyLoweringExecutionTests
                 Is.EqualTo(BarePropertyLoweringProbes.CP1Expected), "MSIL, aggressive");
         });
 
-    /// <summary>P15 — KNOWN-WRONG, task #151, UNCHANGED by ADR-0007 (see the probe's own doc
-    /// comment: <c>Message</c> is a BUILT-IN base property, outside the IR module, so Invariant F
-    /// and the lowering never touch it). C# is RIGHT and unaffected; C++ still does not build
-    /// (Exception is unmapped — task #141's family); JavaScript and MSIL crash exactly as before.</summary>
+    /// <summary>
+    /// P15 — task #151. A bare <c>Message</c> inside <c>Class MyErr : Inherits Exception</c> prints
+    /// vbc's <c>E:boom</c> on C#, JavaScript and MSIL. JavaScript used to throw
+    /// <c>ReferenceError: Message is not defined</c> and MSIL <c>InvalidProgramException</c> (this
+    /// test pinned both crashes until the fix); the execution matrix of every shape lives in
+    /// <c>UserExceptionSubclassExecutionTests</c>.
+    ///
+    /// <para>⛔ KNOWN GAP, still pinned: <b>C++ does not build</b> <c>Inherits Exception</c> (<c>unknown
+    /// type name 'Exception'</c>) — the runtime has no exception base class, and which of the options
+    /// (a refusal diagnostic, a runtime exception-object base, throwing the shared_ptr) is the owner's
+    /// decision, still pending. When it is made, this leg flips to vbc's answer.</para>
+    /// </summary>
     [Test]
-    public void P15_ExceptionMessageBareInSubclass_KnownWrong_Task151()
+    public void P15_ExceptionMessageBareInSubclass_JsAndMsilPrintVbcsAnswer_Task151()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(BarePropertyLoweringProbes.P15)),
-                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "C# — correct, unaffected control");
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "C# — the unchanged control");
 
+            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(BarePropertyLoweringProbes.P15)),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "JavaScript, standard (was ReferenceError: Message is not defined)");
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(BarePropertyLoweringProbes.P15)),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "JavaScript, aggressive");
+
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(BarePropertyLoweringProbes.P15)),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "MSIL, standard (was InvalidProgramException)");
+            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(BarePropertyLoweringProbes.P15)),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "MSIL, aggressive");
+
+            // ⛔ KNOWN GAP (owner decision pending), not a result to rely on: C++ has no exception base class.
             var cppEx = Assert.Throws<AssertionException>(
                 () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.P15)));
-            Assert.That(cppEx!.Message, Does.Contain("C++ compilation failed"), "C++ — still does not build");
-
-            var (jsExit, _, jsErr) = RunNodeAllowingFailure(JsTestSupport.Compile(BarePropertyLoweringProbes.P15));
-            Assert.That(jsExit, Is.Not.Zero, "JavaScript was expected to CRASH (task #151, pre-existing)");
-            Assert.That(jsErr, Does.Contain("ReferenceError: Message is not defined"),
-                "expected the specific, MEASURED failure mode — a different error means the gap moved");
-
-            var msilRun = MsilHarness.Run(BarePropertyLoweringProbes.P15);
-            Assert.That(msilRun.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed), msilRun.Report);
-            Assert.That(msilRun.Output, Does.Contain("InvalidProgramException"), "MSIL — the same pre-existing crash");
+            Assert.That(cppEx!.Message, Does.Contain("C++ compilation failed"), "C++ — KNOWN GAP: `Inherits Exception` does not build");
         });
 
     // ---- The MSIL ByRef ladder's "is a PROPERTY" arm — now reached ONLY by a bare PLAIN
@@ -1144,47 +1155,6 @@ public class BarePropertyLoweringExecutionTests
 
             var output = MsilHarness.RunIlExpectingSuccess(File.ReadAllText(ilFiles[0]), "App");
             Assert.That(FourBackends.Norm(output), Is.EqualTo(BarePropertyLoweringProbes.P4Expected));
-        }
-        finally { try { Directory.Delete(dir, true); } catch { /* temp */ } }
-    }
-
-    /// <summary>Runs already-generated JS under Node and returns (exit code, stdout, stderr)
-    /// instead of hard-asserting success — <c>JavaScriptExecutionTests.RunNodeScript</c> asserts
-    /// exit code ZERO unconditionally, wrong for pinning a KNOWN crash (P15). Mirrors
-    /// <c>CallVisibilityDeclarationsRuleTests.RunNodeAllowingFailure</c>'s process handling.</summary>
-    private static (int ExitCode, string Stdout, string Stderr) RunNodeAllowingFailure(string js)
-    {
-        var node = BasicLang.Runtime.NodeLocator.Find();
-        if (node == null)
-            Assert.Ignore("Node.js not found — the JS execution tier cannot run on this machine.");
-
-        var dir = Path.Combine(Path.GetTempPath(), "BasicLang_BarePropJsCrash_" + Path.GetRandomFileName());
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var file = Path.Combine(dir, "program.mjs");
-            File.WriteAllText(file, js);
-
-            var psi = new ProcessStartInfo(node!)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            psi.ArgumentList.Add(file);
-
-            using var p = Process.Start(psi)!;
-            var stdoutTask = p.StandardOutput.ReadToEndAsync();
-            var stderrTask = p.StandardError.ReadToEndAsync();
-
-            if (!p.WaitForExit(30000))
-            {
-                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                Assert.Fail($"node did not exit within 30s.\n--- generated JS ---\n{js}");
-            }
-
-            return (p.ExitCode, stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult());
         }
         finally { try { Directory.Delete(dir, true); } catch { /* temp */ } }
     }
