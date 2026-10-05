@@ -529,10 +529,17 @@ namespace BasicLang.Compiler.ProjectSystem
             var basicLangMainCount = 0;
             if (blSources.Count > 0)
             {
+                // ⛔ OptimizeAggressive asks the SAME question as the CLI's managed build route
+                // (ProjectFile.OptimizationsEnabledFor): a Release build runs the aggressive IR
+                // pipeline here exactly as it does on C#, JavaScript and MSIL. Leaving it unset (it
+                // was, until task #134) silently ran the STANDARD pipeline for every C++ project in
+                // every configuration. Here in EmitCore, not in Build, so the IntelliSense headers
+                // carry the same code the build compiles.
                 var compiler = new BasicCompiler(new CompilerOptions
                 {
                     TargetBackend = "cpp",
                     NetResolverFactory = netResolverFactory,
+                    OptimizeAggressive = project.OptimizationsEnabledFor(configuration),
                 });
                 compilation = compiler.CompileProjectFiles(blSources);
 
@@ -922,13 +929,12 @@ namespace BasicLang.Compiler.ProjectSystem
                 CppStandard = project.CppStandard,
                 WorkingDirectory = outputDir,
                 DebugSymbols = true,
-                Optimize = false,
+                // The answer the IR pipeline got in the transpile stage: -O2 and the aggressive
+                // passes travel together.
+                Optimize = project.OptimizationsEnabledFor(configuration),
             };
             if (project.Configurations.TryGetValue(configuration, out var config))
-            {
-                request.Optimize = config.OptimizationsEnabled;
                 request.DebugSymbols = config.DebugSymbols;
-            }
             // User C++ TUs plus the generated per-module .g.cpp files (both absolute).
             // The .g suffix keeps generated basenames from colliding with user files.
             request.SourceFiles.AddRange(userTus);

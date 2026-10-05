@@ -838,7 +838,8 @@ namespace BasicLang.Compiler.Driver
             {
                 TargetBackend = project.Backend.ToLowerInvariant(),
                 OutputPath = outputDir,
-                OptimizeAggressive = project.Configurations.TryGetValue(configuration, out var config) && config.OptimizationsEnabled
+                // The same question CppProjectBuilder asks for a native project — one rule.
+                OptimizeAggressive = project.OptimizationsEnabledFor(configuration)
             };
 
             // Add package assemblies to search paths

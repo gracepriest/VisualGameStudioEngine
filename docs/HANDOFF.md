@@ -2434,15 +2434,18 @@ These are measured, not cautionary. Each one shipped a green build that did the 
   all of which go through the one shared definition, `AggressivePipeline.Apply`. The aggressive
   pipeline **ships**: a Release `.blproj` build and `--optimize` both take it. ✅ Since ADR-0003
   those legs are safe for LOOPS on all four backends (they were not — see #114 below).
-  ⛔ **EXCEPT A C++ `.blproj` — it runs the STANDARD pipeline whatever its `<Optimize>` says**
-  (measured 2026-09-24). `CppProjectBuilder.cs:532-536` builds its `CompilerOptions` without
-  `OptimizeAggressive`, so `Compiler.cs:458-461` takes `AddStandardPasses()`; the project's
-  `<Optimize>` reaches only the native compiler flag. C#, JavaScript and MSIL projects go through
-  `Program.cs:502`, which honours it. So **a C++ `.blproj` test leg cannot see an aggressive-only
-  defect** — the LICM miscompile fixed on 2026-09-24 printed 6 under CLI `--optimize` and 12 from
-  the same program's C++ `.blproj`. Use `BclE2E.CompileToCppAggressive` or the CLI for such work.
-  Whether a C++ Release build SHOULD take the aggressive pipeline is an open decision, not a bug to
-  fix silently: changing it changes shipped C++ output.
+  ✅ **A C++ Release `.blproj` takes it too (#134).** Until #134 it ran the STANDARD pipeline
+  whatever its configuration said — `CppProjectBuilder.EmitCore` built its `CompilerOptions`
+  without `OptimizeAggressive` — so a C++ `.blproj` leg could not see an aggressive-only defect
+  (the LICM miscompile fixed on 2026-09-24 printed 6 under CLI `--optimize` and 12 from the same
+  program's C++ `.blproj`). ⛔ Now ONE question decides it for the CLI's managed build and for
+  every C++ route: `ProjectFile.OptimizationsEnabledFor(configuration)` — asked by `Program.cs`'s
+  `build`, by `CppProjectBuilder` (the CLI and IDE C++ builds AND IntelliSense's `obj/gen`, all
+  through `EmitCore`), and for the native `-O2`/`/O2` flag. A Debug build stays standard. Don't add
+  a second copy of the rule. (The IDE's MANAGED build still reads its own project model,
+  `BuildService`'s `config.Optimize`.) ⚠ On Linux a BasicLang C++ build stops at BL6015 (MSVC)
+  only AFTER it has written `obj/gen`, so a test can still read and clang-compile what a Release
+  build emits.
 - ⛔⛔ **A PROPERTY WITH NO CONSUMER CANNOT BE TESTED FROM A BACKEND.** `ControlFlowGraph.NaturalLoops`
   is read by nothing in the shipping compiler since ADR-0003 unregistered all three loop passes, so
   reverting the back-edge fix changes ZERO of 104 end-to-end cells. The same shape recurs whenever a
