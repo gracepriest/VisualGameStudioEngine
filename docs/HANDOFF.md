@@ -17,6 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #143 DONE, JavaScript reads a field-named value back through the field (fix `d42d63cf`, JS only)
+
+- **The bug:** `K = p + q` renames the binop after the field; JS WROTE it `this.K`/`Owner.K` and READ it back as a bare `K` — a ReferenceError once CSE forwarded it into `Dim a = (p + q) * 2`. `JavaScriptBackend.BindsToMember` is now the ONE predicate for the write (`Bind`) and the read (`BoundRef`); the field-access, indexer and cast arms bind by name and stay bare. C#/C++/MSIL were right.
+- **Tests** (`CallVisibilityDeclarationsRuleTests.cs`): the Q3n pin `…KnownGap_ReferenceErrorOnMeK` is now `Q3n_JavaScript_PrintsVbcsAnswer_InEveryEntryPoint`; 5 `[TestCase]` rows (Q3b/d/e/i/h, vbc `.exp`) through the CLI, `--optimize` and `CompileProjectFiles`; 2 fast text tests. Mutants: no read-back killed by 7, no shadow check by Q3h, always-`this.` by Q3b/Q3i.
+- ⛔ **Follow-up, MSIL, pre-existing, NOT fixed, no test pins it:** `F = Not F` on a Boolean FIELD inside a called Sub prints `True` (vbc `False`) — `Class Box: Public F As Boolean: Sub Flip(): F = Not F` then `F = p < q : Flip()`.
+- ⛔ **Follow-up, MSIL, pre-existing, NOT fixed:** an inherited `Shared` field written in a derived method prints `0` (vbc `99`) — `CallVisibilityShapes.Q3i`; its JS row asserts vbc's answer, so the MSIL cell is the gap.
+
+---
+
 ## ✅ NEWEST — 2026-10-05: #142, #265 and #213 FIXED — a `MyBase.M(...)` call carries its target's ByRef, Optional, ParamArray and parameter-type facts
 
 `IRBuilder.LowerMethodCallArguments` (the instance call's own path) lowers a base call's arguments; `IRBaseMethodCall.ByRefArguments` mirrors `IRInstanceMethodCall`'s. Measured against vbc (13 probes x 4 backends x CLI/`-O`/Release): every cell prints vbc's answer or is a refusal by design — JS ByRef (BL7002), JS `Long` (BL7003), C++ `Object` parameter, and a variable a lambda also captures passed ByRef (refused on C++/MSIL like `Me.SetIt(q)`).
