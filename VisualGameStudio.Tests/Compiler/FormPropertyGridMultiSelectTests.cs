@@ -13,7 +13,7 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>btn</c>/<c>btn2</c> (Buttons), <c>lbl</c> (Label), <c>txt</c> (TextBox), <c>tmr</c> (Timer).</para>
 /// </summary>
 [TestFixture]
-public class FormPropertyGridMultiSelectTests
+public partial class FormPropertyGridMultiSelectTests
 {
     internal const string MultiDoc = """
         <Form Name="GridForm" Version="1" Width="640" Height="480" Text="GridForm">
@@ -418,9 +418,14 @@ public class FormPropertyGridMultiSelectTests
 
         Assert.That(path, Is.Not.Null, "a source gate that cannot find its file must FAIL");
         var source = File.ReadAllText(path!);
+        // Any spelling of an assignment — `PropertyGrid.SelectedControl =`, `PropertyGrid!.SelectedControl=`, `?.` — but
+        // not a comparison (`==`) or a read.
+        var assignment = new System.Text.RegularExpressions.Regex(@"PropertyGrid\s*[!?]?\s*\.\s*SelectedControl\s*=(?!=)");
         Assert.Multiple(() =>
         {
-            Assert.That(source, Does.Not.Contain("PropertyGrid.SelectedControl ="),
+            Assert.That(assignment.IsMatch("PropertyGrid!.SelectedControl=x;") && assignment.IsMatch("PropertyGrid .SelectedControl = x;") &&
+                        !assignment.IsMatch("PropertyGrid.SelectedControl == x"), Is.True, "precondition: the pin's own pattern");
+            Assert.That(assignment.Matches(source).Select(m => m.Value), Is.Empty,
                 "slice 6 D-1: the host hands the grid the SET (SetSelection); only the canvas binding writes SelectedControl");
             Assert.That(source, Does.Contain("PropertyGrid.SetSelection(Selection.Controls)"));
         });

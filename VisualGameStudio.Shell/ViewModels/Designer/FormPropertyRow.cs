@@ -217,13 +217,6 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>The gesture tally every member was built with (<see cref="FormEditTally.Mark"/> as its change callback).</summary>
     private readonly FormEditTally? _tally;
 
-    /// <summary>
-    /// ⚠ Slice 6 Task 2 ONLY: the multi-edit (one Edited, all-or-nothing) lands in Task 3, so until then a merged row is
-    /// frozen with this reason rather than offering an editor that does nothing. Task 3 deletes it.
-    /// </summary>
-    internal const string MultiEditNotYetReason =
-        "Editing several controls at once is not wired yet (property grid slice 6, Task 3).";
-
     /// <summary>A merged row (slice 6): see <see cref="Merged"/>.</summary>
     private FormPropertyRow(
         IReadOnlyList<FormPropertyRow> members, IReadOnlyList<FormControl> owners, FormEditTally tally, Action onChanged)
@@ -245,9 +238,137 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // D-3: a frozen member (D9 Degraded) freezes the set, and the reason names it — nothing may coerce a preserved value,
         // even in company.
         var frozen = members.Select((m, i) => (Member: m, Owner: owners[i])).FirstOrDefault(x => x.Member.IsFrozen);
-        FrozenReason = frozen.Member != null
-            ? $"'{frozen.Owner.Id}': {frozen.Member.FrozenReason}"
-            : MultiEditNotYetReason;
+        FrozenReason = frozen.Member != null ? $"'{frozen.Owner.Id}': {frozen.Member.FrozenReason}" : null;
+    }
+
+    /// <summary>
+    /// For a composite PART: how it composes the parent's WHOLE value from a part value (null = nothing to write). Set by
+    /// <see cref="FormCompositeRows"/>; read by <see cref="Preview"/>, so a merged part can pre-judge each member's whole
+    /// (slice 6 D-5) without writing anything.
+    /// </summary>
+    internal Func<string, string?>? Compose { get; set; }
+
+    /// <summary>
+    /// What a commit of <paramref name="value"/> WOULD do to this row — the same decision <see cref="Commit"/> takes
+    /// (the catalog's Judge, or the intrinsic no-op rule; a part asks its parent about the composed whole) — writing
+    /// nothing. The refusal's reason comes with a Refuse. Slice 6 D-5: a merged row pre-judges every member with this.
+    /// </summary>
+    internal (FormEditVerdict Verdict, string? Refusal) Preview(string value)
+    {
+        if (IsFrozen)
+        {
+            return (FormEditVerdict.Refuse, FrozenReason);
+        }
+
+        if (Compose != null && Parent != null)
+        {
+            return Compose(value) is { } whole ? Parent.Preview(whole) : (FormEditVerdict.NoOp, null);
+        }
+
+        if (_definition != null)
+        {
+            var verdict = _definition.Judge(value, IsPresent ? RawValue : null, _target);
+            return (verdict, verdict == FormEditVerdict.Refuse ? _definition.DescribeRefusedEdit(value, _target) : null);
+        }
+
+        return (IsSameIntrinsicValue(value, DisplayValue) ? FormEditVerdict.NoOp : FormEditVerdict.Write, null);
+    }
+
+    /// <summary>
+    /// ⛔⛔ The multi-edit (slice 6 D-5): ONE Edited, ONE write, ONE undo step — and all-or-nothing.
+    /// <list type="number">
+    /// <item>Every member is PRE-JUDGED (<see cref="Preview"/>). If any refuses, nothing is written: the refusal names
+    /// the members (<c>'txt' (TextBox): …</c>) and the editor snaps back. VS cancels the whole transaction too.</item>
+    /// <item>A Reset verdict on any member is the Reset gesture: done for all when every member can reset, otherwise the
+    /// editor snaps back and nothing is written.</item>
+    /// <item>Otherwise each member commits through its OWN rule (its own no-op / write against its own value), counted by
+    /// the tally the members were built with, and <see cref="_onChanged"/> is raised ONCE when anything changed.</item>
+    /// </list>
+    /// </summary>
+    private void CommitMerged(string value)
+    {
+        var verdicts = _members!.Select((m, i) => (Member: m, Owner: _owners![i], Judged: m.Preview(value))).ToList();
+
+        Refusal = null;
+        var refused = verdicts.Where(v => v.Judged.Verdict == FormEditVerdict.Refuse).ToList();
+        if (refused.Count > 0)
+        {
+            Refusal = string.Join(" ", refused.Select(r => $"'{r.Owner.Id}' ({r.Owner.Kind}): {r.Judged.Refusal}"));
+            RaiseEditorRefresh(value);
+            return;
+        }
+
+        if (verdicts.Any(v => v.Judged.Verdict == FormEditVerdict.Reset))
+        {
+            if (CanReset)
+            {
+                ResetMerged();
+            }
+            else
+            {
+                RaiseEditorRefresh(value);
+            }
+
+            return;
+        }
+
+        _tally!.Reset();
+        foreach (var member in _members!)
+        {
+            member.Commit(value);
+        }
+
+        if (_tally.Count == 0)
+        {
+            // Nothing moved (every member already showed it, or the store declined it everywhere — unparseable Int text):
+            // the editor re-reads what the members show.
+            RaiseEditorRefresh(value);
+            return;
+        }
+
+        RaiseValueChanged();
+        _onChanged();
+    }
+
+    /// <summary>Reset over a merged row (offered only when every member can, D-3): every member resets, ONE Edited.</summary>
+    private void ResetMerged()
+    {
+        _tally!.Reset();
+        foreach (var member in _members!)
+        {
+            member.Reset();
+        }
+
+        if (_tally.Count > 0)
+        {
+            RaiseValueChanged();
+            _onChanged();
+        }
+    }
+
+    /// <summary>
+    /// D-9: the document changed under the rows while the selection stood (an Arrange, a drag, an undo-less refresh) —
+    /// every view of this row re-reads, parts and members included. ⛔ Notifications ONLY: never a commit, never the editor
+    /// echo; a row inside its refused value's posted two-step echo (<see cref="_editorEcho"/> set) is skipped, its posted
+    /// step owns the refresh (pre-flight D-9 re-entrancy rule).
+    /// </summary>
+    internal void RefreshValue()
+    {
+        if (_editorEcho != null)
+        {
+            return;
+        }
+
+        RaiseOwnValueChanged();
+        foreach (var child in _children)
+        {
+            child.RefreshValue();
+        }
+
+        foreach (var member in Members)
+        {
+            member.RefreshValue();
+        }
     }
 
     /// <summary>
@@ -336,8 +457,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     IReadOnlyList<IFormDisplayRow> IFormDisplayRow.SubRows => _children;
 
-    /// <summary>The catalog row, for a composite helper that needs its type; null for an intrinsic row.</summary>
-    internal FormPropertyDef? Definition => _definition;
+    /// <summary>
+    /// The catalog row, for a composite helper that needs its type; null for an intrinsic row. Public since slice 6: the
+    /// multi-select tests judge each member through its own catalog row (the Shell grants the tests no internals).
+    /// </summary>
+    public FormPropertyDef? Definition => _definition;
 
     /// <summary>Makes <paramref name="children"/> this row's parts. Called once, while the grid builds its rows.</summary>
     internal void AdoptChildren(IEnumerable<FormPropertyRow> children)
@@ -428,7 +552,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public bool IsCheckBox => false;
 
-    public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int;
+    /// <summary>
+    /// ⚠ Not while a merged row is MIXED (slice 6 D-4): an int cannot say "blank" and the NumericUpDown would show a false
+    /// 0 (measured, pre-flight M5) — that row takes the text box (<see cref="IsTextBox"/>). Both flags are raised whenever
+    /// the value changes, so the swap follows the mixedness.
+    /// </summary>
+    public bool IsNumericUpDown => Typed && _type == FormPropertyType.Int && !IsMixed;
 
     /// <summary>
     /// A drop-down: an Enum's members, a Cursor row's <c>Cursors</c> members (<see cref="FormPropertyDef.Choices"/>), a
@@ -444,11 +573,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// drop-down since slice 4 D-7: <see cref="IsComboBox"/>.)
     /// </summary>
     public bool IsTextBox => Typed && !IsCollectionEditor &&
-        _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
+        (_type == FormPropertyType.Int && IsMixed ||
+         _type is FormPropertyType.String or FormPropertyType.Color or FormPropertyType.Size
             or FormPropertyType.Font or FormPropertyType.Padding or FormPropertyType.Fraction
             or FormPropertyType.CssClasses
             // Slice 4 Task 8: an image/icon path is typed text (Resources/logo.png) — the picker (Task 10) sits beside it.
-            or FormPropertyType.Image or FormPropertyType.Icon;
+            or FormPropertyType.Image or FormPropertyType.Icon);
 
     /// <summary>
     /// An item collection (ComboBox / ListBox / CheckedListBox <c>Items</c>, slice 4 Task 7): VS's read-only
@@ -553,8 +683,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>The picker's result: ONE value through the row's own Commit (Judge decides; a refused value is said).</summary>
     public void ApplyAsset(string value) => Commit(value);
 
-    /// <summary>The font the dialog starts from: the row's value, or — absent — what its control inherits.</summary>
-    public FormFontValue? EffectiveFont => FormCompositeRows.EffectiveFont(this);
+    /// <summary>
+    /// The font the dialog starts from: the row's value, or — absent — what its control inherits. Merged (slice 6 D-4): the
+    /// PRIMARY's effective font — the shared one when the members agree, a useful start when they differ (OK writes one
+    /// whole font to all either way).
+    /// </summary>
+    public FormFontValue? EffectiveFont => _members != null ? _members[^1].EffectiveFont : FormCompositeRows.EffectiveFont(this);
 
     /// <summary>The Font dialog's OK: ONE canonical value through the row's own Commit (fan-in; Judge decides).</summary>
     public void ApplyFont(string canonical) => Commit(canonical);
@@ -762,9 +896,14 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     {
         // ⚠ RelayCommand.Execute does NOT consult CanExecute — a context menu, a key binding or a test
         // can run this on an absent or frozen row, and it must not report an edit that changed nothing.
-        // ⚠ Slice 6 Task 2: a merged row resets nothing yet — the all-or-nothing multi-edit lands in Task 3.
-        if (!CanReset || _members != null)
+        if (!CanReset)
         {
+            return;
+        }
+
+        if (_members != null)
+        {
+            ResetMerged();
             return;
         }
 
@@ -830,6 +969,17 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
             : EditorText;
         set
         {
+            // ⛔ Slice 6 D-4: an EMPTY push from a merged row's mixed editor is not an edit — blank is how "mixed" LOOKS. A
+            // mixed combo (M4: it pushes null, guarded in Commit) or a mixed text box left without typing must never write
+            // "" into every member (a String would take it; a typed row would read it as Reset). ⚠ Keyed on the EDITOR,
+            // not on today's mixedness, for an Int row: its StringValue is pushed ONLY by the text box it gets while mixed
+            // (the NumericUpDown pushes IntValue), so a text box dying after the row became un-mixed under the focus
+            // still pushes its stale "" here — and is still ignored.
+            if (_members != null && value is "" && (IsMixed || _type == FormPropertyType.Int))
+            {
+                return;
+            }
+
             if (IsEditableReference)
             {
                 CommitReference(value);
@@ -861,7 +1011,8 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         }
 
         var before = DisplayValue;
-        Commit(BoolValue ? "false" : "true");
+        // Slice 6 D-4: a MIXED merged Bool cycles to VS's first standard value — True for all.
+        Commit(IsMixed ? "true" : BoolValue ? "false" : "true");
         return !string.Equals(before, DisplayValue, StringComparison.Ordinal);
     }
 
@@ -962,6 +1113,12 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     {
         get
         {
+            // Slice 6 D-4: a mixed merged Anchor says nothing (the box still starts from WinForms' Top, Left).
+            if (IsMixed)
+            {
+                return "";
+            }
+
             var edges = Edges;
             var names = EdgeOrder.Where(e => edges.HasFlag(e)).Select(e => e.ToString()).ToList();
             return names.Count == 0 ? "None" : string.Join(", ", names);
@@ -1010,12 +1167,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// </summary>
     public string DockValue => string.IsNullOrWhiteSpace(RawValue) ? "None" : RawValue.Trim();
 
-    public bool IsDockedNone => DockValue.Equals("None", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedTop => DockValue.Equals("Top", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedBottom => DockValue.Equals("Bottom", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedLeft => DockValue.Equals("Left", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedRight => DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
-    public bool IsDockedFill => DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
+    // Slice 6 D-4: a MIXED merged Dock lights no region and its summary is blank.
+    public bool IsDockedNone => !IsMixed && DockValue.Equals("None", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedTop => !IsMixed && DockValue.Equals("Top", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedBottom => !IsMixed && DockValue.Equals("Bottom", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedLeft => !IsMixed && DockValue.Equals("Left", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedRight => !IsMixed && DockValue.Equals("Right", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockedFill => !IsMixed && DockValue.Equals("Fill", StringComparison.OrdinalIgnoreCase);
 
     private static readonly string[] DockRegions = { "None", "Top", "Bottom", "Left", "Right", "Fill" };
 
@@ -1025,7 +1183,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// Display only: never written.
     /// </summary>
     public string DockSummary =>
-        DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
+        IsMixed ? "" : DockRegions.FirstOrDefault(r => r.Equals(DockValue, StringComparison.OrdinalIgnoreCase)) ?? DockValue;
 
     /// <summary>
     /// Sets the dock region. ⚠ <c>None</c> writes the empty string rather than the word, so an
@@ -1075,6 +1233,13 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         // another commit, refusal and echo — that would loop.
         if (_editorEcho != null)
         {
+            return;
+        }
+
+        // Slice 6: a merged row commits over its members — pre-judged, all-or-nothing, ONE Edited.
+        if (_members != null)
+        {
+            CommitMerged(value);
             return;
         }
 
@@ -1267,7 +1432,11 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
                  {
                      nameof(RawValue), nameof(DisplayValue), nameof(StringValue), nameof(BoolValue),
                      nameof(IntValue), nameof(IsPresent), nameof(IsBold), nameof(IsDefaultShown), nameof(CanReset),
-                     nameof(IsMixed),
+                     // Slice 6: mixedness can change with the value, and these follow it (D-4).
+                     nameof(IsMixed), nameof(IsNumericUpDown), nameof(IsTextBox), nameof(AnchorSummary),
+                     nameof(AnchorTop), nameof(AnchorBottom), nameof(AnchorLeft), nameof(AnchorRight),
+                     nameof(DockValue), nameof(DockSummary), nameof(IsDockedNone), nameof(IsDockedTop),
+                     nameof(IsDockedBottom), nameof(IsDockedLeft), nameof(IsDockedRight), nameof(IsDockedFill),
                      nameof(SwatchColor), nameof(Swatch), nameof(HasUnknownSwatch)
                  })
         {

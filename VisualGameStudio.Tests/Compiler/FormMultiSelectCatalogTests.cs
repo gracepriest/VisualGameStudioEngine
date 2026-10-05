@@ -126,7 +126,11 @@ public class FormMultiSelectCatalogTests
 
     /// <summary>
     /// Catalog-driven: for EVERY pair of same-named rows across kinds (FormRoot included), the predicate is symmetric and
-    /// says exactly "same type, same enum type, same members" — computed here independently of its implementation.
+    /// agrees with "same type, same enum type, same members". ⚠ That expectation MIRRORS <see cref="FormPropertyDef.SharesShapeWith"/>
+    /// clause for clause — it is not an independent oracle, so a clause dropped from both would pass here. The real pins
+    /// are the named cases below: <see cref="TextAlign_OnAButtonAndATextBox_IsNotTheSameRow_ButBackColorOnAButtonAndALabelIs"/>
+    /// and, for the enum-type clause (which today's catalog alone cannot kill — every same-named enum pair also differs in
+    /// members), <see cref="TwoEnumRows_WithTheSameMembers_ButDifferentEnumTypes_AreNotTheSameRow"/>.
     /// ⚠ One test over a loop, not a TestCaseSource: the pairs number in the thousands.
     /// </summary>
     [Test]

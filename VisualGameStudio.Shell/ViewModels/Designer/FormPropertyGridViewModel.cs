@@ -966,6 +966,30 @@ public partial class FormPropertyGridViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// ⛔ Slice 6 D-9: the document changed under the rows while the selection stands — an Arrange, a drag, an arrow nudge,
+    /// a paste — and every row re-reads its value (parts and merged members included), every Events row its handler. So
+    /// the shared Location of three selected controls follows an align-lefts without a reselect; and the same was true of
+    /// a SINGLE selection, whose X row kept showing the pre-drag number (measured, pre-flight M2).
+    ///
+    /// <para>⚠ Called on EVERY model revision — including the one the grid's own edit makes, i.e. INSIDE a row's
+    /// Commit → Edited → write chain. It therefore only notifies: no commit, no echo, and a row in its refusal's posted echo
+    /// is skipped (<see cref="FormPropertyRow"/>.<c>RefreshValue</c>). Never a rebuild: that would drop the focus and the
+    /// expanded parts mid-edit and re-run slice 5's stale-LostFocus hazard.</para>
+    /// </summary>
+    public void RefreshValues()
+    {
+        foreach (var row in Rows)
+        {
+            row.RefreshValue();
+        }
+
+        foreach (var row in EventRows)
+        {
+            row.HandlerChanged();
+        }
+    }
+
     /// <summary>Gives a catalog row its composite parts (a Font, a Size, a Padding), and returns it.</summary>
     private static FormPropertyRow Composite(FormPropertyRow row)
     {
@@ -1075,6 +1099,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         RefreshObjects();
         RefreshDisplay();
 
+        OnPropertyChanged(nameof(SelectedControls));
+        OnPropertyChanged(nameof(IsMultiSelection));
         OnPropertyChanged(nameof(Header));
         OnPropertyChanged(nameof(HeaderKind));
         OnPropertyChanged(nameof(IsEmpty));

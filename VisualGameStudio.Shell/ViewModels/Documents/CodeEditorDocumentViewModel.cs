@@ -1463,6 +1463,10 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // so the list follows the document while the Form stays selected.
         PropertyGrid.RefreshReferenceChoices();
 
+        // Slice 6 D-9: every row re-reads its value while the selection stands (an Arrange over three controls; a drag of
+        // one — M2 measured the single selection's X row stale too). Notifications only; safe inside the grid's own edit.
+        PropertyGrid.RefreshValues();
+
         // ⚠ A rename's target is asked too: it is normally the Host as well, but EditTarget is the
         // one the commit writes to, so it is the one that must never outlive its document.
         bool Stale(BasicLang.Forms.FormControl? c) =>

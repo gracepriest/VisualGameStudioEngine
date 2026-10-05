@@ -900,6 +900,44 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   |---|---|
   | ★ intersection by name only (`r.Name == row.Name` for `SharesShapeWith`) | KILLED: `AButtonAndATextBox_OfferNoTextAlign_…`, the pair sweep |
   | ★ blank-when-mixed removed (`Shared` returns the primary's value) | KILLED: `AValueEveryMemberShows_…`, `TwoAbsentRows_…`, `AFrozenMember_…` |
+- Review of `a75b50f2` + `55facb58`: approved. Its minors are folded into Task 3's commit: the pair sweep's comment now
+  says it MIRRORS `SharesShapeWith` (the synthetic enum test is the real pin); the source pin is a regex over every
+  assignment spelling (`PropertyGrid!.SelectedControl=`, `?.`, spaces; never `==`), with its own pattern self-checked;
+  the grid raises `SelectedControls`/`IsMultiSelection` on every rebuild (for a view that binds them); and Reset on a
+  merged row acts (the interim freeze is gone).
+
+### Task 3 — the multi-edit (base `55facb58`)
+
+- `FormPropertyRow`: `Preview(value)` (the same Judge / intrinsic no-op decision `Commit` takes, writing nothing; a part
+  asks its parent about the whole it COMPOSES — `FormCompositeRows.Part` now records `Compose`). Merged `Commit` =
+  `CommitMerged`: pre-judge every member → any Refuse writes nothing, `Refusal` = `'id' (Kind): reason` per refusing
+  member, editor snaps back; any Reset verdict is the Reset gesture (all members, or nothing when one cannot reset);
+  otherwise each member commits on its own value, counted by the tally, and ONE `Edited` when the tally moved. Merged
+  `Reset` resets every member, one `Edited`. The Task-2 interim freeze (`MultiEditNotYetReason`) is DELETED.
+- D-4 editors: a mixed Int row is a text box (`IsNumericUpDown` false / `IsTextBox` true while mixed; both raised on
+  every value change); an EMPTY `StringValue` push into a merged row is ignored when the row is mixed, and ALWAYS for an
+  Int row (only the mixed text box pushes an Int row's StringValue — the "keyed on the editor" rule, so a text box dying
+  after an un-mix is still ignored); a mixed Bool's double-click sets True on all; the Font dialog starts from the
+  primary's effective font; a mixed Anchor's summary is blank and its box starts at Top, Left (whole value to all); a
+  mixed Dock lights nothing and its summary is blank.
+- D-9: `FormPropertyGridViewModel.RefreshValues()` (every row, parts and members, `RaiseOwnValueChanged`; every Events
+  row `HandlerChanged`; a row with `_editorEcho` set skipped), called from `OnDesignModelRevisionChanged`. This also
+  fixes M2's single-selection staleness.
+- `FormPropertyRow.Definition` is public now (the tests judge each member through its own catalog row; the Shell grants
+  tests no internals).
+- **Red** (merged rows still frozen): 23 of 45 — every Edited-once case (0 edits), the undo test, Reset, all-or-nothing,
+  per-member, the mixed text-box switch, Anchor/Dock summaries, the Font start, Arrange's refresh, re-entrancy.
+- Green: `FormPropertyGridMultiSelectTests` (45, incl. a catalog-driven sweep of every row {btn, btn2, lbl} share) +
+  `FormMultiSelectCatalogTests` — **57/57**. RE-CHECK (`TestCategory!=Integration` over `FormPropertyGrid*`,
+  `FormPropertyRowDefaultTests`, `FormEventGrid*`, `FormSelectionTests`, `FormTrayViewTests`, `FormCompositeRowTests`,
+  `FormMultiSelectCatalogTests`, `FormCanvasUndoTests`) — **551/551**.
+- ⚠ Deviation: the Bold-part-on-two-fonts test lives in `FormPropertyGridMultiSelectTests` (it needs the merged grid),
+  not `FormCompositeRowTests`; that fixture is in the RE-CHECK run and unchanged.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ Edited raised per member (member callback = `Mark` + `RaiseEdited`) | KILLED: 20 tests incl. every Edited-once case and `AMultiEdit_IsOneUndoStep_…` (the real document view model) |
+  | ★ pre-judge skipped (partial apply) | KILLED: `AValueOneMemberRefuses_…`, `TheRevisionRefreshInsideAMergedEdit_…` |
 
 ## 7. Tests to re-check (consolidated)
 
