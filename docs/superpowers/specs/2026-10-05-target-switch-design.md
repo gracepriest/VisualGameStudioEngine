@@ -1,9 +1,12 @@
 # The Desktop | Web switch — piece 3 of "one form, either target" (design)
 
-Status: REVISION 1, 2026-10-05. Written under the owner's delegation of 2026-10-04 ("go with your recommendations, finish
-everything"): every question that would normally go to the owner is decided here as a **DECIDED** item with the
-alternatives that lost and why, so the owner can overrule any one of them later.
-Branch: `feat/target-switch`, based on `origin/master` @ `ecc30f28` (property grid complete).
+Status: REVISION 2, 2026-10-05 — revision 1 (`be7f18e5`) revised for the spec review under the coordinator's rulings
+(owner delegated); §13 maps every finding to where it is resolved. Written under the owner's delegation of 2026-10-04
+("go with your recommendations, finish everything"): every question that would normally go to the owner is decided here
+as a **DECIDED** item with the alternatives that lost and why, so the owner can overrule any one of them later.
+Branch: `feat/target-switch`; the spec was written against `origin/master` @ `ecc30f28` (property grid complete).
+⛔ **Implementation is based on master AFTER piece 2's sub-piece 2.0a has merged (its Task 17)** — so `#If` and the
+build symbols exist — never on bare `ecc30f28` (§8.1, coordinator ruling 10).
 Piece 2 is read from `origin/feat/portable-controls` @ `c722b644` (Tasks 0–7 of its plan; the library itself is not
 written yet). Paths are relative to the repo root; `P2:` prefixes a path read from that branch.
 
@@ -55,6 +58,11 @@ a set of lines the region writer tags as geometry or property lines; piece 3 wra
 | T6 | `IsNativeBuild = Language==Cpp ‖ TargetBackend==Cpp` | `BasicLangProject.cs:14` |
 | T7 | The IDE reads the backend in exactly four places: the build (`GetBackendId(project.TargetBackend)`), the build log line, and F5 / Ctrl+F5's JavaScript branch | `BuildService.cs:614`, `:379`; `MainWindowViewModel.cs:3945`, `:4195` |
 | T8 | "Add New Form" picks the document kind from `UseWindowsForms` (`.blform` when true, else `.blwebform`) | `VisualGameStudio.Shell/ViewModels/Panels/SolutionExplorerViewModel.cs:1331-1335` |
+| T9 | ⚠ The two parsers DISAGREE on precedence: the compiler reads `<Backend>` before `<TargetBackend>`; the IDE reads `<TargetBackend>` only, and when it is absent seeds the backend from the user setting `basiclang.compiler.backend` (`defaultBackendWhenOmitted`) — so a file with no `<TargetBackend>` can build C# in the CLI and JavaScript in the IDE | `ProjectFile.cs:209-211`; `ProjectSerializer.cs:18`, `:35`, `:55-59`, `:257-258`; `ProjectService.cs:43-66` |
+| T10 | `EnableNetResolution` returns early for `UseWindowsForms` / `UseWpf` (piece 2 Task 7d is DECIDED to arm it through the WindowsDesktop reference pack on Windows) | `BasicLang/Compiler.cs:135-154` (`:145`) |
+| T11 | A managed game project is recognised only from GENERATED code: `EngineDeployment.UsesEngine` keys on the backend's `using RaylibWrapper;` line, and the build then injects the wrapper reference and deploys the native DLL | `BasicLang/ProjectSystem/EngineDeployment.cs:43-51`; `BuildService.cs:850` |
+| T12 | There is NO per-project backend selector in the IDE (no Project Properties page); the only backend UI is Settings' "Compiler Backend" (`basiclang.compiler.backend`, user/workspace scope), which reaches a project only through T9's seeding | `VisualGameStudio.Shell/ViewModels/Dialogs/SettingsViewModel.cs:1180`, `:1501`, `:1814`; `SettingsService.cs:1204` |
+| T13 | Project references: the IDE orders a solution build by `ProjectReferences` and filters project references out of the csproj's assembly references; nothing checks that a referenced project builds for the same target | `BuildService.cs:256`, `:846` |
 
 ### 1.2 Build routes
 | # | Fact | Where |
@@ -69,6 +77,9 @@ a set of lines the region writer tags as geometry or property lines; piece 3 wra
 | B8 | A solution build builds every project in dependency order with ONE configuration name; each project's own backend applies | `BuildService.cs:81-140`; `SolutionService.cs:245` |
 | B9 | `P2:` `BuildSymbols.For(backend, configuration, defineConstants)` is THE answer to the symbol set: `WEB` for javascript/js, `DESKTOP` otherwise, DEBUG/RELEASE by configuration; WEB/DESKTOP in DefineConstants are ignored with a warning. Called by the `BasicCompiler` constructor (every route) and the LSP | `P2:BasicLang/BuildSymbols.cs:18-90`; `P2:BasicLang/Compiler.cs:198-204`; `P2:BuildService.cs:661-674` |
 | B10 | `BuildSymbols` does NOT exist on master; master's `CompilerOptions` has no symbol field and `DefineConstants` never reaches the compiler | `BasicLang/Compiler.cs:90-155`, `:186` |
+| B11 | **Every consumer of an output path today** (each must ask §4.3; ⛔ none may keep a literal): IDE `CleanAsync` deletes each configuration's `OutputPath` (`BuildService.cs:308-324`, `:314`); IDE compile output (`:615`), dispatch `obj\<config>` (`:647-648`), `ExecutablePath` (`:916-920`), `ResolveOutputDirectory` (`:968`); CLI build output (`Program.cs:794`), dispatch `obj/<config>` (`:826`); CLI `run` output (`:1243`), its JavaScript branch (`:1255-1264`) and exe probes (`:1272-1284`); VSIX `FindBuiltExecutable` (`CommandHandlers.cs:187-209`) and its "No executable found under bin\Debug" message (`:375`); IDE F5 exe check (`MainWindowViewModel.cs:4011`), Ctrl+F5 (`:4187-4228`), the JS preview's site folder and startup page (`:4255-4311`), `RunInExternalConsoleAsync` (`:4348`). Unchanged (native, never platformed): `CppProjectBuilder.cs:423`, `BuildService.cs:1349-1449`. Defaults written as literals: `ProjectSerializer.cs:130`, `:266`, `:277`, `:811`; `ProjectService.cs:101`, `:108`; `ProjectTemplateService.cs:327`; `BuildConfigurationDialogViewModel.cs:25`, `:35`, `:96`, `:136`; `Core/Models/BuildConfiguration.cs:6` | as cited |
+| B12 | ⚠ The IDE model cannot tell an explicit `OutputPath` from the default: the reader fills `bin\<config>` when the element is absent and the writer omits it when it equals that default | `ProjectSerializer.cs:130`, `:811` |
+| B13 | CLI `run` builds, then computes `bin/<config>/<TFM>` itself; for a JavaScript project it prints "nothing to launch" and the `index.html` path | `Program.cs:1215-1264` |
 
 ### 1.3 Run and debug
 | # | Fact | Where |
@@ -93,6 +104,9 @@ a set of lines the region writer tags as geometry or property lines; piece 3 wra
 | U5 | No `.user` files exist (`*.user` appears only in the generated `.gitignore`) | `ProjectTemplateService.cs:1365` |
 | U6 | Error List: one `DiagnosticsAggregator` with three keyspaces — LSP per file, build (replaced whole per build), extensions; filters are severity only; `DiagnosticItem.Source` exists and is ignored by the list | `VisualGameStudio.Core/Utilities/DiagnosticsAggregator.cs:18-75`; `MainWindowViewModel.cs:1887-1926`, `:1017-1039`; `Shell/ViewModels/Panels/ErrorListViewModel.cs:17-108` |
 | U7 | Startup project is a Solution Explorer context-menu choice, stored as `DefaultProject` (`IsStartupProject` is not saved) | `SolutionExplorerViewModel.cs:552-558`; `BasicLangSolution.cs:29-62`; `SolutionService.cs:229-238` |
+| U8 | Workspace state is keyed by the CURRENT project's directory — with a solution open that is the startup project (`ProjectService.cs:211-217`), so changing the startup project changes the key | `MainWindowViewModel.cs:1262`, `:1685-1687`, `:1727-1729` |
+| U9 | ⚠ `RestoreWorkspaceStateAsync` returns early when the saved state has no dock layout — anything else restored after that line is skipped for such a state | `MainWindowViewModel.cs:1774-1780` |
+| U10 | `RunInExternalConsoleAsync` writes `%TEMP%\vgs_run.bat` and starts it; it has no web branch | `MainWindowViewModel.cs:4348` |
 
 ### 1.5 The editor
 | # | Fact | Where |
@@ -146,6 +160,13 @@ A project without `<Platforms>` builds exactly as today: JavaScript → `Web`; C
 adds a platform (§7). With `<Platforms>` present, the FIRST listed is the **default platform**, and `<TargetBackend>` is
 written equal to the default platform's backend on every save — so an older IDE or CLI that knows nothing of
 `<Platforms>` still builds the default platform correctly.
+- **The derivation reads the RAW file, through ONE shared reader** (§4.2): every unconditional `<PropertyGroup>` (MSBuild
+  order, last wins), `<Backend>` before `<TargetBackend>` — the compiler's precedence, because the build is the authority
+  — and an ABSENT element means C# (`Desktop`). ⛔ Never the IDE's `defaultBackendWhenOmitted` seed (T9).
+- **Intended change, recorded:** the IDE build of a project with no backend element then builds C#, as the CLI already
+  does; the `basiclang.compiler.backend` setting keeps its other job — seeding the backend WRITTEN INTO a new project. A
+  file that relied on the setting to build JavaScript in the IDE (never in the CLI) now needs `<TargetBackend>JavaScript`;
+  the first IDE load of such a file (setting ≠ C#, element absent) logs one Output line saying so.
 
 ### T-D4 — The active platform is per user, per workspace, in the existing workspace state
 `WorkspaceStateModel` gains `ActivePlatform` (string, nullable) and — VS parity, same mechanism — `ActiveConfiguration`
@@ -153,6 +174,12 @@ written equal to the default platform's backend on every save — so an older ID
 schema `Version` is NOT bumped: a bump discards every user's saved layout (`WorkspaceStateStore.cs:67`), and a new
 nullable property needs none (System.Text.Json leaves it null in an old file). Null / unknown / not declared → the
 project's default platform.
+- **Key: the SOLUTION's directory when a solution is open, else the project's.** The platform is one choice for the
+  workspace (T-D5), and today's key is the CURRENT project — with a solution, the startup project (U8) — so keying the
+  platform by project would forget it whenever the startup project changes. The layout keeps its current key
+  (unchanged); with a solution open the platform and configuration live in a second `state.json` under the solution key,
+  whose `DockLayout` is null. ⛔ Hence the restore reads `ActivePlatform`/`ActiveConfiguration` BEFORE (and independent of)
+  the `DockLayout == null` early return (U9) — otherwise a solution's platform is never restored.
 - ✗ *A `.blproj.user` file beside the project (VS's `ActiveDebugProfile` home)* — it lands in commits for anyone without
   the template's `.gitignore`, and the CLI would be tempted to read it, making a CI build depend on a developer's last
   click. VS keeps the active solution platform in the hidden `.suo`, i.e. per-user state — the workspace store is ours.
@@ -163,6 +190,12 @@ With a solution open, the toolbar's platform applies to every project: a project
 builds it; a project that does not builds its default platform, and the build log says so on one line
 (`"<Project>: Web is not one of its platforms — building Desktop"`). F5 runs the startup project (U7) on the active
 platform; if the startup project lacks it, F5 offers to add it (§7.1) rather than silently running the other target.
+- ⛔ **That mapping never applies along a REFERENCE.** A project building platform P whose `ProjectReference` names a
+  project that does not build P (neither declares it nor derives it, T-D3) is a BUILD ERROR, `ReferencePlatformMismatch`,
+  naming both: *"App (Web) references Shared, which does not build for Web. Add the Web platform to Shared or remove the
+  reference."* — raised before compile on every route (IDE solution and project builds, CLI), checked over the whole
+  reference closure. A Desktop app referencing a C# library and silently linking it into a JavaScript build is exactly
+  the wrong-arm failure this repo has paid for before (T13: nothing checks today).
 - ✗ *A per-project active platform* — two combos' worth of state for one decision; VS has one Solution Platforms combo.
 
 ### T-D6 — The toolbar: a second combo beside Debug/Release, always offering both platforms
@@ -182,11 +215,21 @@ platform; if the startup project lacks it, F5 offers to add it (§7.1) rather th
 - ✗ *Hide `Web` for a project that does not declare it* — then the owner's switch would be invisible on every existing
   WinForms project, which is exactly where it is wanted.
 
-### T-D7 — Build output is separated per platform: `bin\<Platform>\<Configuration>\`
-For a project WITH `<Platforms>`, outputs go to `bin\<Platform>\<Configuration>\` and intermediates to
+### T-D7 — Build output is separated per platform: `bin\<Platform>\<Configuration>\` is the DEFAULT layout
+For a project WITH `<Platforms>`, outputs go by DEFAULT to `bin\<Platform>\<Configuration>\` and intermediates to
 `obj\<Platform>\<Configuration>\` (MSBuild's own `bin\x64\Debug` convention), on BOTH routes, from ONE function in
-BasicLang that the IDE and the CLI call (§4.3) — so the two routes stop disagreeing (B4) for these projects. Projects
-without `<Platforms>` keep their exact current folders.
+BasicLang that the IDE, the CLI and (by contract) the VSIX use (§4.3) — so the routes stop disagreeing (B4) for these
+projects. Projects without `<Platforms>` keep their exact current folders.
+- **An explicit `OutputPath` (per configuration) WINS.** "Explicit" = the element is present in the file, read RAW by the
+  shared reader (the IDE model's filled-in default cannot say, B12; the model gains `OutputPathIsExplicit`). The tokens
+  `$(Platform)` and `$(Configuration)` are expanded in it. A dual-platform project whose explicit path lacks `$(Platform)`
+  builds both platforms into one folder — allowed (the user asked for it) and warned once per build, `SharedOutputPath`,
+  naming the path.
+- **The Build Configuration dialog** shows the effective folder: an implicit path appears as a greyed placeholder
+  (`bin\$(Platform)\Debug`, with the resolved `bin\Web\Debug` beneath it); typing makes it explicit; clearing the field
+  returns to the default. ⚠ Because the writer omits a value equal to the old default (B12), a user who explicitly typed
+  `bin\Debug` on a legacy project keeps getting `bin\Debug` (no `<Platforms>`, unchanged) — but after adding a platform
+  the omitted value is implicit and the default layout applies; the add-platform dialog lists the folder move (§7.1).
 - Why: both platforms in one folder would put `index.html` next to the `.exe`, let the web preview server serve the
   desktop binaries, and leave a stale page from a previous web build beside a fresh desktop build.
 - ✗ *`bin\<Configuration>\<platform>`* — inverts MSBuild's order for no gain.
@@ -195,8 +238,16 @@ without `<Platforms>` keep their exact current folders.
 `BasicLang.exe build App.blproj --platform=Web` (case-insensitive). Absent → the default platform. `All` builds each
 declared platform in declared order, each into its own folder, and fails if any fails. A platform the project does not
 declare is an ERROR naming the declared ones — never a fallback (the "missing arm silently builds C#" trap, B2).
-`--target=` keeps its single-file meaning (a backend name) and stays ignored by `build` (B1); the VSIX is unchanged
-(R2 in §10).
+`--target=` keeps its single-file meaning (a backend name) and stays ignored by `build` (B1).
+- **`run --platform=Desktop|Web`** (B13): builds that platform, then takes the folder from §4.3 (never its own
+  `bin/<config>/<TFM>` literal, `Program.cs:1243`). Desktop launches the exe as today; Web prints the startup page's path
+  and the "serve it over HTTP / press F5" advice of today's JavaScript branch (`:1255-1264`), now naming
+  `<StartupForm>.html`. `All` is refused for `run`.
+- **The VSIX** (`BasicLang.VisualStudio`) is NOT unchanged: it passes no `--platform` (so it builds the default
+  platform), and its `FindBuiltExecutable` (`CommandHandlers.cs:187-209`) and the `:375` message follow §4.3's DOCUMENTED
+  contract — the VSIX cannot link the net8 compiler — pinned by a contract test that runs the VSIX probe and
+  `ProjectOutputLayout.For` over one fixture table. When the default platform is Web, the VSIX's Run says what CLI `run`
+  says. A VSIX platform PICKER remains out of scope.
 - ✗ *Reuse `--target=web` on `build`* — the VSIX already passes `--target=csharp` for EVERY project, JavaScript ones
   included (B2); the day `build` honoured `--target`, every VSIX build of a web project would silently become a C# build.
 
@@ -227,6 +278,17 @@ Under `WEB` the region compiles to exactly piece 2's portable web init; under `D
 - ⚠ Every existing `.blform` region changes once (the hash is rewritten on the next designer save — the region is Canon,
   as piece 2 §6.3 already does for its `Name` line). Landing piece 3's region change in the same release as piece 2's
   avoids a second rehash for users.
+- **The shape is RECORDED in the marker, never guessed** (piece 2 §6.1's rule): both region markers of a wrapped
+  `.blform` carry `style="dual"` (`' <vgs:designer region="init" form="LoginForm.blform" style="dual" hash="…">`). A
+  `.blform` region with NO `style` is the legacy WinForms shape (unwrapped) — Desktop builds it unchanged, a Web build
+  reports `StaleDesignerRegion` (§8.3) — and nothing ever infers the shape by scanning the region for `#If`. The one
+  marker reader (`FormCodeStyle.Of`, P2 §6.1) learns the value; `style="dual"` on a `.blwebform` and `style="portable"`
+  on a `.blform` are BL8012 (malformed).
+- **Older drops:** a pre-piece-2 IDE/CLI reads any `style` attribute as BL8012 (P2 §11a "pre-2a drops read the marker as
+  BL8012") — it refuses to regenerate the region and never overwrites it, which is the safe outcome. A piece-2-era drop
+  must do the same for an UNKNOWN style value; Phase B's pre-flight measures that piece 2's reader treats an unrecognised
+  value as BL8012 on BOTH document kinds, and if it does not, piece 3's first Phase-B task makes it so (with a test)
+  before any `style="dual"` is written.
 - ✗ *Wrap only in dual-platform projects* — "Add Web" would then rewrite every form's region at the moment of adding,
   the region writer would need the project, and the CLI `design` verb would need a project argument.
 - ✗ *Two init regions (`#If DESKTOP` region + `#If WEB` region)* — duplicates the `New`/`Name`/`AddHandler`/`Controls.Add`
@@ -300,9 +362,50 @@ equivalent and is ignored on the web"*). The page is built without it. Code that
 - ✗ *Error* — the value is cosmetic and P-D6's "web versions arrive over time" applies to properties too; a desktop-first
   form should not need edits to build for the web unless a CONTROL is unavailable.
 
+### T-D18 — Desktop-only EVENTS are wrapped by the designer, exactly like properties
+An event is **desktop-only** when its catalog row has no web mapping (`FormEventDef.WebEvent == null`, P2 C2) — one
+predicate, catalog-driven, never a name list. For such an event the designer:
+- wraps its `AddHandler x.Evt, AddressOf H` line in the init region in `#If DESKTOP` (same block rule as T-D10; the line is
+  generated, so the user could not fix it — an unwrapped one would be an unfixable `WebUnavailableMember`);
+- writes the handler STUB it creates inside `#If DESKTOP Then … #End If` — the whole `Sub`, because its parameter list
+  names the WinForms args type (`WinFormsEventArgs`) the web library may not provide. The body the user then writes is
+  visibly desktop-only.
+A handler stub that ALREADY exists unwrapped (written before piece 3, or by hand) is user code: on a Web build its
+desktop-only args type is piece 2's `WebUnavailableMember`, whose message names the handler and says *"wrap the handler in
+`#If DESKTOP Then … #End If`"* — a fix the user CAN make; the add-platform dialog lists every such handler (§7.1).
+Mutation check: unwrap one desktop-only `AddHandler` → the Web build of the fixture fails.
+- ✗ *The web library provides no-op shims for every WinForms-only event and args type* — the handler would compile and
+  silently never run on the web; a user's code that depends on it would look wired and be dead.
+
+### T-D19 — .NET resolution of WinForms happens ONLY on a Desktop build
+`EnableNetResolution` (T10) keys on `UseWindowsForms` AND the build's platform being Desktop: the call receives the
+platform (through `CompilerOptions`, from §4.2), and on Web `UseWindowsForms`/`UseWpf` are treated as false — a Web build
+never resolves `System.Windows.Forms` against .NET (it is the library's namespace there, P2 §4.9), whatever piece 2's
+Task 7d arms for Desktop. The LSP passes the same platform. Test: a dual project whose code-behind uses a WinForms member
+the library lacks is `WebUnavailableMember` on Web, not a silently .NET-resolved success.
+
+### T-D20 — Add Web is REFUSED (with the reason) for game, WPF and native projects
+"Game projects untouched." The add-platform step refuses Web, naming the reason, for:
+- **a managed game project** — one whose Desktop build injects the engine (T11). Detection: the step runs the Desktop
+  codegen in memory (no `dotnet build`) and asks `EngineDeployment.UsesEngine` — the SAME predicate the build uses, never
+  a second heuristic. *"This project uses the game engine (raylib), which has no web version."*
+- **WPF** (`UseWPF`): *"WPF windows have no web version; only Windows Forms forms build for the web."*
+- **native C++** (T-D3's `DesktopNative`): not offered (the combo is disabled, T-D6).
+A hand-written `<Platforms>` that includes Web on such a project is a load error (WPF, C++) or a Web-build error
+`EngineOnWeb` (engine, which only codegen reveals), naming the reason — the same words.
+
+### T-D21 — The Settings "Compiler Backend" cannot reach a dual-platform project
+There is no per-project backend selector to hide (T12). The Settings combo (`basiclang.compiler.backend`) only seeds the
+`<TargetBackend>` WRITTEN INTO a new project (T-D3); a dual-platform project always carries `<TargetBackend>` (= the
+default platform's), so the setting cannot change it. When Settings is opened in WORKSPACE scope on a dual-platform
+project, that combo is disabled with the explanation *"This project builds for Desktop and Web — choose the platform on
+the toolbar."* — so nobody believes it switches the build. (If a Project Properties page is ever added, its backend
+selector follows the same rule.)
+
 ### T-D17 — New WinForms projects are dual-platform by default
 The Windows Forms App template (IDE `ProjectTemplateService` and CLI `TemplateEngine`, both — they mirror) writes
 `<Platforms>Desktop;Web</Platforms>` and `<StartupForm>MainForm</StartupForm>`. Desktop stays the default (first).
+Game, WPF and C++ templates are untouched (T-D20).
 The JavaScript/web template is unchanged until piece 4 (a web-only project may be a plain DOM site).
 - ✗ *A third template "Forms App (Desktop + Web)"* — a choice the user cannot make well at creation time and can make
   later with one click (§7.1).
@@ -351,31 +454,47 @@ Only the platform combo, `▶ Start (Desktop)`, and — in a project that declar
 - `<Platforms>`: `;`-separated, trimmed, case-insensitive, de-duplicated, each `Desktop` or `Web`. An unknown entry, an
   empty list, or `<Platforms>` on a C++ project is a project-load ERROR naming the entry (never ignored — an ignored
   `Web` would silently build C#).
-- Both parsers (T1, T4) read them into their models; both savers write them: `ProjectSerializer.SavePreservingAsync`
-  (in place) and ⛔ `ProjectFile.Save` (T3 — without this, `BasicLang.exe add package` would silently strip
-  `<Platforms>` and the project would quietly become desktop-only).
+- Both parsers (T1, T4) get them from ONE shared reader (§4.2); both savers write them.
+- ⛔⛔ **`ProjectFile.Save` is REPLACED FIRST** (coordinator ruling, CRITICAL): before anything new is taught to either
+  parser, the compiler-side save becomes an IN-PLACE `XDocument` edit with `SavePreservingAsync`'s shape — load the file
+  on disk, change only the nodes whose modelled value changed, keep every other element, attribute, comment and the
+  `Sdk` attribute, and write NOTHING when nothing changed (a no-op save is byte-identical, asserted). Today it rebuilds
+  the file from its model (T3), so `BasicLang.exe add package` already drops `UseWindowsForms`, `TargetFramework`,
+  `AssemblyName` and `ApplicationHighDpiMode` — and would silently strip `<Platforms>`/`<StartupForm>`, quietly making a
+  dual project desktop-only. ⚠ A standalone chip may land this same fix on master first; if it has, Phase A builds on it
+  and its Task 3 shrinks to "teach the new properties" (the pre-flight checks which).
 - `UseWindowsForms`, `OutputType=WinExe`, `TargetFramework` apply to the Desktop build only; the Web build ignores them,
   as a JS build does today.
 
 ### 4.2 One function owns the platform answer — BasicLang `ProjectPlatforms`
 `BasicLang/ProjectSystem/ProjectPlatforms.cs` **[impl: name]**, in the compiler assembly so the CLI, the IDE build, the
 LSP and the tests share it (the IDE model passes the raw strings; the IDE references BasicLang already):
-- `Declared(platformsText, targetBackend, language) → IReadOnlyList<Platform>` — T-D3's rule, the load error, the default.
+- `Read(XDocument) → ProjectPlatformFacts` — ⛔ THE ONE READER of the raw facts both parsers need: `<Platforms>`,
+  `<StartupForm>`, the backend (`<Backend>` ?? `<TargetBackend>`, absent = C#), `Language`, `UseWPF`, and each
+  configuration's explicit `OutputPath` (present or not). It walks EVERY unconditional `<PropertyGroup>` (MSBuild order,
+  last wins) — not just the first, as `ProjectFile` does today (T1). `ProjectFile.Load` and `ProjectSerializer.LoadAsync`
+  both call it for these facts; neither re-reads the elements itself, and the IDE's `defaultBackendWhenOmitted` seed
+  never enters it (T-D3).
+- `Declared(facts) → IReadOnlyList<Platform>` — T-D3's rule, the load error, the default.
 - `BackendOf(Platform) → "csharp" | "javascript"` — T-D2.
 - `Resolve(declared, requested) → (Platform platform, string? note)` — T-D5's mapping and its log line.
 - `Platform` is `Desktop | Web | DesktopNative` (the C++ case, never switchable).
 ⛔ No other code compares a backend to decide a platform, or a platform to decide a backend — the four IDE sites in T7
 and the CLI's `project.Backend` reads (B1) call it. (The mirrored-pair rule of CLAUDE.md: two parsers, ONE answer.)
 
-### 4.3 One function owns the output layout — `ProjectOutputLayout.For(projectDir, platforms, platform, configuration)`
-Returns `bin\<Platform>\<Configuration>\` and `obj\<Platform>\<Configuration>\` for a project with `<Platforms>`, and the
-EXISTING per-route folders otherwise (the IDE's `OutputPath`, the CLI's `bin/<config>/<TFM>/`) — legacy layouts are not
-unified by this piece (out of scope; recorded). `FormDispatch.Write`'s `obj/<config>` (`BuildService.cs:647-648`) takes
-the same answer.
+### 4.3 One function owns the output layout — `ProjectOutputLayout.For(projectDir, facts, platform, configuration, route)`
+Returns, in this order: an explicit `OutputPath` with `$(Platform)`/`$(Configuration)` expanded (T-D7); else
+`bin\<Platform>\<Configuration>\` + `obj\<Platform>\<Configuration>\` for a project with `<Platforms>`; else the
+EXISTING per-route folder (the IDE's `bin\<config>`, the CLI's `bin/<config>/<TFM>/`) — legacy layouts are not unified by
+this piece (recorded). Its summary IS the documented contract the VSIX follows (T-D8). Every consumer in B11 calls it:
+IDE compile output, `CleanAsync` (which cleans EVERY declared platform's folder for every configuration), dispatch `obj`
+(`BuildService.cs:647-648`, `Program.cs:826`), `ExecutablePath`, CLI build and `run`, the F5 exe check, Ctrl+F5, the
+preview server's site folder, `RunInExternalConsoleAsync`; the VSIX by contract test. The literal defaults in B11 stay
+only as the legacy branch's values.
 
 ### 4.4 IDE models
 - `BasicLangProject` (Core): `Platforms` (string, raw) and `StartupForm` (string?); a computed `DeclaredPlatforms` via
-  §4.2.
+  §4.2. `BuildConfiguration` gains `OutputPathIsExplicit` (B12, T-D7).
 - `WorkspaceStateModel`: `ActivePlatform`, `ActiveConfiguration` (T-D4). Captured with the layout; a switch marks the
   state dirty through the existing debounced save.
 - `BuildService`: `CurrentPlatform` beside `CurrentConfiguration` (`BuildService.cs:21-35`), set by the shell exactly as
@@ -389,21 +508,27 @@ the same answer.
 Exactly today's C# route (`CompileWithBasicLangApiAsync` → `GenerateCode` csharp → csproj → `dotnet build`), with
 `TargetBackend = "csharp"` from §4.2 (so `DESKTOP` is defined, B9), output from §4.3. The `.blform` documents load only
 for asset copying (B6) — their WinForms code is the region in the `.bas`. A `.blwebform` in the project →
-`WebOnlyFormOnDesktop` (T-D9).
+`WebOnlyFormOnDesktop` (T-D9). The reference closure is checked first (`ReferencePlatformMismatch`, T-D5). .NET
+resolution of WinForms is armed only here (T-D19).
 
 ### 5.2 Web
 `TargetBackend = "javascript"` (so `WEB` is defined; the library is included by piece 2's trigger, because a `.blform`
 code-behind has `Using System.Windows.Forms`). Form documents: `.blwebform` as today PLUS every `.blform`, each emitted
 as a portable pixel page (T-D9). Checks before compile, raised where web forms load on BOTH routes (the IDE and CLI
-mirror, B6): `DesktopOnlyKind` (piece 2), `DesktopOnlyProperty` (T-D16), `StartupFormMissing`, a stale region
-(§8.3). The dispatch is generated as today; the entry point applies T-D11's startup-page rule. Output: §4.3.
+mirror, B6): `ReferencePlatformMismatch` (T-D5), `DesktopOnlyKind` (piece 2), `DesktopOnlyProperty` (T-D16),
+`StartupFormMissing`, `StaleDesignerRegion` (§8.3, decided by the marker, T-D10); after codegen, `EngineOnWeb` (T-D20).
+`UseWindowsForms` never arms .NET resolution here (T-D19). The dispatch is generated as today; the entry point applies T-D11's startup-page rule. Output: §4.3.
 
 ### 5.3 Running
 | | Ctrl+F5 | F5 | Shift+F5 |
 |---|---|---|---|
 | Desktop | `DebugService.StartWithoutDebuggingAsync` on `bin\Desktop\<Config>\<Name>.exe` | managed DAP (R3) | DAP stop |
 | Web | `WebPreviewServer` on `bin\Web\<Config>\`, default browser on `<StartupForm>.html` | = Ctrl+F5 + T-D12 notice | stop the preview server |
-The F5/Ctrl+F5 branch (R2) asks §4.2 for the active platform's backend, not `project.TargetBackend`.
+The F5/Ctrl+F5 branch (R2) asks §4.2 for the active platform's backend, not `project.TargetBackend`, and always acts on
+the STARTUP project (U7) — never on whichever project's file is active in the editor.
+**Run in External Console** (`RunInExternalConsoleAsync`, U10): Desktop unchanged; Web takes the web rule — build, start
+the preview server, open the browser on the startup page (a console window has nothing to show for a page). CLI
+`run --platform` is T-D8.
 
 ### 5.4 Debugging support per platform
 Desktop: full (managed DAP). Desktop native (C++): unchanged (lldb-dap). Web: none in this piece (T-D12); the source map
@@ -413,7 +538,7 @@ the JS emitter already writes makes the browser's own debugger usable.
 - §T-D13's notification; the server's `LspProjectContext` resolves `(project, platform) → backend` through §4.2 and passes
   it to `BuildSymbols.For` where it passes `projectFile.Backend` today (`P2:LspProjectContext.cs:494`, `:259-260`), and to
   `WithWebDeclarations` (L3) — so on Web the server also knows `dom-core.bli` and the library, on Desktop the .NET
-  WinForms surface (piece 2 Task 7d).
+  WinForms surface (piece 2 Task 7d) — and never the .NET WinForms surface on Web (T-D19).
 - The editor's configuration stays Debug (L1, unchanged) — the toolbar's configuration does not reach the LSP in this
   piece (recorded: VS does follow the configuration too; a later one-line change through the same notification).
 - A file outside any `.blproj`: unchanged (`DESKTOP`).
@@ -427,8 +552,12 @@ project, or by **Project → Add Platform…**. One confirmation dialog lists wh
 `SavePreservingAsync`:
 - **WinForms project + Web**: `<Platforms>Desktop;Web</Platforms>` (Desktop stays default), `<StartupForm>` (proposed by
   the IR scan, else picked from the project's forms); the dialog LISTS — does not fix — desktop-only controls (the future
-  `DesktopOnlyKind` errors) and forms whose regions are stale or hand-edited (§8.3). Every `.blform` region is
-  regenerated through the region writer (Canon regions only; a hand-edited region, BL8011, is listed and left alone).
+  `DesktopOnlyKind` errors), existing unwrapped handlers of desktop-only events (T-D18), forms whose regions are stale or
+  hand-edited (§8.3), referenced projects that do not build for Web (T-D5), and the output-folder move (T-D7). Every
+  `.blform` region is regenerated through the region writer into the `style="dual"` shape (Canon regions only; a
+  hand-edited region, BL8011, is listed and left alone).
+- **Refused, with the reason (T-D20)**: a managed game project (engine detected by `UsesEngine` on an in-memory Desktop
+  codegen), a WPF project, a native C++ project.
 - **JavaScript project + Desktop**: refused while the project contains any `.blwebform` (*"Its web forms must be converted
   first"* — piece 4's convert-on-open will make this possible); otherwise `<Platforms>Web;Desktop</Platforms>` (Web stays
   default), and `OutputType`/`UseWindowsForms` only if the project has `.blform` documents (it cannot, before piece 4 — so
@@ -446,22 +575,29 @@ it to a `.blform` on open; after piece 4, §7.1's JS-project rule loses its refu
 
 ## 8. Interaction with piece 2 and piece 4
 
-### 8.1 What piece 3 can build BEFORE piece 2's library lands (Phase A — base: master)
-Everything that does not compile a form for the web: §4 data model (both parsers, both savers, `ProjectPlatforms`,
-`ProjectOutputLayout`); CLI `--platform`; IDE `CurrentPlatform` through the build; output layout; F5/Ctrl+F5 routing;
-the toolbar combo, status bar, persistence, disabled-while-debugging; the Error List platform column, clearing on switch,
-Build All Platforms; the add-platform dialog for the JS → Desktop case and for projects without forms; the LSP
-notification plumbing (with `BuildSymbols` absent on master, the server passes the platform's backend to what it uses
-today — the visible symbol effect arrives with piece 2's merge, by construction, because `BuildSymbols.For` keys on the
-backend). A dual-platform project WITHOUT forms (e.g. a console program) builds and runs on both platforms at the end of
-Phase A — that is Phase A's acceptance test.
+### 8.1 What piece 3 can build BEFORE piece 2's library lands (Phase A — base: master after piece 2's 2.0a merge)
+⛔ **Phase A is based on master AFTER piece 2's sub-piece 2.0a has merged (its Task 17)** — so `#If`/`#ElseIf`/`#Else`/
+`#End If`, `BuildSymbols` and the LSP's line-preserving `#If` (Tasks 1, 3, 6) exist on the base. Until that merge nothing
+of piece 3 ships; work may be prepared on a branch, but no Phase-A task is reviewed against bare master.
+Phase A is everything that does not compile a FORM for the web: the `ProjectFile.Save` replacement (first), §4 data model
+(the shared reader, both parsers, both savers, `ProjectPlatforms`, `ProjectOutputLayout`); CLI `build`/`run --platform`;
+the VSIX's layout contract; IDE `CurrentPlatform` through the build; output layout and every B11 consumer; F5/Ctrl+F5/
+external-console routing on the startup project; the toolbar combo, status bar, persistence (solution key), disabled-
+while-debugging; the Error List platform column, clearing on switch, Build All Platforms; `ReferencePlatformMismatch`;
+T-D19's platform-keyed .NET resolution; T-D21's Settings note; the add-platform dialog for the JS → Desktop case and for
+projects without forms, with T-D20's refusals; the LSP notification (with `BuildSymbols` on the base, the switch flips
+`#If WEB`/`#If DESKTOP` dimming already in Phase A). A dual-platform project WITHOUT forms (e.g. a console program using
+`#If WEB`) builds and runs on both platforms through both routes at the end of Phase A — Phase A's acceptance test.
 ⚠ Until Phase B, the add-platform step REFUSES a project containing `.blform` documents, with the reason (*"web builds
 of Windows Forms arrive with the portable control library"*) — never a Web build that silently has no pages.
 
 ### 8.2 What needs piece 2 (Phase B)
 | Piece-3 item | Needs piece-2 task |
 |---|---|
-| `#If DESKTOP` wrap in the region (T-D10) | 1 + 3 (`#If`, symbols) and **30** (the tagged lines) |
+| Phase A's base | 2.0a merged (Tasks 0–17) |
+| `#If DESKTOP` wrap in the region (T-D10) | 1 + 3 (`#If`, symbols) and **30** (the tagged lines, the style marker reader) |
+| Desktop-only events wrapped (T-D18) | slice 5's event lists (already on master); 30 (handler stub placement by style) |
+| Platform-keyed .NET resolution (T-D19) | 7d (Desktop arming) |
 | `.blform` → portable page (T-D9) | 28–33 (library, codegen style, rendering fixes); piece 2's page style for a `.blform` |
 | `Application` in the library (T-D11) | 29 (`Form` core), 34 (`WebUnavailableMember`) |
 | Badges + `DesktopOnlyKind` on a dual `.blform` (T-D15) | **46** |
@@ -471,8 +607,8 @@ of Windows Forms arrive with the portable control library"*) — never a Web bui
 Piece 3's Phase B starts when piece 2's 2a has merged to master; Tasks 46–47 (2d) must merge before piece 3's gate.
 
 ### 8.3 The stale-region case (between pieces)
-A `.blform` whose code-behind still has a pre-T-D10 region (Canon but unwrapped) builds for Desktop unchanged; a Web
-build stops with `StaleDesignerRegion` (error, naming the file: *"Open the form in the designer (or run Add Platform) to
+A `.blform` whose region markers carry no `style` (the pre-T-D10 shape — decided by the MARKER, T-D10, never by
+scanning for `#If`) builds for Desktop unchanged; a Web build stops with `StaleDesignerRegion` (error, naming the file: *"Open the form in the designer (or run Add Platform) to
 regenerate its code for both platforms."*). The build never regenerates in memory — it compiles the file the user sees.
 
 ### 8.4 Piece 4
@@ -495,20 +631,38 @@ errors, the default, the solution mapping note. `ProjectOutputLayout.For` — wi
 startup-form IR scan (literal `New X()`, a local, a factory, none, two).
 
 ### 9.2 The project file
-Round trip through BOTH savers: `SavePreservingAsync` keeps `<Platforms>`/`<StartupForm>` and every unknown element;
-⛔ `ProjectFile.Save` (via a real `PackageManager` add) keeps them. `<TargetBackend>` follows the default platform.
-A legacy project reads, builds and saves byte-for-byte.
+- ⛔ The replaced `ProjectFile.Save` (first): a no-op save is BYTE-IDENTICAL over a corpus of real `.blproj` files
+  (every template's output, a hand-commented file, an SDK-style file); a real `PackageManager` add changes only the
+  `<PackageReference>` and keeps `UseWindowsForms`, `TargetFramework`, `AssemblyName`, `ApplicationHighDpiMode`, unknown
+  elements and comments.
+- Round trip through BOTH savers: `<Platforms>`/`<StartupForm>` and every unknown element survive; `<TargetBackend>`
+  follows the default platform. A legacy project reads, builds and saves byte-for-byte.
+- The shared reader: the same facts from both parsers over one table (properties split across several unconditional
+  groups, `<Backend>` vs `<TargetBackend>`, absent backend with the IDE setting ≠ C# → Desktop, explicit vs absent
+  `OutputPath`).
 
 ### 9.3 Both routes, both platforms
 For one dual-platform project: CLI `build --platform=Desktop|Web|All` and the IDE `BuildService` with each platform
 produce the same output FILES in the same folders (§4.3), and a platform the project does not declare is an error on
-both. The symbol set on each (`#If WEB` / `#If DESKTOP` picks the right branch — Phase B, after `BuildSymbols` merges).
+both. The symbol set on each (`#If WEB` / `#If DESKTOP` picks the right branch — already in Phase A, on the 2.0a base).
+Also: an explicit `OutputPath` wins (with `$(Platform)` expanded, and `SharedOutputPath` without it); `CleanAsync` cleans
+every platform folder; CLI `run --platform=Web` names `<StartupForm>.html`; the VSIX contract test (its probe vs
+`ProjectOutputLayout.For` over one fixture table); `ReferencePlatformMismatch` on both routes (direct and transitive);
+`build --target=csharp` on a Web-default project still builds Web (R2); a Web build of a dual project never arms .NET
+WinForms resolution (T-D19); `EngineOnWeb` from a game fixture.
 
 ### 9.4 The real IDE view (Avalonia.Headless + Skia, `[AvaloniaTest]`)
 - Read `MainWindow.axaml` for the combo's bindings (CLAUDE.md: a command or property nothing binds is unreachable) and
   host the real `MainWindow` toolbar: selecting Web sets `BuildService.CurrentPlatform`, the Start label, the status bar.
 - Persistence: switch, close the project, reopen — through the real `WorkspaceStateStore` in a temp root — Web is
-  restored; an old `state.json` without the field restores the layout AND defaults the platform (no version discard).
+  restored; an old `state.json` without the field restores the layout AND defaults the platform (no version discard);
+  with a SOLUTION open the platform is keyed by the solution, survives a startup-project change, and is restored from a
+  state whose `DockLayout` is null (U9).
+- F5 and Ctrl+F5 act on the STARTUP project: a solution of two projects with the non-startup project's file active in
+  the editor launches the startup project, on the active platform (and offers to add the platform when it lacks it).
+- External console on Web opens the browser, not a console.
+- Settings in workspace scope on a dual project shows the backend combo disabled with T-D21's text.
+- The add-platform refusals (T-D20) through the real command: game fixture, WPF, C++.
 - Disabled during a (faked) debug session and a running preview.
 - The add-platform dialog through the real generated command with a fake `IDialogService`: confirm writes, cancel writes
   nothing and restores the combo; the refusal cases.
@@ -523,7 +677,11 @@ the IDE's `RefreshSemanticTokensAsync` runs for each open document. Restart the 
 Golden regions per catalog fixture: the T-D10 shape; the relation "under DESKTOP = WinForms init, under WEB = piece 2's
 portable init" proven by preprocessing the region both ways and comparing with piece 2's two generators (the P2 §11.6
 pin, now over one region). `WinFormsCatalogSweepTests` (csc) compiles the wrapped region with `DESKTOP`; a node-run web
-build compiles it with `WEB`.
+build compiles it with `WEB`. The marker: the region writer writes `style="dual"` on both markers; a `.blform` region
+without `style` is `StaleDesignerRegion` on Web and builds on Desktop; `style="dual"` on a `.blwebform` and an unknown
+style value are BL8012 (both document kinds). Desktop-only events (T-D18): the `AddHandler` line and the new stub are
+wrapped (catalog sweep over every event with no web mapping); an unwrapped legacy stub gives the fixable
+`WebUnavailableMember` message.
 
 ### 9.7 Run-the-app acceptance, both platforms (Integration, Windows-gated)
 From the dual-platform WinForms TEMPLATE, through the real entry points (the template service, `BuildService`, the CLI):
@@ -542,17 +700,27 @@ Mutation checks on the load-bearing rules: platform → backend; legacy derivati
 fallback); `ProjectFile.Save` keeping `<Platforms>`; `<TargetBackend>` sync; output folder per platform; the F5 branch
 asking the platform, not `TargetBackend`; no version bump; the LSP override vs default; the build-keyspace clear; the
 `#If DESKTOP` wrap set (one line moved in/out turns a test red on one platform); `Main` only on the startup page;
-`Application.Run` adoption (a second instance must turn the click count red).
+`Application.Run` adoption (a second instance must turn the click count red); `ProjectFile.Save` rewriting an untouched
+node; the shared reader reading only the first `<PropertyGroup>`; the IDE seed leaking into the derivation; explicit
+`OutputPath` ignored; the platform restore moved behind the `DockLayout` early return; F5 on the active editor's project;
+the reference check skipping transitive references; the `style="dual"` marker omitted (a Web build must then say
+`StaleDesignerRegion`); one desktop-only `AddHandler` unwrapped; .NET WinForms resolution armed on Web; `UsesEngine`
+replaced by a name heuristic.
 
 ## 10. Risks
-- **R1 — piece 2 slips.** Phase A is useful alone (dual console projects, the switch, the plumbing) and refuses `.blform`
-  projects honestly (§8.1). One branch; it merges after Phase B unless piece 2 stalls, in which case Phase A merges alone
-  with the refusal in place.
+- **R1 — piece 2 slips.** Phase A waits for 2.0a's merge (its base) but not for the library; it is useful alone (dual
+  console projects with `#If WEB`, the switch, the plumbing) and refuses `.blform` projects honestly (§8.1). One branch;
+  it merges after Phase B unless piece 2's 2a stalls, in which case Phase A merges alone with the refusal in place.
 - **R2 — the "missing arm builds C#" trap.** The VSIX's map defaults to C# (B2). Piece 3 does not make `build` honour
   `--target`, rejects unknown platforms, and adds a test that `build --target=csharp` on a Web-default project still
-  builds Web. A VSIX platform picker is a follow-up chip.
-- **R3 — the lossy `ProjectFile.Save`** (T3) would silently strip `<Platforms>`; covered by §4.1 and §9.2. (It also drops
-  `UseWindowsForms` today — a pre-existing defect, chipped, not fixed here.)
+  builds Web. The VSIX's output probe follows §4.3 by contract test (T-D8); a VSIX platform picker is a follow-up chip.
+- **R3 — the lossy `ProjectFile.Save`** (T3) is replaced FIRST (§4.1) — the fix also ends today's loss of
+  `UseWindowsForms` & co. on `add package`. If a standalone chip lands it earlier, Phase A builds on it.
+- **R3a — the IDE derivation change** (T-D3): a file with no backend element that built JavaScript in the IDE through the
+  user setting now builds C# (as the CLI always did). One Output line on load says so; the expected population is near
+  zero (every template writes `<TargetBackend>`).
+- **R3b — explicit `OutputPath`s**: a user path without `$(Platform)` makes both platforms share a folder; warned, not
+  refused (T-D7).
 - **R4 — a site still reading `TargetBackend`** builds or runs the wrong platform with nothing looking wrong. §4.2 makes
   `ProjectPlatforms` the only answer; the plan's first task greps every `TargetBackend`/`Backend` read on both sides and
   lists each with its new call.
@@ -568,32 +736,46 @@ asking the platform, not `TargetBackend`; no version bump; the LSP override vs d
   §12); the drop step lists it.
 
 ## 11. Task outline (ordered; not a plan)
-**Phase A — base master, no piece-2 dependency**
-1. Pre-flight: re-verify every §1 anchor on the base; grep all backend reads (R4); measure today's CLI and IDE output
-   folders for a C# and a JS project; record.
-2. `ProjectPlatforms` + `ProjectOutputLayout` (pure, table-tested) in BasicLang.
-3. `.blproj` schema: both parsers, both savers (`SavePreservingAsync`, `ProjectFile.Save`), load errors, `<TargetBackend>`
-   sync; round-trip tests incl. `PackageManager`.
-4. CLI `build --platform=Desktop|Web|All`; output layout; R2's test.
-5. IDE build: `BuildService.CurrentPlatform`, backend from §4.2, output layout, dispatch `obj` path; IDE = CLI parity test.
-6. Run routing: F5 / Ctrl+F5 / Stop by active platform; preview server folder; `<StartupForm>` page; T-D12 notice.
-7. Toolbar combo, Start label, status bar, command palette, disabled-while-running; persistence (`ActivePlatform`,
-   `ActiveConfiguration`, no version bump); headless view tests with the AXAML binding read.
-8. Error List: platform tag + column, clear on switch, Build All Platforms.
-9. LSP: `basiclang/didChangeActivePlatform`, server override, re-diagnose, IDE token refresh, re-send on restart.
-10. Add Platform (dialog, command, combo affordance, F5 offer): JS → Desktop and formless WinForms → Web; the `.blform`
-    refusal (§8.1).
-11. Phase A gate: a dual console project built and run on both platforms through both routes; fast + Integration named.
+**Phase A — base: master after piece 2's 2.0a merge (its Task 17); no dependency on the library**
+1. Pre-flight: re-verify every §1 anchor on the base (line numbers move with 2.0a); grep every backend read (R4) and
+   every output-path consumer (B11) and list each with its new call; measure today's CLI and IDE output folders for a C#
+   and a JS project; check whether a chip has already replaced `ProjectFile.Save`; record.
+2. ⛔ Replace `ProjectFile.Save` with the in-place `XDocument` edit (no-op save byte-identical; `PackageManager` keeps
+   every unmodelled element) — BEFORE anything new is taught to either parser. (Skipped/shrunk if the chip landed it.)
+3. The shared reader `ProjectPlatforms.Read` + `Declared`/`BackendOf`/`Resolve` + `ProjectOutputLayout.For` (pure,
+   table-tested; explicit `OutputPath` with tokens) in BasicLang.
+4. `.blproj` schema through the shared reader in BOTH parsers (IDE seed no longer derives; R3a's Output line), both
+   savers write `<Platforms>`/`<StartupForm>`, load errors, `<TargetBackend>` sync, `OutputPathIsExplicit`; round trips.
+5. CLI `build --platform=Desktop|Web|All` and `run --platform`; every CLI path consumer through §4.3; R2's test;
+   `ReferencePlatformMismatch` (CLI).
+6. VSIX: `FindBuiltExecutable` and its message follow §4.3's documented contract; the contract test; Web-default Run text.
+7. IDE build: `BuildService.CurrentPlatform`, backend from §4.2, every IDE path consumer (incl. `CleanAsync`, dispatch
+   `obj`), `ReferencePlatformMismatch` (IDE, solution and project builds), T-D19's platform-keyed `EnableNetResolution`
+   (+ LSP); IDE = CLI parity test.
+8. Run routing on the STARTUP project: F5 / Ctrl+F5 / external console / Stop by active platform; preview server folder;
+   `<StartupForm>` page; T-D12 notice.
+9. Toolbar combo, Start label, status bar, command palette, disabled-while-running; persistence (`ActivePlatform`,
+   `ActiveConfiguration`, solution key, restore before the `DockLayout` early return, no version bump); Build
+   Configuration dialog's OutputPath placeholder; Settings' T-D21 note; headless view tests with the AXAML binding read.
+10. Error List: platform tag + column, clear on switch, Build All Platforms.
+11. LSP: `basiclang/didChangeActivePlatform`, server override, re-diagnose, IDE token refresh, re-send on restart.
+12. Add Platform (dialog, command, combo affordance, F5 offer): JS → Desktop and formless WinForms → Web; T-D20's
+    refusals; the `.blform` refusal (§8.1).
+13. Phase A gate: a dual console project using `#If WEB` built and run on both platforms through both routes; fast +
+    Integration named.
 
 **Phase B — after piece 2's 2a has merged (and 2d before the gate)**
-12. Region writer: T-D10 wrap over piece 2's tagged lines, golden files, both-way preprocess relation, csc sweep + node.
-13. Web build of `.blform`: loader, portable pixel page, `MobileBreakpoint` root row (+ oracle exemption, retarget),
-    `DesktopOnlyProperty`, `StaleDesignerRegion`, `WebOnlyFormOnDesktop`; IDE and CLI.
-14. Library `Application` (+ coverage), startup-page entry-point rule, `StartupFormMismatch` / `StartupFormMissing`.
-15. Badges and `DesktopOnlyKind` on dual `.blform` (consumes piece 2 Task 46); designer unchanged on switch.
-16. Add Platform for WinForms projects with forms (region regeneration, startup-form proposal); lift the §8.1 refusal.
-17. Templates (IDE + CLI) dual by default (T-D17); the run-the-app acceptance on both platforms (§9.7).
-18. IDE drop (`IDE/`, incl. `lib/js/forms/`), HANDOFF, the merged-tree gate (trial merge in a detached worktree, then the
+14. Pre-flight: piece 2's marker reader treats an unknown `style` as BL8012 on both kinds (fix first if not); re-anchor.
+15. Region writer: T-D10 wrap over piece 2's tagged lines with the `style="dual"` marker; T-D18 desktop-only events
+    (`AddHandler` + stub); golden files, both-way preprocess relation, csc sweep + node.
+16. Web build of `.blform`: loader, portable pixel page, `MobileBreakpoint` root row (+ oracle exemption, retarget),
+    `DesktopOnlyProperty`, `StaleDesignerRegion`, `WebOnlyFormOnDesktop`, `EngineOnWeb`; IDE and CLI.
+17. Library `Application` (+ coverage), startup-page entry-point rule, `StartupFormMismatch` / `StartupFormMissing`.
+18. Badges and `DesktopOnlyKind` on dual `.blform` (consumes piece 2 Task 46); designer unchanged on switch.
+19. Add Platform for WinForms projects with forms (region regeneration to `style="dual"`, startup-form proposal, the
+    listings of §7.1); lift the §8.1 refusal.
+20. Templates (IDE + CLI) dual by default (T-D17); the run-the-app acceptance on both platforms (§9.7).
+21. IDE drop (`IDE/`, incl. `lib/js/forms/`), HANDOFF, the merged-tree gate (trial merge in a detached worktree, then the
     named gate), owner click-through list.
 
 ## 12. Questions that would have gone to the owner — DECIDED
@@ -611,3 +793,27 @@ asking the platform, not `TargetBackend`; no version bump; the LSP override vs d
 | Q10 | Does the switch change the designer? | No (T-D15) | One form; badges follow declared platforms |
 | Q11 | Persist Debug/Release too? | Yes, same store (T-D4) | VS parity; same mechanism, near-zero cost |
 | Q12 | Does the editor follow the configuration too? | Not in this piece (§6) | Recorded; one field away |
+| Q13 | Does an explicit `OutputPath` beat the platform layout? | Yes; `$(Platform)` expanded; warn if shared (T-D7) | The user's path is the user's |
+| Q14 | Can a game / WPF project add Web? | No, refused with the reason (T-D20) | Game projects untouched |
+| Q15 | Web app referencing a desktop-only library? | Build error naming both (T-D5) | Never link the wrong arm |
+| Q16 | Desktop-only events on a dual form? | Designer wraps `AddHandler` + stub in `#If DESKTOP` (T-D18) | Same rule as properties; always fixable |
+
+## 13. Review resolution (revision 2 — coordinator rulings on the review of `be7f18e5`)
+| Finding | Resolved in |
+|---|---|
+| CRITICAL 1 — lossy `ProjectFile.Save` | §4.1 (replaced first, in-place, no-op byte-identical; chip may land it first); §9.2; §11 Task 2; R3 |
+| 2 — VSIX not unchanged | T-D8 (contract + test); B11; §4.3; §11 Task 6; R2 |
+| 3 — recorded marker for wrapped regions | T-D10 (`style="dual"`, never guessed, BL8012 on older drops / unknown values); §8.3; §9.6; §11 Task 14 |
+| 4 — desktop-only events | T-D18 (`AddHandler` + stub wrapped; legacy stubs fixable); §7.1 listing; §9.6 |
+| 5 — `EnableNetResolution` on Web | T10; T-D19; §5.1–5.2; §6; §9.3 |
+| 6 — explicit `OutputPath` wins; dialog | B12; T-D7; §4.3; §4.4; §9.3; §11 Task 9 |
+| 7 — CLI `run`, external console, every path consumer | B11, B13, U10; T-D8; §4.3; §5.3; §11 Tasks 5, 7, 8 |
+| 8 — refuse Web for game / WPF / native | T11; T-D20; §7.1; T-D17; §9.4 |
+| 9 — Web app → library without Web | T13; T-D5 (`ReferencePlatformMismatch`); §5.1–5.2; §9.3 |
+| 10 — Phase A base = after 2.0a's Task 17 | header; §8.1; §8.2; §11; R1 |
+| Minor — one shared reader | §4.2 `Read`; T-D3; §9.2 |
+| Minor — raw derivation, not the IDE seed | T9; T-D3; R3a |
+| Minor — restore before the `DockLayout == null` return | U9; T-D4; §9.4 |
+| Minor — state keyed by solution | U8; T-D4 |
+| Minor — backend selector on a dual project | T12; T-D21 |
+| Minor — F5/Ctrl+F5 run the STARTUP project | §5.3; §9.4 |
