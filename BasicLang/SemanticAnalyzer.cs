@@ -7037,6 +7037,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return false;
         }
 
+        /// <summary>Both are Enums, and not the same one.</summary>
+        private static bool IsDifferentEnums(TypeInfo left, TypeInfo right) =>
+            left is { Kind: TypeKind.Enum } && right is { Kind: TypeKind.Enum } && !IsSameEnum(left, right);
+
+        private static string DifferentEnumsMessage(string op, TypeInfo left, TypeInfo right) =>
+            $"Operator '{op}' cannot compare a '{left.Name}' with a '{right.Name}': they are different Enums. " +
+            $"Convert one explicitly (CInt(...) on both sides compares the numbers)";
+
         /// <summary>Both types are the SAME user Enum (by name — a sibling's shell and the declaration are one Enum).</summary>
         private static bool IsSameEnum(TypeInfo left, TypeInfo right) =>
             left is { Kind: TypeKind.Enum } && right is { Kind: TypeKind.Enum }
@@ -11459,6 +11467,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     else if (IsSameEnum(leftType, rightType))
                     {
                     }
+                    else if (IsDifferentEnums(leftType, rightType))
+                    {
+                        Error(DifferentEnumsMessage(node.Operator, leftType, rightType), node.Line, node.Column);
+                    }
                     // Comparison operators - allow type parameters (generics)
                     else if (!leftType.IsNumeric() && !rightType.IsNumeric() &&
                         leftType.Kind != TypeKind.TypeParameter && rightType.Kind != TypeKind.TypeParameter)
@@ -11497,6 +11509,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         // not the generic incompatible-comparison warning.
                         Error($"Equality operator '{node.Operator}' cannot mix Decimal and floating-point operands. Use CType(value, Decimal) for explicit conversion",
                               node.Line, node.Column);
+                    }
+                    else if (IsDifferentEnums(leftType, rightType))
+                    {
+                        // VB (Option Strict) refuses it; C# is CS0019 and C++ C2676 on two `enum class`es,
+                        // while JavaScript silently compared the numbers (portable-controls review of Task 9).
+                        Error(DifferentEnumsMessage(node.Operator, leftType, rightType), node.Line, node.Column);
                     }
                     else if (NativeBclSurface.IsSurfaceType(leftType.Name) &&
                              NativeBclSurface.IsSurfaceType(rightType.Name) &&

@@ -46,6 +46,28 @@ public class EnumAndHandlerReviewTests
         " Console.WriteLine(\"v=\" & k)\n Dim s As String = k.ToString()\n Console.WriteLine(s & \"!\")\nEnd Sub\n",
         "Dark\nDark\nv=Dark\nDark!");
 
+    /// <summary>
+    /// <c>CType(i, Shade)</c> — the only Integer → Enum route, and the library's (a key code → <c>Keys</c>). JavaScript
+    /// refused the whole build ("IRCast lowering is not implemented yet"); the member is its number there.
+    /// </summary>
+    [Test]
+    public void CTypeFromAnInteger_IsTheEnum() => RunsOnCsJsCpp(Shade +
+        "Sub Main()\n Dim i As Integer = 65\n Dim k As Shade = CType(i, Shade)\n Console.WriteLine(k)\n" +
+        " If k = Shade.Keyed Then Console.WriteLine(\"keyed\")\n Console.WriteLine(CType(1, Shade))\nEnd Sub\n",
+        "Keyed\nkeyed\nDark");
+
+    /// <summary>
+    /// Two DIFFERENT Enums compared (<c>Shade.Dark = Other.B</c>) passed BasicLang and then failed C# (CS0019) and C++
+    /// (C2676), while JavaScript compared the numbers. VB with Option Strict refuses it; so does the analyzer now.
+    /// </summary>
+    [Test]
+    public void ComparingTwoDifferentEnums_IsRefused()
+    {
+        var ex = Assert.Throws<System.InvalidOperationException>(() => JavaScriptExecutionTests.RunJs(Shade +
+            "Enum Other\n A\n B\nEnd Enum\nSub Main()\n If Shade.Dark = Other.B Then Console.WriteLine(\"eq\")\nEnd Sub\n"));
+        Assert.That(ex!.Message, Does.Contain("Shade").And.Contain("Other"));
+    }
+
     /// <summary>A FIELD initialized with an Enum member (refused "at line 0" before).</summary>
     [Test]
     public void AnEnumFieldInitializer_Compiles() => RunsOnCsJsCpp(Shade +

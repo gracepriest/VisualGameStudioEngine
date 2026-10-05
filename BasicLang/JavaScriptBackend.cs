@@ -3594,8 +3594,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var target = cast.Type;
             if (source == null || target == null) return false;
 
-            // An Enum widened to a number (VB's implicit `Dim n As Integer = Shade.Keyed`): the member IS its number here.
-            if (source.Kind == TypeKind.Enum && target.IsNumeric())
+            // An Enum widened to a number (VB's implicit `Dim n As Integer = Shade.Keyed`), or a number made an Enum
+            // (`CType(i, Shade)` — the only Integer → Enum route, the library's key code → Keys): the member IS its number
+            // here, so the value is unchanged either way.
+            if (source.Kind == TypeKind.Enum && target.IsNumeric()
+                || source.IsNumeric() && target.Kind == TypeKind.Enum
+                || source.Kind == TypeKind.Enum && target.Kind == TypeKind.Enum)
             {
                 rendered = Expr(cast.Value);
                 return true;
@@ -4187,6 +4191,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string FieldAccess(IRFieldAccess fa)
         {
+            // `MyBase.P` on a property: the BASE's getter (spec §4.5, Task 13) — `this.P` called the override itself.
+            if (fa.ThroughBase)
+                return $"super.{SanitizeName(fa.FieldName)}";
+
             // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). ⛔ Never the bare
             // member: `String.Empty` read a property of JavaScript's String constructor, which has none,
             // and `String.Empty & "x"` printed "undefinedx" from a clean build.
@@ -4236,7 +4244,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var member = IsForeignValue(fieldStore.Object)
                 ? (ForeignName(fieldStore.FieldName, out var foreign) ? foreign : fieldStore.FieldName)
                 : SanitizeName(fieldStore.FieldName);
-            Line($"{Expr(fieldStore.Object)}.{member} = {Expr(fieldStore.Value)};");
+            // `MyBase.P = v` on a property: the BASE's setter (Task 13).
+            var receiver = fieldStore.ThroughBase ? "super" : Expr(fieldStore.Object);
+            Line($"{receiver}.{member} = {Expr(fieldStore.Value)};");
         }
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         /// <summary>

@@ -2653,6 +2653,12 @@ namespace BasicLang.Compiler.IR
         public string FieldName { get; set; }
 
         /// <summary>
+        /// <c>MyBase.P</c> on a PROPERTY: read the BASE's accessor, bypassing virtual dispatch — JS <c>super.P</c>, C#
+        /// <c>base.P</c>, C++ <c>Base::get_P()</c> (spec §4.5, M4). Never set for a field (IRBuilder.IsBasePropertyAccess).
+        /// </summary>
+        public bool ThroughBase { get; set; }
+
+        /// <summary>
         /// P2a-2 Task 7a CARRIAGE — the .NET PROPERTY or FIELD this member READ resolved to
         /// (the descriptor is the getter-shaped proxy slot), or null for every non-.NET read.
         /// Written by <see cref="IRBuilder"/> from the member-probe annotation; read by the
@@ -2710,6 +2716,9 @@ namespace BasicLang.Compiler.IR
         public IRValue Object { get; set; }
         public string FieldName { get; set; }
         public IRValue Value { get; set; }
+
+        /// <summary><c>MyBase.P = v</c> on a PROPERTY: the BASE's setter (see <see cref="IRFieldAccess.ThroughBase"/>).</summary>
+        public bool ThroughBase { get; set; }
 
         /// <summary>
         /// P2a-2 Task 7a CARRIAGE — the SYNTHESIZED accessor-method descriptor

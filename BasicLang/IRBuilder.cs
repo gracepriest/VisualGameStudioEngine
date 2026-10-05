@@ -2192,20 +2192,6 @@ namespace BasicLang.Compiler.IR
         /// name but found Assignment"), which keeps the structure call site unreachable for
         /// initializers. PRE-EXISTING and measured.</para>
         /// </summary>
-        /// <summary>
-        /// <c>Shade.Keyed</c> — a user Enum's member — as an initializer constant (<see cref="IREnumMemberValue"/>), or null.
-        /// ⛔ The fold substitutes no named constants, so <c>Public K As Shade = Shade.Keyed</c> was refused "cannot be
-        /// computed at compile time" (portable-controls review of Task 9; the library's every Enum-typed default).
-        /// </summary>
-        private IRConstant TryEnumMemberConstant(ExpressionNode initializer)
-        {
-            if (initializer is not MemberAccessExpressionNode { Object: IdentifierExpressionNode receiver } access) return null;
-            if (_semanticAnalyzer.GetNodeType(initializer) is not { Kind: TypeKind.Enum } enumType) return null;
-            if (!string.Equals(receiver.Name, enumType.Name, StringComparison.OrdinalIgnoreCase)) return null;
-            if (enumType.Members == null || !enumType.Members.ContainsKey(access.MemberName)) return null;
-            return new IRConstant(new IREnumMemberValue(enumType.Name, access.MemberName), enumType);
-        }
-
         private IRConstant BuildConstantFieldInitializer(
             ExpressionNode initializer, TypeInfo fieldType, string fieldName)
         {
@@ -2225,6 +2211,20 @@ namespace BasicLang.Compiler.IR
                 $"Line {(initializer.Line > 0 ? initializer.Line : _currentSourceLine)}: the field "
                 + $"'{fieldName}' has an initializer that cannot be computed at compile time. Only "
                 + "a constant expression is supported here; assign it in a constructor instead.");
+        }
+
+        /// <summary>
+        /// <c>Shade.Keyed</c> — a user Enum's member — as an initializer constant (<see cref="IREnumMemberValue"/>), or null.
+        /// ⛔ The fold substitutes no named constants, so <c>Public K As Shade = Shade.Keyed</c> was refused "cannot be
+        /// computed at compile time" (portable-controls review of Task 9; the library's every Enum-typed default).
+        /// </summary>
+        private IRConstant TryEnumMemberConstant(ExpressionNode initializer)
+        {
+            if (initializer is not MemberAccessExpressionNode { Object: IdentifierExpressionNode receiver } access) return null;
+            if (_semanticAnalyzer.GetNodeType(initializer) is not { Kind: TypeKind.Enum } enumType) return null;
+            if (!string.Equals(receiver.Name, enumType.Name, StringComparison.OrdinalIgnoreCase)) return null;
+            if (enumType.Members == null || !enumType.Members.ContainsKey(access.MemberName)) return null;
+            return new IRConstant(new IREnumMemberValue(enumType.Name, access.MemberName), enumType);
         }
 
         public void Visit(InterfaceNode node)
@@ -5209,7 +5209,10 @@ namespace BasicLang.Compiler.IR
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
 
-                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value);
+                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value)
+                {
+                    ThroughBase = IsBasePropertyAccess(memberExpr)
+                };
 
                 // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
                 // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
@@ -6188,7 +6191,10 @@ namespace BasicLang.Compiler.IR
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType);
+            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType)
+            {
+                ThroughBase = IsBasePropertyAccess(node)
+            };
 
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
@@ -7278,6 +7284,17 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         internal static bool IsKnownNetStaticTypeName(string name) =>
             !string.IsNullOrEmpty(name) && KnownNetStaticTypes.Contains(name);
+
+        /// <summary>
+        /// <c>MyBase.P</c> where P is a PROPERTY — the base's accessor, bypassing virtual dispatch (spec §4.5, M4;
+        /// portable-controls Task 13). Inside <c>Overrides Property Text</c>, <c>MyBase.Text</c> lowered to
+        /// <c>this.Text</c> and called the override itself: a stack overflow on JavaScript, C# and C++ from a green build.
+        /// ⛔ A FIELD through MyBase is NOT flagged: a field is not virtual, it is the instance's own storage, and JS
+        /// <c>super.field</c> reads the PROTOTYPE, not the instance.
+        /// </summary>
+        private bool IsBasePropertyAccess(MemberAccessExpressionNode node) =>
+            node.Object is MyBaseExpressionNode
+            && _semanticAnalyzer.GetNodeSymbol(node)?.Kind == SymbolKind.Property;
 
         /// <summary><c>Me</c> / <c>MyClass</c> as a receiver — always the current instance, never a type (M7).</summary>
         private static bool IsSelfExpression(ExpressionNode expression) =>

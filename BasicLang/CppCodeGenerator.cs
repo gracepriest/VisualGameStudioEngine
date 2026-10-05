@@ -1090,6 +1090,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// for any property reached through an INTERFACE, which declares accessors and no
         /// storage.</para>
         /// </summary>
+        /// <summary>
+        /// <c>MyBase.P</c> on an accessor-backed property (spec §4.5, Task 13): the DECLARING base class's accessor, called
+        /// qualified — <c>Control::get_Text()</c> — which C++ dispatches non-virtually. The MyBase receiver is <c>Me</c>
+        /// TYPED as the base, so the lookup starts at that type, never at the class being emitted (whose own override
+        /// is what <c>this->get_Text()</c> called: a stack overflow). Null for a plain auto-property (storage — the
+        /// instance's own member is right).
+        /// </summary>
+        private AccessorProperty BaseAccessorPropertyOf(IRValue receiver, string member)
+        {
+            var baseName = receiver?.Type?.Name;
+            if (string.IsNullOrEmpty(baseName) || string.IsNullOrEmpty(member) || _module == null) return null;
+            if (FindClassProperty(baseName, member) is not { } found || !found.prop.IsAccessorBacked) return null;
+            return new AccessorProperty($"{SanitizeName(found.owner.Name)}::", SanitizeName(found.prop.Name));
+        }
+
         private AccessorProperty AccessorPropertyOf(IRValue receiver, string member)
         {
             if (receiver == null || string.IsNullOrEmpty(member) || _module == null) return null;
@@ -5797,6 +5812,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"{recv}{accessOp}{bclProp.CppName ?? bclProp.MemberName}()";
             }
 
+            // `MyBase.P`: the base's getter, qualified (Task 13).
+            if (fieldAccess.ThroughBase && BaseAccessorPropertyOf(fieldAccess.Object, fieldAccess.FieldName) is { } baseGetter)
+            {
+                return $"{baseGetter.Accessor}get_{baseGetter.Name}()";
+            }
+
             // A property with a Get body (or Overridable, or read through an interface) has no
             // data member to read — call its getter. See AccessorPropertyOf.
             if (AccessorPropertyOf(fieldAccess.Object, fieldAccess.FieldName) is { } getter)
@@ -5846,6 +5867,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Classes are unaffected either way — a shared_ptr copy still aliases one object.
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = GetValueName(fieldStore.Value);
+
+            // `MyBase.P = v`: the base's setter, qualified (Task 13).
+            if (fieldStore.ThroughBase && BaseAccessorPropertyOf(fieldStore.Object, fieldStore.FieldName) is { } baseSetter)
+            {
+                WriteLine($"{baseSetter.Accessor}set_{baseSetter.Name}({value});");
+                return;
+            }
 
             // The write half of AccessorPropertyOf: a property with a Set body has no member to
             // assign — call its setter.

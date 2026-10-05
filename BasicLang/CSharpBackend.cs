@@ -3948,7 +3948,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRFieldAccess fieldAccess:
                     {
-                        var obj = EmitExpression(fieldAccess.Object, stack, false);
+                        // `MyBase.P` on a property: the BASE's getter (Task 13) — `this.P` called the override.
+                        var obj = fieldAccess.ThroughBase ? "base" : EmitExpression(fieldAccess.Object, stack, false);
                         var fieldName = SanitizeName(fieldAccess.FieldName);
                         return RequiresNativeBclIntCast(fieldAccess)
                             ? $"(int)({obj}.{fieldName})"
@@ -4852,7 +4853,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRFieldAccess fieldAccess)
         {
-            var obj = EmitExpression(fieldAccess.Object);
+            var obj = fieldAccess.ThroughBase ? "base" : EmitExpression(fieldAccess.Object);
             var fieldName = SanitizeName(fieldAccess.FieldName);
             var type = MapType(fieldAccess.Type);
             var access = RequiresNativeBclIntCast(fieldAccess)
@@ -4882,7 +4883,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRFieldStore fieldStore)
         {
-            var obj = EmitExpression(fieldStore.Object);
+            // `MyBase.P = v` on a property: the BASE's setter (Task 13).
+            var obj = fieldStore.ThroughBase ? "base" : EmitExpression(fieldStore.Object);
             var fieldName = SanitizeName(fieldStore.FieldName);
             var value = EmitExpression(fieldStore.Value);
             WriteLine($"{obj}.{fieldName} = {value};");

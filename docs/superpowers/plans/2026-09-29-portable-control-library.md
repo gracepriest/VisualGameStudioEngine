@@ -1858,6 +1858,25 @@ public class HandlerSignatureRouteTests
   - C++: an event WITH parameters does not compile (`raise_X()` takes none — open chip), and `Object` has no C++ mapping
     (capability refusal), so the handler rows run on C# and JavaScript only.
   - JavaScript (seen in Task 11): `Math.Max(3, 7)` under `Using System` on the project route is "no lowering for 'Math.Max'".
+    Measured: PRE-EXISTING and not Using-related (the no-Using file route fails the same way; Task 11 changed routing only
+    for a receiver bound to a value symbol, and `Math` has none). Bare `Max(a, b)` maps; the QUALIFIED `Math.X` does not
+    reach JavaScriptStdLib. Fixed in Task 14's commit (Max/Min/Abs/Floor/Ceiling/Round with banker's rounding/Sqrt/Pow).
+- ✅ Second review (da43d56b/23e5150d/1e929b29), folded into Task 13's commit: `CType(i, Shade)` (Integer → Enum) lowers on
+  JavaScript (the value unchanged); comparing two DIFFERENT Enums is refused in the analyzer (VB Option Strict; it was C#
+  CS0019 / C++ C2676 / JS a silent number compare).
+- ⚠ Recorded from the second review, not fixed:
+  - `Public Shared Event` fails C# CS0120 and JS (`push` on an undefined static list, TypeError) — pre-existing. The
+    library's controls raise INSTANCE events only (WinForms has no shared control events), so not needed by 2a.
+  - `Dim d As Action(Of Integer) = AddressOf Me.A` is refused — pre-existing.
+  - ⛔ DECISION NEEDED by Task 28+: with no `<Flags>`, `Bold Or Italic` prints `3` on every backend, while WinForms'
+    `AnchorStyles.Top Or AnchorStyles.Left` prints `Top, Left`. Recommendation (owner-delegated default): the LIBRARY's
+    flags enums carry a `ToString` that matches WinForms, library-side (a shared helper the flags enums' text routes
+    through), rather than a BasicLang `<Flags>` attribute — no language change, and only the library's enums need it.
+    Record the choice when Task 28 lands.
+  - JS `RemoveHandler` (Task 12) covers BasicLang events only; a DOM `addEventListener` wiring is not removable by a
+    fresh `AddressOf` (the DOM compares identity). Library concern — Task 28+ keeps the bound handler it attaches.
+  - Roster pin: the reviewer measured the branch at 103 and master at 107 → merged 109; Task 13 adds one (branch 104 →
+    merged 110), and every later rostered fixture one more. RE-READ BOTH at Task 17's merge, never add deltas from memory.
 
 ## Task 11: JavaScript — `Me` (or any value) is never a .NET static receiver
 
