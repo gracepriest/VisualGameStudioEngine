@@ -3601,7 +3601,20 @@ namespace BasicLang.Compiler
             if (Check(TokenType.Identifier))
             {
                 var t = Advance();
-                return new IdentifierExpressionNode(t.Line, t.Column) { Name = t.Lexeme };
+                ExpressionNode value = new IdentifierExpressionNode(t.Line, t.Column) { Name = t.Lexeme };
+
+                // ⛔ A DOTTED value (`Case Shade.Dark`, `Case Limits.Max`). Before portable-controls Task 9 only the
+                // head identifier was read, and the rest — `.Dark` — parsed as the clause's first STATEMENT, an
+                // implicit With member: "Implicit member access (.) is only valid inside a With block", or, inside a
+                // With, a silent read of the With object's member. Member names follow ParsePostfix's rule.
+                while (Check(TokenType.Dot)
+                       && (PeekNext().Type == TokenType.Identifier || IsKeywordUsableAsMemberName(PeekNext().Type)))
+                {
+                    Advance(); // the dot
+                    var member = Advance();
+                    value = new MemberAccessExpressionNode(value.Line, value.Column) { Object = value, MemberName = member.Lexeme };
+                }
+                return value;
             }
             return null;
         }

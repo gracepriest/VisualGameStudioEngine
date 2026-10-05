@@ -186,6 +186,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitIntegerDivisionPrelude(module);
             EmitPrimitiveStaticsPrelude(module);
 
+            // Enums before globals and classes — an initialiser may read one.
+            EmitEnums(module);
+
             // Module-level Dims, also before classes — a static field initialiser may read one.
             EmitGlobals(module);
 
@@ -662,6 +665,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// instructions (EmitInstruction drops them when there is no block) — a call or a
         /// <c>New</c> here would be a silently defaulted global. Refuse instead.</para>
         /// </summary>
+        /// <summary>
+        /// Each user <c>Enum</c> as a frozen object of its member values: <c>const Shade = Object.freeze({ Light: 0, … })</c>.
+        ///
+        /// <para>⛔ Portable-controls Task 9 (M12). This backend emitted NO Enum declaration at all. It was invisible
+        /// while the front end refused <c>Shade.Dark</c> (typed Object); once the member types as the Enum, the access
+        /// is emitted as <c>Shade.Dark</c> and died at load with <c>ReferenceError: Shade is not defined</c> from a
+        /// green build. A member is its NUMBER, as on every other backend (<c>CInt(k)</c>, <c>=</c>, <c>Select Case</c>).</para>
+        /// </summary>
+        private void EmitEnums(IRModule module)
+        {
+            var any = false;
+            foreach (var irEnum in module.Enums?.Values ?? Enumerable.Empty<IREnum>())
+            {
+                if (irEnum == null || string.IsNullOrEmpty(irEnum.Name)) continue;
+                var members = string.Join(", ", (irEnum.Members ?? new List<IREnumMember>())
+                    .Select(m => $"{SanitizeName(m.Name)}: {Convert.ToString(m.Value ?? 0L, System.Globalization.CultureInfo.InvariantCulture)}"));
+                Line($"const {SanitizeName(irEnum.Name)} = Object.freeze({{ {members} }});");
+                any = true;
+            }
+            if (any) Line();
+        }
+
         private void EmitGlobals(IRModule module)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

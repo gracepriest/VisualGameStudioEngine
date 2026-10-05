@@ -5778,6 +5778,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var fieldName = SanitizeName(fieldAccess.FieldName);
 
+            // A user Enum's member: `Shade.Dark` is `Shade::Dark` (an `enum class`). Reachable since portable-controls
+            // Task 9 types the member as the Enum (M12); before that the front end refused the read. A declared local
+            // of the same name wins, as for the other type-name receivers above.
+            if (fieldAccess.Object is IRVariable enumRecv
+                && !_declaredIdentifiers.Contains(enumRecv.Name)
+                && _module?.Enums != null
+                && _module.Enums.TryGetValue(enumRecv.Name, out var userEnum)
+                && userEnum.Members.Any(m => string.Equals(m.Name, fieldAccess.FieldName, StringComparison.OrdinalIgnoreCase)))
+            {
+                return $"{SanitizeName(userEnum.Name)}::{fieldName}";
+            }
+
             // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
             if (StaticMemberQualifier(fieldAccess.Object, fieldAccess.FieldName) is string readQualifier)
             {

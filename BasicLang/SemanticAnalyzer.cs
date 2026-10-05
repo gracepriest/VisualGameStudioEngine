@@ -607,6 +607,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             pendingClasses.Add((classNode, classType));
                         }
                     }
+                    else if (decl is EnumNode enumNode)
+                    {
+                        RegisterSiblingEnumShell(enumNode, unit);
+                    }
                 }
             }
 
@@ -701,6 +705,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
             };
             GlobalScope.Define(symbol);
             return classType;
+        }
+
+        /// <summary>
+        /// The Enum twin of <see cref="RegisterSiblingClassShell"/>: a not-yet-compiled sibling's Enum, members and all,
+        /// so <c>Shade.Dark</c> in this file is typed <c>Shade</c> (M12). Skipped when the name is already taken.
+        /// </summary>
+        private void RegisterSiblingEnumShell(EnumNode enumNode, CompilationUnit unit)
+        {
+            if (string.IsNullOrEmpty(enumNode.Name)) return;
+            if (GlobalScope.Resolve(enumNode.Name) != null) return;
+
+            var enumType = new TypeInfo(enumNode.Name, TypeKind.Enum);
+            RecordEnumMembers(enumNode, enumType);
+            GlobalScope.Define(new Symbol(enumNode.Name, SymbolKind.Type, enumType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName
+            });
         }
 
         /// <summary>
@@ -5765,6 +5788,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// the message was "Type 'Game' does not have a member 'Version'", true but no help. (C# also
         /// refuses the pair outright: the file becomes <c>static class Game</c> beside the class, CS0101.)</para>
         /// </summary>
+        /// <summary>
+        /// <c>Shade.Dark</c> where <c>Shade</c> is an Enum declaring <c>Dark</c> — bound as the Enum's member, never through
+        /// the module channel. ⛔ Portable-controls Task 9: an Enum in a file of its own name (<c>Shade.bas</c>, the
+        /// library's one-type-per-file shape) is ALSO the file module <c>Shade</c>, and the module channel answered
+        /// "Module 'Shade' does not have a public member 'Dark'". Only a member the Enum DECLARES takes this path, so a
+        /// file-level name qualified by the file still reaches the module channel.
+        /// </summary>
+        private bool NamesAnEnumMember(string qualifier, string memberName) =>
+            (ResolveTypeSymbol(qualifier)?.Type ?? _typeManager.GetType(qualifier)) is { Kind: TypeKind.Enum } enumType
+            && enumType.Members != null && enumType.Members.ContainsKey(memberName ?? string.Empty);
+
         private bool RefuseFileMemberQualifiedByAClassName(string qualifier, MemberAccessExpressionNode node)
         {
             if (_moduleRegistry == null) return false;
@@ -6101,6 +6135,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (_typeManager.DefineType(iface.Name, TypeKind.Interface) != null)
                     {
                         _preRegisteredInterfaces.Add(iface.Name);
+                    }
+                    break;
+                // An Enum declared below its use: `Dim k As Shade = Shade.Dark` above `Enum Shade` (M12).
+                case EnumNode en:
+                    if (_typeManager.DefineType(en.Name, TypeKind.Enum) is { } preEnum)
+                    {
+                        _preRegisteredEnums.Add(en.Name);
+                        RecordEnumMembers(en, preEnum);
                     }
                     break;
                 case ModuleNode module:
@@ -6907,14 +6949,50 @@ namespace BasicLang.Compiler.SemanticAnalysis
             ExitScope();
         }
 
+        /// <summary>
+        /// Spec §4.7 (M12) — an Enum's members are MEMBERS of its type, typed as the Enum, so <c>Shade.Dark</c> binds
+        /// through <c>ResolveMember</c> instead of falling to the PascalCase ".NET type" fallback typed Object. Written by
+        /// all three places an Enum becomes known — pass 1 (<see cref="RegisterClassTypes"/>), a sibling file's shell
+        /// (<see cref="RegisterPendingSiblingSignatures"/>) and its own <see cref="Visit(EnumNode)"/> — and idempotent.
+        /// </summary>
+        private static void RecordEnumMembers(EnumNode node, TypeInfo enumType)
+        {
+            if (enumType == null) return;
+            enumType.Members ??= new Dictionary<string, Symbol>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in node.Members)
+            {
+                if (string.IsNullOrEmpty(member.Name)) continue;
+                enumType.Members[member.Name] =
+                    new Symbol(member.Name, SymbolKind.Constant, enumType, member.Line, member.Column)
+                    {
+                        Access = AccessModifier.Public,
+                        IsShared = true
+                    };
+            }
+        }
+
+        /// <summary>The Enum twin of <see cref="_preRegisteredClasses"/>, consumed by <see cref="Visit(EnumNode)"/>.</summary>
+        private readonly HashSet<string> _preRegisteredEnums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         public void Visit(EnumNode node)
         {
             var enumType = _typeManager.DefineType(node.Name, TypeKind.Enum);
             if (enumType == null)
             {
-                Error($"Enum '{node.Name}' is already defined", node.Line, node.Column);
-                return;
+                // Pass 1 pre-registered it — consume the record (the Visit(ClassNode) pattern: a genuine second
+                // `Enum Shade` finds nothing left and reports at its own line).
+                if (_preRegisteredEnums.Remove(node.Name))
+                {
+                    enumType = _typeManager.GetType(node.Name);
+                }
+
+                if (enumType == null)
+                {
+                    Error($"Enum '{node.Name}' is already defined", node.Line, node.Column);
+                    return;
+                }
             }
+            RecordEnumMembers(node, enumType);
 
             var symbol = new Symbol(node.Name, SymbolKind.Type, enumType, node.Line, node.Column);
             if (!_currentScope.Define(symbol))
@@ -11845,6 +11923,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (symbol == null)
             {
+                // An Enum declared BELOW this use: pass 1 made its type (members and all) but its scope symbol is
+                // defined only by its own visit, so without this `Shade.Dark` fell to the PascalCase ".NET type"
+                // guess below — a member-less phantom typed Object (portable-controls Task 9, M12).
+                if (_typeManager.GetType(node.Name) is { Kind: TypeKind.Enum } laterEnum)
+                {
+                    SetNodeType(node, laterEnum);
+                    return;
+                }
+
                 // Check if this could be a .NET static class (e.g., Console, Math, File)
                 if (IsNetType(node.Name))
                 {
@@ -12239,7 +12326,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // variable named like a module/file (e.g. "player" vs class "Player"
             // in Player.cls) is an instance, not a module reference — otherwise
             // FindModuleByName matches the sibling unit case-insensitively.
-            if (node.Object is IdentifierExpressionNode objId && !ResolvesToValueSymbol(objId.Name))
+            if (node.Object is IdentifierExpressionNode objId && !ResolvesToValueSymbol(objId.Name)
+                && !NamesAnEnumMember(objId.Name, node.MemberName))
             {
                 var moduleName = objId.Name;
 
