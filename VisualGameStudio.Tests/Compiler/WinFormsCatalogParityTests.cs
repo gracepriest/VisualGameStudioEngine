@@ -304,7 +304,7 @@ public class WinFormsCatalogParityTests
         var decimalProperty = new WinFormsPropertyEntry
         {
             Name = "Value", Category = "Behavior", Type = "Decimal", TypeFullName = "System.Decimal",
-            DefaultKind = "attribute", Default = "0", Description = "d"
+            DefaultKind = "attribute", Default = "0", Description = "d", Mergeable = true
         };
         var row = new FormPropertyDef("Value", FormPropertyType.Int, "0",
             Category: FormPropertyCategory.Behavior, Description: "d");
@@ -329,5 +329,32 @@ public class WinFormsCatalogParityTests
         Assert.That(CatalogParity.CompareProperty("ToolStrip", wrong, snap).ToList(),
             Has.Some.Contains("Default is 'Hidden'"),
             "if this passes silently, every parity row above reports success about nothing");
+    }
+
+    /// <summary>
+    /// Slice 6 D-2 rule 2: the comparer judges Mergeable — a catalog row that offered ComboBox.Items to a multi-selection
+    /// (WinForms marks it [MergableProperty(false)]) is a finding; an exemption covers it, as it covers the default.
+    /// </summary>
+    [Test]
+    public void TheInstrument_CatchesAMergeableDisagreement_AndAnExemptionCoversIt()
+    {
+        var snap = WinFormsMetadata.Load().Type("ComboBox")!.Property("Items")!;
+        var items = FormControlCatalog.Find("ComboBox")!.Properties.Single(p => p.Name == "Items");
+        Assert.That(snap.Mergeable, Is.False, "precondition: WinForms refuses to merge ComboBox.Items");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CatalogParity.CompareProperty("ComboBox", items, snap).ToList(), Is.Empty, "the catalog agrees");
+            Assert.That(CatalogParity.CompareProperty("ComboBox", items with { Mergeable = true }, snap).ToList(),
+                Has.Some.Contains("Mergeable is True"), "a flipped row is caught");
+            Assert.That(CatalogParity.CompareProperty("ComboBox", items with { Mergeable = true, OracleExemption = "r" }, snap)
+                .ToList(), Has.None.Contains("Mergeable"), "an exemption covers it");
+            Assert.That(CatalogParity.CompareProperty("ComboBox", items, new WinFormsPropertyEntry
+                {
+                    Name = snap.Name, Category = snap.Category, Type = snap.Type, TypeFullName = snap.TypeFullName,
+                    IsCollection = snap.IsCollection, DefaultKind = snap.DefaultKind, Default = snap.Default,
+                    Description = snap.Description, Mergeable = null
+                }).ToList(), Has.Some.Contains("no 'mergeable'"), "an unmeasured snapshot is never read as mergeable");
+        });
     }
 }

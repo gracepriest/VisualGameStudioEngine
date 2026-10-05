@@ -6049,6 +6049,10 @@ git commit -F "$sp\slice2-commit.txt"
 
 ## Slice 6 — Multi-select (TASK granularity)
 
+> ✅ **EXPANDED AND EXECUTED 2026-10-05** — `docs/superpowers/plans/2026-10-05-property-grid-slice6-preflight.md` (it wins
+> over the task text below — its §2 decisions and §9 dispositions; its §6 EXECUTION NOTES record what the run found and
+> the slice gate), branch `feat/property-grid-slice6`. With it the property-grid programme is COMPLETE.
+
 - **Task 6.1 — The grid takes `Selection.Controls`** (today only `Selection.Primary` via `PropertyGrid.SelectedControl`, `CodeEditorDocumentViewModel.cs:1106`) — still fed only by the one store.
 - **Task 6.2 — Shared rows:** same name AND same type, catalog rows and geometry-backed Size; value shown when equal on all, blank when mixed; Name and Location not offered; object selector blank (⚠ RE-CHECK the slice-2 selector tests' assumption of a single selection).
 - **Task 6.3 — One edit = ONE undo step:** the grid raises `Edited` ONCE per multi-edit (undo is `TextDocument.UndoStack`, one write → one replace, `CodeEditorDocumentViewModel.cs:907-943`).

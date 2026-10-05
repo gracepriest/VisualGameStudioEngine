@@ -53,7 +53,11 @@ public static class FormCompositeRows
             onChanged: () => { },
             frozenReason: parent.FrozenReason,
             category: parent.Category,
-            description: parent.Description);
+            description: parent.Description)
+        {
+            // Slice 6 D-5: a merged part pre-judges each member's COMPOSED whole through this, writing nothing.
+            Compose = compose
+        };
 
     // ==================================================================
     // Font → Name, Size, Bold, Italic, Underline (VS's sub-rows; Strikeout rides along untouched)

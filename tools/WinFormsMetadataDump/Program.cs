@@ -237,6 +237,10 @@ internal static class Dump
             isFlags = t.IsEnum && t.IsDefined(typeof(FlagsAttribute), false),
             enumMembers = t.IsEnum ? Enum.GetNames(t) : null,
             isCollection,
+            // VS's Properties window hides a [MergableProperty(false)] property when SEVERAL objects are
+            // selected (.NET spells the attribute "Mergable"). Absent means mergeable — the attribute's
+            // own Default is AllowMerge=true.
+            mergeable = (p.Attributes[typeof(MergablePropertyAttribute)] as MergablePropertyAttribute)?.AllowMerge ?? true,
             defaultKind = kind,
             @default = value,
             description = p.Description ?? ""

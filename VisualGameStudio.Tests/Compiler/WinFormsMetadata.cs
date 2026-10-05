@@ -74,6 +74,13 @@ internal sealed class WinFormsPropertyEntry
     public bool IsCollection { get; set; }
 
     /// <summary>
+    /// WinForms' <c>[MergableProperty]</c> (absent = true): whether VS offers the property for a MULTI-selection (property
+    /// grid slice 6, D-2 rule 2). ⚠ Nullable on purpose: a snapshot made before the tool recorded it carries no key, and that
+    /// must read as "not measured — regenerate", never as a confident true.
+    /// </summary>
+    public bool? Mergeable { get; set; }
+
+    /// <summary>
     /// One of <see cref="DefaultKinds"/> — the vocabulary is tools/WinFormsMetadataDump/README.md's
     /// "What defaultKind means" table. Only attribute/reset carry a <see cref="Default"/> to compare.
     /// </summary>

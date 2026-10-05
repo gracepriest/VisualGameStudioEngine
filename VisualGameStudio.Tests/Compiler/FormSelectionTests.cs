@@ -257,4 +257,44 @@ public class FormSelectionTests
 
         Assert.That(selection.Contains(twin), Is.False);
     }
+
+    // ==================================================================
+    // Slice 6 D-13: promotion — clicking a member makes it the primary and keeps the group (VS)
+    // ==================================================================
+
+    [Test]
+    public void Promote_MovesAMemberToThePrimary_KeepsTheOthersInOrder_AndRaisesChangedOnce()
+    {
+        var selection = Selection(out var a, out var b, out var c);
+        selection.SetRange(new[] { a, b, c });
+        var changes = 0;
+        selection.Changed += (_, _) => changes++;
+
+        selection.Promote(a);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selection.Controls, Is.EqualTo(new[] { b, c, a }), "membership kept, a moved LAST");
+            Assert.That(selection.Primary, Is.SameAs(a));
+            Assert.That(changes, Is.EqualTo(1), "ONE Changed — never a Toggle + Add pair (two, and a transient set without a)");
+        });
+    }
+
+    [Test]
+    public void Promote_IsANoOp_ForThePrimary_AndForAControlNotSelected()
+    {
+        var selection = Selection(out var a, out var b, out var c);
+        selection.SetRange(new[] { a, b });
+        var changes = 0;
+        selection.Changed += (_, _) => changes++;
+
+        selection.Promote(b); // already the primary
+        selection.Promote(c); // not selected
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selection.Controls, Is.EqualTo(new[] { a, b }));
+            Assert.That(changes, Is.Zero, "nothing changed, nothing raised");
+        });
+    }
 }
