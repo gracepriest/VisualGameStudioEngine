@@ -7096,9 +7096,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var defaultType = GetNodeType(node.DefaultValue);
 
                 // `Optional c As C = Nothing` (#173)
-                if (JudgeNothingConversion(node.DefaultValue, paramType, node.Line, node.Column))
+                if (JudgeNothingConversion(node.DefaultValue, paramType))
                 {
-                    // admitted into a reference type, or refused with advice
+                    // admitted: a null reference, or a value type's default (#186)
                 }
                 else if (!paramType.IsAssignableFrom(defaultType))
                 {
@@ -7201,9 +7201,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
                 // `= Nothing` is judged on its own (#173) — a class field's and a module-level
                 // Dim's initializer come through here too.
-                if (JudgeNothingConversion(node.Initializer, varType, node.Line, node.Column))
+                if (JudgeNothingConversion(node.Initializer, varType))
                 {
-                    // admitted into a reference type, or refused with advice
+                    // admitted: a null reference, or a value type's default (#186)
                 }
                 else if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
                     && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
@@ -7888,8 +7888,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             {
                                 var expectedType = ArgumentTargetType(baseCtorSymbol, i, argTypes.Count, argTypes[i]);
                                 if (expectedType == null) continue;
-                                if (JudgeNothingConversion(node.BaseConstructorArgs[i], expectedType,
-                                        node.BaseConstructorArgs[i].Line, node.BaseConstructorArgs[i].Column))
+                                if (JudgeNothingConversion(node.BaseConstructorArgs[i], expectedType))
                                     continue;   // `MyBase.New(Nothing)` (#173)
                                 var actualType = argTypes[i];
                                 if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
@@ -8748,10 +8747,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var elementType = GetNodeType(element);
 
-            // Admitted without a check into any reference or unresolvable .NET T (csc takes null);
-            // refused into a value type, with advice that names a value OF that type — "write 0"
-            // for an enum sends the user straight into the non-literal arm's second refusal.
-            if (JudgeNothingConversion(element, target, element.Line, element.Column))
+            // Admitted into any T, as at every other conversion site (#186): a null reference, or a
+            // value type's default (`New Integer() {1, Nothing}` is {1, 0}, as vbc gives).
+            if (JudgeNothingConversion(element, target))
             {
                 return;
             }
@@ -8803,81 +8801,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// The advice half of the <c>Nothing</c> refusal, per value-type kind; null for a reference
-        /// (or unresolvable .NET) target, which admits <c>Nothing</c>. THE answer to "does Nothing
-        /// convert to T" — every conversion site asks it through <see cref="JudgeNothingConversion"/>.
-        ///
-        /// <para>⚠ The Union, tuple, type-parameter and P1-struct arms arrived with #173, when
-        /// <c>Nothing</c> began reaching Dim, assignment, argument and Return targets: each is a
-        /// type this list used to call a reference type, and each was MEASURED refused-or-wrong on
-        /// the backends once admitted (Union and tuple fail on every backend with or without
-        /// Nothing, so for them the arm only keeps the refusal they had). The P1 structs are typed as
-        /// synthetic CLASSES, so no kind test sees them — <c>Dim d As DateTime = Nothing</c> was
-        /// CS0037 on C#, a clang error on C++ and a silent <c>null</c> on JavaScript (a TypeError at
-        /// the first member read). A type parameter may be instantiated with a value type:
-        /// <c>Dim x As T = Nothing</c> was CS0403 on C# and <c>null</c> for <c>T = Integer</c> on
-        /// JavaScript (VB gives <c>default(T)</c>, which is the value-type default of #186). A
-        /// tuple and a Union are value types that the Structure arm did not name. A NULLABLE
-        /// (<c>Integer?</c>) is deliberately absent: it is the one value type VB admits Nothing into.</para>
-        /// </summary>
-        private static string NothingAdviceFor(TypeInfo target)
-        {
-            if (target.IsNumeric()) return "write 0";
-            if (target.Name == "Boolean") return "write False";
-            if (target.Name == "Char") return "write a character literal";
-            if (target.Kind == TypeKind.Structure || target.Kind == TypeKind.UserDefinedType
-                || target.Kind == TypeKind.Union)
-            {
-                return $"write New {target.Name}()";   // `Type … End Type` is a value type too (CS0037 otherwise)
-            }
-            if (target.Kind == TypeKind.Enum) return $"write a member of '{target.Name}'";
-            if (target.Kind == TypeKind.Tuple) return "write a tuple literal";
-            if (target.Kind == TypeKind.TypeParameter)
-            {
-                return $"'{target.Name}' is a type parameter and may be a value type";
-            }
-            // The P1 native structs; StringBuilder is the one NativeOwned reference type, and
-            // Decimal already took the numeric arm. (EndsWith: Categorize strips a `System.` path.)
-            if (BoundaryTypeRegistry.Categorize(target.Name) == BoundaryTypeCategory.NativeOwned
-                && !target.Name.EndsWith("StringBuilder", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"'{target.Name}' is a value type; write a {target.Name} value";
-            }
-            return null;
-        }
-
-        /// <summary>
         /// The <c>Nothing</c> literal at a conversion site (#173). It is typed <c>Object</c>
         /// (<c>Visit(LiteralExpressionNode)</c>'s default), so every site's own
         /// <c>IsAssignableFrom</c> refused it into anything but <c>Object</c> — <c>Dim f As Action =
         /// Nothing</c>, <c>Take(Nothing)</c>, <c>Return Nothing</c>, <c>o = Nothing</c> were all
-        /// "cannot convert 'Object' to …". VB converts it to any REFERENCE type; into a value type it
-        /// stays refused, with the typed array literal's advice (VB's value-type default is #186).
+        /// "cannot convert 'Object' to …".
         ///
-        /// <para>⚠ ONE answer to "does Nothing convert to T": <see cref="NothingAdviceFor"/>, which
-        /// the typed array literal (<see cref="CheckTypedLiteralElement"/>) asks through this same
-        /// method. A second list here would let the two sites disagree about a type.</para>
+        /// <para>⭐ #186: VB converts <c>Nothing</c> to EVERY type — a reference type gets a null
+        /// reference, and a value type gets its default value
+        /// (<see cref="TypeInfo.NothingIsDefaultValue"/>). So the literal is admitted at every
+        /// site, the typed array literal (<see cref="CheckTypedLiteralElement"/>) included. The IR
+        /// gives it its value where it is stored, passed, returned or compared
+        /// (<c>IRBuilder.NothingAs</c>). Before #186 a value type was refused with advice ("Nothing
+        /// has no value of type 'Integer'; write 0"), where vbc gives 0.</para>
         ///
-        /// <para>True when <paramref name="value"/> is the Nothing literal and has been JUDGED —
-        /// admitted, or refused with the advice reported at (<paramref name="line"/>,
-        /// <paramref name="column"/>) — so the caller skips its own type check. False for anything
-        /// else, and for a null <paramref name="target"/> (an unresolved one reports itself).</para>
+        /// <para>What stays refused is IDENTITY on a value type: <c>n Is Nothing</c> and
+        /// <c>Case Is Nothing</c> (BC30020, <see cref="CheckIdentityOperand"/>). VB refuses those
+        /// too.</para>
+        ///
+        /// <para>True when <paramref name="value"/> is the Nothing literal, so the caller skips its
+        /// own type check. False for anything else, and for a null <paramref name="target"/> (an
+        /// unresolved one reports itself).</para>
         /// </summary>
-        private bool JudgeNothingConversion(ExpressionNode value, TypeInfo target, int line, int column)
-        {
-            if (target == null || !IsNothingLiteral(value))
-            {
-                return false;
-            }
-
-            var advice = NothingAdviceFor(target);
-            if (advice != null)
-            {
-                Error($"Nothing has no value of type '{target.Name}'; {advice}", line, column);
-            }
-
-            return true;
-        }
+        private static bool JudgeNothingConversion(ExpressionNode value, TypeInfo target) =>
+            target != null && IsNothingLiteral(value);
 
         /// <summary>
         /// "a Double", "an Integer" — the spec's messages use both, so the article is computed.
@@ -10354,9 +10301,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     // Type parameters are checked at instantiation time
                 }
-                else if (JudgeNothingConversion(node.Value, expectedReturnType, node.Line, node.Column))
+                else if (JudgeNothingConversion(node.Value, expectedReturnType))
                 {
-                    // `Return Nothing` (#173): admitted into a reference type, or refused with advice
+                    // `Return Nothing` (#173): a null reference, or a value type's default (#186)
                 }
                 else if (!expectedReturnType.IsAssignableFrom(returnType))
                 {
@@ -10796,9 +10743,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     // Opaque on both sides; the backend renders the member verbatim.
                 }
                 // `x = Nothing` (#173) — a variable, a field, a property set and an element alike.
-                else if (JudgeNothingConversion(node.Value, targetType, node.Line, node.Column))
+                else if (JudgeNothingConversion(node.Value, targetType))
                 {
-                    // admitted into a reference type, or refused with advice
+                    // admitted: a null reference, or a value type's default (#186)
                 }
                 else if (!targetType.IsAssignableFrom(valueType))
                 {
@@ -11220,9 +11167,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// keeps no paren node) reaches here. Refused as a whole, naming
         /// <c>x IsNot Nothing</c> (D1 (3)) — it can never be right: <c>Not</c> yields a Boolean,
         /// a value type;</item>
-        /// <item>each operand is the <c>Nothing</c> literal or a type <c>Nothing</c> converts to.
-        /// ⛔ The predicate IS <see cref="NothingAdviceFor"/> — #173's ONE answer, never a second
-        /// list (D2 (1)). A value type is refused BC30020-style;</item>
+        /// <item>each operand is the <c>Nothing</c> literal or a type <c>Nothing</c> is a null
+        /// reference of. ⛔ The predicate IS <see cref="TypeInfo.NothingIsDefaultValue"/> — the ONE
+        /// list of value types, never a second one (D2 (1)). A value type is refused
+        /// BC30020-style: since #186 <c>Nothing</c> converts to it, but as its default value, which
+        /// has no identity to test;</item>
         /// <item>against the <c>Nothing</c> literal, every admitted type is legal — a String, a
         /// delegate, a nullable included (D4 (2));</item>
         /// <item>two non-<c>Nothing</c> operands: a nullable is admitted only against
@@ -11323,12 +11272,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>
         /// One non-<c>Nothing</c> operand of <c>Is</c> / <c>IsNot</c>: legal exactly when
-        /// <c>Nothing</c> converts to its type — <see cref="NothingAdviceFor"/>, the one answer
+        /// <c>Nothing</c> is a null reference of its type — not a value type
+        /// (<see cref="TypeInfo.NothingIsDefaultValue"/>, the one list), the one answer
         /// (ADR-0011 D2 (1)). Refused BC30020-style otherwise, naming <c>=</c> (D2 (3)).
         /// </summary>
         private bool CheckIdentityOperand(string op, ExpressionNode operand, TypeInfo type, ExpressionNode node)
         {
-            if (NothingAdviceFor(type) == null)
+            if (!TypeInfo.NothingIsDefaultValue(type))
             {
                 return true;
             }
@@ -11433,18 +11383,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>
         /// ADR-0011 D2 (2): <c>Case Is Nothing</c> is an identity test, held to the SAME operand
         /// rule as <c>x Is Nothing</c> — the Select Case value must be a type <c>Nothing</c>
-        /// converts to (<see cref="NothingAdviceFor"/>). On a value type it compiled to four
-        /// different things (CS0037 on C#, a clang error on C++, never-matches on JavaScript,
-        /// matches-zero on MSIL). <c>Case Nothing</c> (no <c>Is</c>) is VB's VALUE comparison with
-        /// the type's default and is not judged here.
+        /// is a null reference of (<see cref="TypeInfo.NothingIsDefaultValue"/>). On a value type it
+        /// compiled to four different things (CS0037 on C#, a clang error on C++, never-matches on
+        /// JavaScript, matches-zero on MSIL). <c>Case Nothing</c> (no <c>Is</c>) is VB's VALUE
+        /// comparison with the type's default (#186, <c>IRBuilder.ConvertPatternToIR</c>) and is not
+        /// judged here.
         /// </summary>
         private void CheckCaseIsNothingOperand(PatternNode pattern, TypeInfo selectType)
         {
             switch (pattern)
             {
                 case NothingPatternNode { WrittenWithIs: true } nothing:
-                    var advice = NothingAdviceFor(selectType);
-                    if (advice != null)
+                    if (TypeInfo.NothingIsDefaultValue(selectType))
                     {
                         var what = selectType.Kind == TypeKind.TypeParameter
                             ? $"'{selectType.Name}', a type parameter that may be a value type"
@@ -12373,8 +12323,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                                 continue;
                             }
 
-                            if (JudgeNothingConversion(node.Arguments[i], paramType,
-                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                            if (JudgeNothingConversion(node.Arguments[i], paramType))
                             {
                                 continue;   // `f(Nothing)` (#173)
                             }
@@ -12490,8 +12439,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             continue;
                         }
 
-                        if (JudgeNothingConversion(node.Arguments[i], paramType,
-                                node.Arguments[i].Line, node.Arguments[i].Column))
+                        if (JudgeNothingConversion(node.Arguments[i], paramType))
                         {
                             continue;   // `Take(Nothing)`, `obj.M(Nothing)` (#173)
                         }
@@ -12932,8 +12880,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             // function-call path.
                             if (TryRetypeLiteralToDecimal(node.Arguments[i], expectedType))
                                 argTypes[i] = GetNodeType(node.Arguments[i]);
-                            if (JudgeNothingConversion(node.Arguments[i], expectedType,
-                                    node.Arguments[i].Line, node.Arguments[i].Column))
+                            if (JudgeNothingConversion(node.Arguments[i], expectedType))
                                 continue;   // `New H(Nothing)` (#173)
                             var actualType = argTypes[i];
                             if (expectedType != null && actualType != null && !expectedType.IsAssignableFrom(actualType))
@@ -12983,9 +12930,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// type of the two operands, by the same rule a multi-line lambda's returns use
         /// (<see cref="DominantReturnType"/> — the operand type the other one widens to, Object
         /// when neither widens); a <c>Nothing</c> operand is not a candidate, so it takes the
-        /// other operand's type and is then judged against it like any <c>= Nothing</c>
-        /// (<see cref="JudgeNothingConversion"/>: admitted into a reference type, refused with
-        /// advice for a value type, where VB would silently produce the default).
+        /// other operand's type, as any <c>= Nothing</c> does (#186: a null reference, or a value
+        /// type's default — the IR coerces both operands to the result type, so
+        /// <c>If(c, 1, Nothing)</c> is 0 when c is False, as vbc gives).
         /// </summary>
         public void Visit(ConditionalExpressionNode node)
         {
@@ -13014,9 +12961,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             var resultType = candidates.Count == 0 ? _typeManager.ObjectType : DominantReturnType(candidates);
-
-            JudgeNothingConversion(node.WhenTrue, resultType, node.WhenTrue.Line, node.WhenTrue.Column);
-            JudgeNothingConversion(node.WhenFalse, resultType, node.WhenFalse.Line, node.WhenFalse.Column);
 
             SetNodeType(node, resultType);
         }

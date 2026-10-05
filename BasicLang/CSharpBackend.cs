@@ -5412,8 +5412,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private string EmitConstant(IRConstant constant)
         {
+            // #186: a null constant typed with a VALUE type is that type's default (VB's Nothing
+            // into a Structure, an Enum, a type parameter…; IRBuilder.NothingAs). `null` there is
+            // CS0037, and CS0403 for a type parameter.
             if (constant.Value == null)
-                return "null";
+                return TypeInfo.NothingIsDefaultValue(constant.Type) ? $"default({MapType(constant.Type)})" : "null";
 
             if (constant.Value is string str)
                 return $"\"{EscapeString(str)}\"";
@@ -5908,6 +5911,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private string EscapeChar(char ch)
         {
+            if (ch == '\0') return "\\0";   // #186: Nothing into a Char is ChrW(0)
             if (ch == '\'') return "\\'";
             if (ch == '\\') return "\\\\";
             if (ch == '\n') return "\\n";

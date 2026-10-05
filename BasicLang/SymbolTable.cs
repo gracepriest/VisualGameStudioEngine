@@ -265,6 +265,49 @@ public class TypeInfo
             && string.Equals(type.Name, name, StringComparison.Ordinal);
 
         /// <summary>
+        /// #186: whether <c>Nothing</c> converted to <paramref name="type"/> is that type's DEFAULT
+        /// VALUE rather than a null reference. This is VB's rule for a value type:
+        /// <c>Dim n As Integer = Nothing</c> is 0, a Structure gets every field at its default, and a
+        /// type parameter gets <c>default(T)</c>.
+        ///
+        /// <para>The ONE list of these types, shared by three layers:</para>
+        /// <list type="bullet">
+        /// <item>the front end refuses <c>Is</c>/<c>IsNot</c> and <c>Case Is Nothing</c> on them
+        /// (BC30020, ADR-0011 D2);</item>
+        /// <item>the IR lowers a <c>Nothing</c> converted to one as its default
+        /// (<c>IRBuilder.NothingAs</c>);</item>
+        /// <item>C# and C++ spell a typed-null IR constant of one as <c>default(T)</c> /
+        /// <c>T{}</c>.</item>
+        /// </list>
+        ///
+        /// <para>A NULLABLE (<c>Integer?</c>) is not on the list: it is the one value type that
+        /// holds Nothing. A type parameter is on it, because it may be instantiated with a value
+        /// type, and <c>default(T)</c> is also right for a reference one. The P1 native structs
+        /// (DateTime, TimeSpan, Guid…) are typed as synthetic CLASSES, so no kind test sees them.
+        /// StringBuilder is the one NativeOwned reference type, and Decimal is already numeric.
+        /// <c>EndsWith</c> is there because Categorize strips a <c>System.</c> path.</para>
+        /// </summary>
+        public static bool NothingIsDefaultValue(TypeInfo type)
+        {
+            if (type == null) return false;
+            if (type.IsNumeric() || type.Name == "Boolean" || type.Name == "Char") return true;
+
+            switch (type.Kind)
+            {
+                case TypeKind.Structure:
+                case TypeKind.UserDefinedType:   // `Type … End Type` is a value type too
+                case TypeKind.Union:
+                case TypeKind.Enum:
+                case TypeKind.Tuple:
+                case TypeKind.TypeParameter:
+                    return true;
+            }
+
+            return BoundaryTypeRegistry.Categorize(type.Name) == BoundaryTypeCategory.NativeOwned
+                && !type.Name.EndsWith("StringBuilder", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// The member named <paramref name="name"/> on this type, or — failing that — on the
         /// nearest base class that declares one. <see cref="Members"/> holds a type's OWN members
         /// only, so every lookup that should see an INHERITED member has to walk.
