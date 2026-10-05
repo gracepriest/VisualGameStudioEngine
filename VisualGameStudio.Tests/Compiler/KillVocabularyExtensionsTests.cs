@@ -986,17 +986,11 @@ public class KillVocabularyExtensionsExecutionTests
     public void B1_AggressivePipeline_AllFourBackendsAgree()
         => FourBackends.RunsOnEveryBackendAggressive(KillVocabularyExtensionsProbes.B1, KillVocabularyExtensionsProbes.B1Expected);
 
-    // ---- B2: IRBaseMethodCall's variable-argument (ByRef) arm. C++ ONLY, per the fixture brief's
-    //      own scope: JavaScript structurally refuses ByRef (BL7002); MSIL fails for an UNRELATED,
-    //      pre-existing gap — a virtual MyBase call to an inherited method RUN-FAILS with
-    //      "Method not found: Void BaseBox.SetIt(Int32)" (MEASURED, matrix-final.txt), nothing to
-    //      do with the kill vocabulary. C# is a KNOWN GAP named for #265, pinned below: since #139
-    //      the statement-level call IS written (it used to be DROPPED, and the program printed the
-    //      unchanged `3,3`), but IRBaseMethodCall carries no ByRef flags, so the call is written
-    //      `base.SetIt(p);` with no `ref` and Roslyn refuses it with CS1620. A refusal, not a wrong
-    //      answer, and not the kill vocabulary's. JavaScript and MSIL are not asserted — matching
-    //      this suite's convention of never asserting "wrong" against a leg for a reason this
-    //      family does not cover.
+    // ---- B2: IRBaseMethodCall's variable-argument (ByRef) arm. C++, C# and MSIL print vbc's answer;
+    //      JavaScript structurally refuses ByRef (BL7002). C# and MSIL were a KNOWN GAP (#265, #142)
+    //      until a base call carried its target's ByRef flags: C# wrote `base.SetIt(p);` with no `ref`
+    //      (CS1620; and before task #139 wrote the call at all it DROPPED it and printed `3,3`), and MSIL
+    //      named `BaseBox.SetIt(Int32)` for a method declared `Int32&` (MissingMethodException).
 
     [Test]
     public void B2_Cpp_StandardAndAggressivePipeline()
@@ -1008,12 +1002,11 @@ public class KillVocabularyExtensionsExecutionTests
     }
 
     /// <summary>
-    /// ⛔ KNOWN GAP, task #265 (the ByRef / Optional / parameter-type facts a base call does not carry): C# refuses B2 with CS1620 — no `ref` on `base.SetIt(p)` — through the standard
-    /// and the aggressive pipeline. Task #139 wrote the call; before it C# DROPPED it and printed `seed|seed|3,3` where vbc prints `seed|seed|102,3`. Pinned so it flips when #265 lands:
-    /// a different diagnostic set, including none, means #265 moved — update this pin, do not delete it. (Compiled, never run: nothing here executes.)
+    /// B2's `MyBase.SetIt(p)` passes p BY REFERENCE on C# (`base.SetIt(ref p);`) and on MSIL, through the standard and the aggressive pipeline: both print vbc's `seed|seed|102,3`.
+    /// The C# run is a child process with a time limit (CSharpProcessRunner), as every C# run of emitted code here must be.
     /// </summary>
     [Test]
-    public void B2_CSharp_RefusesWithCS1620_KnownGap_Task265()
+    public void B2_CSharpAndMsil_PrintVbcsAnswer_StandardAndAggressivePipeline()
     {
         foreach (var (label, csharp) in new[]
         {
@@ -1021,11 +1014,13 @@ public class KillVocabularyExtensionsExecutionTests
             ("aggressive", ReturnCoercionTests.EmitCSharpAggressiveForTest(KillVocabularyExtensionsProbes.B2)),
         })
         {
-            Assert.That(csharp, Does.Contain("base.SetIt(p);"), $"{label}: the call is written (task #139), without `ref`");
-            var errors = MyBaseMethodCallStatementShapeTests.RoslynErrors(csharp);
-            Assert.That(errors, Has.Length.EqualTo(1), $"{label}: {string.Join(" | ", errors)}");
-            Assert.That(errors[0], Does.Contain("error CS1620"), $"{label}: #265 moved? {errors[0]}");
+            Assert.That(csharp, Does.Contain("base.SetIt(ref p);"), $"{label}: the call is written with `ref`");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(csharp)),
+                Is.EqualTo(KillVocabularyExtensionsProbes.B2Expected), $"C# {label} pipeline");
         }
+
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(KillVocabularyExtensionsProbes.B2)),
+            Is.EqualTo(KillVocabularyExtensionsProbes.B2Expected), "MSIL");
     }
 
     [Test]

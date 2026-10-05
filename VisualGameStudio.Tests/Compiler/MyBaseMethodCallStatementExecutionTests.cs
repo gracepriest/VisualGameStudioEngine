@@ -31,23 +31,18 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⛔⛔ EVERY C# RUN HERE IS HANG-SAFE (`hangSafe: true` -> CSharpProcessRunner): some rows hold loops, and a C# loop that never ends freezes the whole test host if it runs in process.
 //
-//  ⛔ CELLS WITH NO EXPECTATION — each is a defect that is NOT #139's, measured on the fixed build and on the one before it. Asserting one would pin the defect:
+//  ⛔ CELLS WITH NO EXPECTATION — each is a defect that is NOT #139's, measured on the fixed build. Asserting one would pin the defect:
 //
-//    C#   #265 the ByRef rows (`p1_byref`, `p1b_byrefinh`, and KillVocabularyExtensions B2): IRBaseMethodCall carries no ByRef flags, so the call has no `ref` and C# refuses CS1620.
-//         It printed the unchanged variable before #139 wrote the call at all. PINNED as a refusal (here and in the shape fixture), so it flips when #265 lands.
-//    MSIL #142/#265 the same ByRef rows: MissingMethodException — the call names `SetIt(int32)` for a method declared ByRef. Pinned here (`…ThrowsAtRunTimeOnMsil…`). ⚠ It is NOT specific to an
-//         INHERITED method as #142's title says: `p1_byref` (a method the base declares Overridable and Derived overrides) throws the same.
-//    JS   the ByRef rows: BL7002, a refusal by design (JavaScript has no reference parameters); KillVocabularyExtensions.B2_JavaScript_RefusesByRef_BL7002 pins it.
-//    C++  `p2_object` (`'Object' has no C++ mapping`: the parameter itself, #213's neighbour), `p3_optional` (clang: too few arguments), `p4_paramarray` (clang: too many arguments),
-//         `s2d_tostring` (clang: `override` on ToString).
-//    JS   `p3_optional` (prints `base 1,undefined`: the omitted Optional is not defaulted), `p4_paramarray` (TypeError: `xs is not iterable`: three loose arguments are not packed).
-//    MSIL `p2_object` (#213: names `Show(int32)` for `Show(object)`; MsilObjectBoxingExecutionTests pins it), `p3_optional`, `p4_paramarray` (MissingMethodException), and every row with a
-//         base call inside a LAMBDA (`c3_lambda`, `c3b_lamvalue`, `n1_tempname`: "has no IL lowering" — a refusal by design), and the generic rows `c9b_genderived`, `c9c_genmethod`
+//    JS   the ByRef rows (`p1_byref`, `p1b_byrefinh`): BL7002, a refusal by design (JavaScript has no reference parameters); KillVocabularyExtensions.B2_JavaScript_RefusesByRef_BL7002 pins it.
+//    C++  `p2_object` (`'Object' has no C++ mapping`: the parameter itself), `s2d_tostring` (clang: `override` on ToString).
+//    MSIL every row with a base call inside a LAMBDA (`c3_lambda`, `c3b_lamvalue`, `n1_tempname`: "has no IL lowering" — a refusal by design), and the generic rows `c9b_genderived`, `c9c_genmethod`
 //         ("Reference to undefined class 'T'").
-//         ⚠ `p2_object`, `p3_optional`, `p4_paramarray` share a root with the ByRef rows: IRBaseMethodCall carries none of the declared method's parameter facts (ByRef, Optional defaults,
-//         ParamArray packing, parameter types), so a backend that needs them has nothing to read. That root is #265; ParamArray was found by this fixture.
 //    all  `Inherits Base(Of T)` (a generic BASE class: `c9_generic`, measured 2026-10-04): a parse error on every backend before and after; there is no row. The generic DERIVED class and the
 //         generic METHOD of a base are rows.
+//
+//  ⭐ #142 / #265 / #213 gave an IRBaseMethodCall its target's ByRef, Optional, ParamArray and declared-parameter-type facts, so the cells that were pinned or empty
+//  because the call carried none are rows now: the ByRef rows run on C#, C++ and MSIL (`AByRefArgumentToABaseMethod_PrintsVbcsAnswer_On…`); `p2_object` runs on MSIL (#213);
+//  `p3_optional` and `p4_paramarray` run on all four backends. MyBaseCallArgumentsExecutionTests holds the rows written for that fix.
 //
 //  ⚠ Side findings of the same measurement, NOT #139's and with no row (S/t139/probes/fu): a counted `For i = 1 To F()` re-evaluates its call bound each iteration on all four backends, and a
 //  compound assignment `a(F()) += 7` evaluates the call in the index twice (C++ 2x, JavaScript 3x) — #266. A class method's `Dim a(5)` is unallocated on C# and MSIL (named in
@@ -103,19 +98,18 @@ public class MyBaseMethodCallStatementExecutionTests
             Assert.That(all.Concat(MyBaseCallProbes.ByRef).Where(p => !p.HangSafe).Select(p => p.Id), Is.Empty, "every C# run of a base call is hang-safe");
             Assert.That(all.Where(p => !p.Agrees.HasFlag(Bk.CSharp)).Select(p => p.Id), Is.Empty, "C# has a cell on every row: it is what #139 changed");
             Assert.That(MyBaseCallProbes.ByRef.Select(p => p.Id), Is.EqualTo(new[] { "p1_byref", "p1b_byrefinh" }));
-            Assert.That(MyBaseCallProbes.ByRef.Select(p => p.Agrees), Is.All.EqualTo(Bk.Cpp), "the ByRef rows: C++ is the control; C# and MSIL are pinned refusals");
+            Assert.That(MyBaseCallProbes.ByRef.Select(p => p.Agrees), Is.All.EqualTo(Bk.CSharp | Bk.Cpp | Bk.Msil), "the ByRef rows: C#, C++ and MSIL print vbc's answer; JavaScript refuses ByRef (BL7002)");
 
-            // the cells that have no control on a backend, by backend — each is an unrelated defect, #213/#265's root, or a refusal by design
-            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Cpp))), Is.EqualTo("s2d_tostring,p2_object,p3_optional,p4_paramarray"),
-                "C++ cells with no expectation: `override` on ToString (clang); an Object parameter (no mapping); an Optional left out; a ParamArray");
-            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.JavaScript))), Is.EqualTo("p3_optional,p4_paramarray"),
-                "JavaScript cells with no expectation: an Optional left out prints `undefined`; a ParamArray is not packed");
-            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Msil))), Is.EqualTo("c3_lambda,c3b_lamvalue,c9b_genderived,c9c_genmethod,n1_tempname,p2_object,p3_optional,p4_paramarray"),
-                "MSIL cells with no expectation: a MyBase call in a lambda (a refusal by design); a generic class or method (undefined class 'T'); #213; #265's root");
+            // the cells that have no control on a backend, by backend — each is an unrelated defect or a refusal by design
+            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Cpp))), Is.EqualTo("s2d_tostring,p2_object"),
+                "C++ cells with no expectation: `override` on ToString (clang); an Object parameter (no mapping)");
+            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.JavaScript))), Is.Empty, "JavaScript prints vbc's answer on every row");
+            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Msil))), Is.EqualTo("c3_lambda,c3b_lamvalue,c9b_genderived,c9c_genmethod,n1_tempname"),
+                "MSIL cells with no expectation: a MyBase call in a lambda (a refusal by design); a generic class or method (undefined class 'T')");
 
             // the cell counts
             Assert.That(CSharpCells().Count(), Is.EqualTo(33), "one C# cell per row, each through three entry points");
-            Assert.That(ControlCells().Count(), Is.EqualTo(33 * 3 - 4 - 2 - 8), "33 rows x C++, JavaScript, MSIL, less the 14 cells above");
+            Assert.That(ControlCells().Count(), Is.EqualTo(33 * 3 - 2 - 0 - 5), "33 rows x C++, JavaScript, MSIL, less the 7 cells above");
             Assert.That(ByRefCells().Count(), Is.EqualTo(2));
             Assert.That(BuildCommandCells().Count(), Is.EqualTo(3));
 
@@ -159,45 +153,29 @@ public class MyBaseMethodCallStatementExecutionTests
         => TempExec.AssertMatchesInEveryEntryPoint(backend, probe.Source, probe.Vb, probe.Id);
 
     // ============================================================================================
-    // THE KNOWN GAP (#265) — a ByRef argument to a base method
+    // A BYREF ARGUMENT TO A BASE METHOD (#265, #142) — vbc's answer on C#, C++ and MSIL
     // ============================================================================================
 
     /// <summary>
-    /// ⛔ C# refuses it: the compiler writes `base.SetIt(p);` with no `ref` (IRBaseMethodCall carries no ByRef flags), and the C# compiler says CS1620. Through the CLI, the CLI with
-    /// `--optimize` and CompileProjectFiles (the shape fixture pins the in-process pipelines). Before #139 the call was not written, and the program printed the unchanged variable
-    /// (`5` for vbc's `105`): a silent wrong answer has become a refusal. Pinned so that it flips when #265 lands — update the pin, do not delete it.
+    /// A ByRef argument to a base method is passed by reference: C# writes `base.SetIt(ref p);` and prints vbc's `105` — through the CLI, the CLI with `--optimize` and CompileProjectFiles
+    /// (the shape fixture reads the text). Before #265 the call had no `ref`: CS1620 — and before #139 wrote the call at all, the program printed the unchanged variable (`5`).
     /// </summary>
     [TestCaseSource(nameof(ByRefCells))]
-    public void AByRefArgumentToABaseMethod_IsRefusedByCSharp_KnownGap_Task265(TempProbe probe)
-    {
-        var failures = new List<string>();
-        foreach (var entry in Enum.GetValues<EntryPoint>())
-        {
-            var errors = MyBaseMethodCallStatementShapeTests.RoslynErrors(TempExec.Emit(Bk.CSharp, entry, probe.Source));
-            if (errors.Length != 1 || !errors[0].Contains("error CS1620", StringComparison.Ordinal))
-                failures.Add($"{entry}: [{string.Join(" | ", errors)}] where CS1620 is the one refusal (#265)");
-        }
+    public void AByRefArgumentToABaseMethod_PrintsVbcsAnswer_OnCSharp(TempProbe probe)
+        => TempExec.AssertMatchesInEveryEntryPoint(Bk.CSharp, probe.Source, probe.Vb, probe.Id, hangSafe: true);
 
-        Assert.That(failures, Is.Empty, $"{probe.Id} on CSharp:\n" + string.Join("\n", failures));
-    }
-
-    /// <summary>C++ is the control for the ByRef rows: it passes the variable by reference and prints vbc's answer (`105`) — what #265 must give C# and MSIL.</summary>
+    /// <summary>C++ passes the variable by reference and prints vbc's answer (`105`): it always did, and was the control while C# and MSIL were pinned refusals.</summary>
     [TestCaseSource(nameof(ByRefCells))]
     public void AByRefArgumentToABaseMethod_PrintsVbcsAnswer_OnCpp(TempProbe probe)
         => TempExec.AssertMatchesInEveryEntryPoint(Bk.Cpp, probe.Source, probe.Vb, probe.Id);
 
     /// <summary>
-    /// ⛔ MSIL assembles the program and the CLR throws MissingMethodException: the call site names `Base.SetIt(int32)` where the method is declared with a ByRef parameter (`int32&amp;`).
-    /// (#142's title says "an INHERITED method"; `p1_byref` calls an Overridable one and fails the same way.) Pinned like #213's: a different outcome means #265 / #142 moved —
-    /// update the pin, do not delete it.
+    /// MSIL names the method it calls from the DECLARATION (`Base.SetIt(int32&amp;)`) and passes the variable's address, and prints vbc's `105`. Before #142 the call site named
+    /// `Base.SetIt(int32)` for a method declared ByRef and the CLR threw MissingMethodException (#142's title says "an INHERITED method"; `p1_byref` calls an Overridable one and failed the same way).
     /// </summary>
     [TestCaseSource(nameof(ByRefCells))]
-    public void AByRefArgumentToABaseMethod_ThrowsAtRunTimeOnMsil_KnownGap(TempProbe probe)
-    {
-        var run = MsilHarness.Run(probe.Source);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed), run.Report);
-        Assert.That(run.Output, Does.Contain("MissingMethodException"), "the specific exception this shape throws today.\n" + run.Report);
-    }
+    public void AByRefArgumentToABaseMethod_PrintsVbcsAnswer_OnMsil(TempProbe probe)
+        => TempExec.AssertMatchesInEveryEntryPoint(Bk.Msil, probe.Source, probe.Vb, probe.Id);
 
     // ============================================================================================
     // THE TEXT — the spawned CLI writes the base calls the library writes.
@@ -236,10 +214,14 @@ public class MyBaseMethodCallStatementExecutionTests
     /// </summary>
     [TestCaseSource(nameof(BuildCommandCells))]
     public void TheReleaseProjectBuild_PrintsVbcsAnswer(TempProbe probe)
+        => AssertReleaseBuildPrintsVbcsAnswer(probe, "bl-t139-build-");
+
+    /// <summary>Builds <paramref name="probe"/> as a one-file C# project with `BasicLang build -c Release`, runs the exe under a limit and compares it with vbc's text. Shared with MyBaseCallArgumentsExecutionTests.</summary>
+    internal static void AssertReleaseBuildPrintsVbcsAnswer(TempProbe probe, string tempPrefix)
     {
         if (!CliTestHarness.DotnetOnPath()) Assert.Ignore("dotnet not found on PATH.");
 
-        var dir = Path.Combine(Path.GetTempPath(), "bl-t139-build-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), tempPrefix + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
         {

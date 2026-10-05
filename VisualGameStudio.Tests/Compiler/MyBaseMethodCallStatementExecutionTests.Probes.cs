@@ -805,10 +805,10 @@ internal static class MyBaseCallProbes
         """, Bk.CSharp | Bk.Cpp | Bk.JavaScript, HangSafe: true);
 
     // ================================================================================================
-    // C. Parameters the base call carries no facts about (#265 is the root of the cells that fail)
+    // C. Parameters of the method the base call targets: an Object parameter (#213), an Optional left out, a ParamArray (#265's root: the call now carries them)
     // ================================================================================================
 
-    /// <summary>`MyBase.Show(5)` into an `Object` parameter (#213's shape). C++ has no cell (`'Object' has no C++ mapping`, the parameter itself), MSIL names the wrong signature (#213; the pin is in MsilObjectBoxingExecutionTests).</summary>
+    /// <summary>`MyBase.Show(5)` into an `Object` parameter (#213's shape). C++ has no cell (`'Object' has no C++ mapping`, the parameter itself); MSIL names `Show(object)` since #213 was fixed (MsilObjectBoxingExecutionTests runs it too).</summary>
     internal static readonly TempProbe p2_object = new("p2_object", """
         ' MyBase.M(5) into an Object parameter (#213's shape)
         Class Base
@@ -832,9 +832,9 @@ internal static class MyBaseCallProbes
         """, """
         5
         done
-        """, Bk.CSharp | Bk.JavaScript, HangSafe: true);
+        """, Bk.CSharp | Bk.JavaScript | Bk.Msil, HangSafe: true);
 
-    /// <summary>an Optional argument left out, and given. C# only: C++ is a clang `too few arguments`, JavaScript prints `base 1,undefined`, MSIL names the wrong signature.</summary>
+    /// <summary>an Optional argument left out, and given. Every backend since #265: C++ was a clang `too few arguments`, JavaScript printed `base 1,undefined`, MSIL named the wrong signature.</summary>
     internal static readonly TempProbe p3_optional = new("p3_optional", """
         ' MyBase.M(a) / MyBase.M(a, b) with an Optional parameter
         Class Base
@@ -864,9 +864,9 @@ internal static class MyBaseCallProbes
         """, """
         base 1,7
         base 1,2
-        """, Bk.CSharp, HangSafe: true);
+        """, Bk.All, HangSafe: true);
 
-    /// <summary>a ParamArray method called with three loose arguments. C# only: the call carries no parameter list, so C++ is a clang `too many arguments`, JavaScript a `TypeError` (`xs is not iterable`), MSIL a MissingMethodException.</summary>
+    /// <summary>a ParamArray method called with three loose arguments, packed on every backend since #265: C++ was a clang `too many arguments`, JavaScript a `TypeError` (`xs is not iterable`), MSIL a MissingMethodException.</summary>
     internal static readonly TempProbe p4_paramarray = new("p4_paramarray", """
         ' MyBase.M(a, b, c) into a ParamArray parameter
         Class Base
@@ -895,7 +895,7 @@ internal static class MyBaseCallProbes
         End Sub
         """, """
         6
-        """, Bk.CSharp, HangSafe: true);
+        """, Bk.All, HangSafe: true);
 
     // ================================================================================================
     // D. The value forms that were right before the fix: a USED result is inlined once (a call counter in every row)
@@ -1250,10 +1250,10 @@ internal static class MyBaseCallProbes
         """, Bk.All, HangSafe: true);
 
     // ================================================================================================
-    // E. ⛔ KNOWN GAP (#265): a ByRef argument to a base method. NOT in `All`: C# refuses it (CS1620) and MSIL throws.
+    // E. A ByRef argument to a base method (#265, #142). NOT in `All`: JavaScript refuses ByRef (BL7002), so these rows have their own list and their own tests.
     // ================================================================================================
 
-    /// <summary>a ByRef argument to a base method that Derived overrides. C#: CS1620 (the call has no `ref`, #265); MSIL: MissingMethodException (the call names `SetIt(int32)`); JavaScript refuses ByRef (BL7002, by design). C++ prints vbc's answer: that is the control.</summary>
+    /// <summary>a ByRef argument to a base method that Derived overrides. C#, C++ and MSIL print vbc's answer (C# was CS1620 and MSIL a MissingMethodException before #265/#142); JavaScript refuses ByRef (BL7002, by design).</summary>
     internal static readonly TempProbe p1_byref = new("p1_byref", """
         ' MyBase.M(x) with a ByRef parameter, M overridden in Derived
         Class Base
@@ -1282,7 +1282,7 @@ internal static class MyBaseCallProbes
         End Sub
         """, """
         105
-        """, Bk.Cpp, HangSafe: true);
+        """, Bk.CSharp | Bk.Cpp | Bk.Msil, HangSafe: true);
 
     /// <summary>a ByRef argument to an inherited base method (KillVocabularyExtensions B2's shape). Same cells as p1_byref.</summary>
     internal static readonly TempProbe p1b_byrefinh = new("p1b_byrefinh", """
@@ -1308,7 +1308,7 @@ internal static class MyBaseCallProbes
         End Sub
         """, """
         105
-        """, Bk.Cpp, HangSafe: true);
+        """, Bk.CSharp | Bk.Cpp | Bk.Msil, HangSafe: true);
 
     /// <summary>The rows with a C# expectation, in table order.</summary>
     internal static readonly IReadOnlyList<TempProbe> All = new[]
@@ -1321,6 +1321,6 @@ internal static class MyBaseCallProbes
         v6b_selrange, v7_inline, v8_ifcond
     };
 
-    /// <summary>The ByRef rows: C++ prints vbc's answer; C# and MSIL are pinned refusals named for #265.</summary>
+    /// <summary>The ByRef rows: C#, C++ and MSIL print vbc's answer; JavaScript refuses (BL7002).</summary>
     internal static readonly IReadOnlyList<TempProbe> ByRef = new[] { p1_byref, p1b_byrefinh };
 }
