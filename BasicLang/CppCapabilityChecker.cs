@@ -197,6 +197,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 ["CSng"] = "Single",
                 ["CStr"] = "String",
                 ["CBool"] = "Boolean",
+                ["CByte"] = "Byte",
+                ["CShort"] = "Short",
+                ["CSByte"] = "SByte",
+                ["CUShort"] = "UShort",
+                ["CUInt"] = "UInteger",
+                ["CULng"] = "ULong",
             };
 
         public List<string> Check(IRModule module)

@@ -41,6 +41,11 @@ namespace VisualGameStudio.Tests.Compiler;
 /// with <c>NullReferenceException</c>). The fix refuses all three at compile time — see the
 /// "UNREGISTERED INTRINSICS" section.</para>
 ///
+/// <para>⚠ <b>Superseded in part by #181:</b> <c>Asc</c>/<c>AscW</c> (Integer) and <c>Chr</c>/<c>ChrW</c>
+/// (Char) ARE registered now, so the Object bridge <c>Asc</c> needed is gone and <c>Chr(Asc("A"))</c>
+/// is well-typed (see <see cref="ChrOfAsc_IsTyped_AndPrintsVbcsAnswer"/>). A mistyped argument —
+/// <c>Chr("x")</c>, <c>Asc(5)</c> — is still refused, by the same MSIL guard.</para>
+///
 /// <para>⛔ <b>C++ is not a usable oracle for this family, outside <c>Replace</c>.</b>
 /// <c>CppCodeGenerator</c>'s <c>left</c>/<c>right</c>/<c>mid</c>/<c>instr</c> arms call
 /// <c>.substr</c>/<c>.find</c> directly on the argument, so a STRING-LITERAL receiver is a bare
@@ -229,13 +234,24 @@ End Sub", "tag\n[ef]");
         => Refused(Wrap("Chr(\"x\")"));
 
     /// <summary>
-    /// ⛔ <c>Asc</c>'s result is typed Object (also unregistered), so this reaches <c>Chr</c> as a
-    /// BOXED int rather than a literal string — the same defect through composition rather than a
-    /// literal. Pre-fix, measured: ran clean and printed a CJK glyph (鍀).
+    /// ⭐ MOVED PIN (#181; it was <c>ChrOfAnObject_IsRefused</c>). <c>Asc</c>'s result used to be typed Object
+    /// (unregistered), so <c>Chr(Asc("A"))</c> reached <c>Chr</c> as a BOXED int and MSIL refused it (before the
+    /// MSIL string-intrinsic fix it ran and printed a CJK glyph, 鍀; on C++ it did not compile). <c>Asc</c> is registered as Integer now, so the
+    /// composition is well-typed and prints vbc's answer — <c>[A]</c> — on the two .NET backends and (measured) on
+    /// C++ and JavaScript. The C# leg runs in a child process with a time limit, never the in-process runner.
     /// </summary>
     [Test]
-    public void ChrOfAnObject_IsRefused()
-        => Refused(Wrap("Chr(Asc(\"A\"))"));
+    public void ChrOfAsc_IsTyped_AndPrintsVbcsAnswer()
+    {
+        var program = Wrap("Chr(Asc(\"A\"))");
+        var cs = FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(program)));
+        var msil = FourBackends.Norm(MsilHarness.RunExpectingSuccess(program));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs, Is.EqualTo("[A]"), "C# (vbc prints [A])");
+            Assert.That(msil, Is.EqualTo("[A]"), "MSIL (vbc prints [A])");
+        });
+    }
 
     /// <summary>⛔ Pre-fix, measured: assembled and died with NullReferenceException — an
     /// integer used as a string reference at <c>String::get_Chars</c>.</summary>

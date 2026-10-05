@@ -4221,6 +4221,64 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 _ => false,
             };
 
+        /// <summary>The C++ type a narrow VB conversion intrinsic (#181) converts to, or null.</summary>
+        private static string NarrowConversionCppType(string functionName) => functionName?.ToLowerInvariant() switch
+        {
+            "cbyte" => "uint8_t",
+            "cshort" => "int16_t",
+            "csbyte" => "int8_t",
+            "cushort" => "uint16_t",
+            "cuint" => "uint32_t",
+            "culng" => "uint64_t",
+            _ => null,
+        };
+
+        /// <summary>
+        /// <c>CByte</c>/<c>CShort</c>/<c>CSByte</c>/<c>CUShort</c>/<c>CUInt</c>/<c>CULng</c> (#181),
+        /// arm for arm what <c>cint</c> does: a floating (or Decimal, or parsed String) argument
+        /// rounds HALF-TO-EVEN through <c>std::nearbyint</c>, an integral one is a plain cast, and
+        /// a Boolean is True = all bits set at the target's width (VB's CByte(True) is 255).
+        /// Out-of-range values are unchecked, exactly as <c>cint</c>'s are on this backend.
+        /// </summary>
+        private static string NarrowConversionArm(string cppType, string arg, bool arg0IsDecimal,
+            bool arg0IsString, bool arg0IsBoolean, IRCall call)
+        {
+            if (arg0IsBoolean) return $"(({arg}) ? {cppType}(-1) : {cppType}(0))";
+            if (arg0IsString) return $"static_cast<{cppType}>(std::nearbyint(BasicLang::VbParseDouble({arg})))";
+            if (arg0IsDecimal) return $"static_cast<{cppType}>(std::nearbyint(({arg}).ToDouble()))";
+            return Arg0IsFloating(call)
+                ? $"static_cast<{cppType}>(std::nearbyint({arg}))"
+                : $"static_cast<{cppType}>({arg})";
+        }
+
+        /// <summary>
+        /// The code <c>Chr</c>/<c>ChrW</c> narrows to an 8-bit <c>char</c>. A CONSTANT code above
+        /// U+007F is refused for the reason <see cref="EmitConstant"/> refuses the same character
+        /// as a literal: this backend has no lowering for it, and truncating it to a byte is a
+        /// silent wrong character. A run-time code cannot be checked here; it shares the existing
+        /// String/Char representation gap (a String is UTF-8 bytes on this backend).
+        /// </summary>
+        private static string ChrCodeArgument(string rendered, IRCall call)
+        {
+            if (call != null && call.Arguments.Count > 0 && call.Arguments[0] is IRConstant { Value: not null } constant
+                && constant.Value is int or long or short or byte or sbyte or ushort or uint or ulong)
+            {
+                var code = Convert.ToDecimal(constant.Value);
+                if (code < 0 || code > 0x7F)
+                {
+                    throw new CppCapabilityException(new List<string>
+                    {
+                        $"{call.FunctionName}({constant.Value}) names a character outside U+0000..U+007F, "
+                        + "which has no C++ lowering: this backend represents Char as an 8-bit char, "
+                        + "so the character would be silently truncated to a single byte. Use an "
+                        + "ASCII code, or a String literal."
+                    });
+                }
+            }
+
+            return rendered;
+        }
+
         internal static string StdLibArm(string functionName, List<string> args, IRCall call)
         {
             if (functionName == null) return null;
@@ -4240,6 +4298,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var arg0Type = call != null && call.Arguments.Count > 0 ? call.Arguments[0]?.Type?.Name : null;
             var arg0IsString = string.Equals(arg0Type, "String", StringComparison.OrdinalIgnoreCase);
             var arg0IsBoolean = string.Equals(arg0Type, "Boolean", StringComparison.OrdinalIgnoreCase);
+            // Ahead of the count-gated block below, and not gated on the count itself:
+            // HasStdLibEmission probes this method with EIGHT arguments, and an arm it cannot see
+            // is a call the .NET claim predicate takes away from this backend.
+            var narrow = NarrowConversionCppType(functionName);
+            if (narrow != null && args.Count > 0)
+                return NarrowConversionArm(narrow, args[0], arg0IsDecimal, arg0IsString, arg0IsBoolean, call);
             if (args.Count == 1 && (arg0IsString || arg0IsBoolean))
             {
                 var vb = (functionName.ToLowerInvariant(), arg0IsString) switch
@@ -4277,6 +4341,12 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "ucase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::toupper); return s; }})({args[0]})",
                 "lcase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::tolower); return s; }})({args[0]})",
                 "instr" => $"static_cast<int32_t>({args[0]}.find({args[1]}) + 1)",
+                // #181. Char is an 8-bit `char` here (see EmitConstant's refusal of a non-ASCII
+                // literal), so a code is read UNSIGNED — a signed char would answer negative.
+                "asc" or "ascw" => string.Equals(arg0Type, "Char", StringComparison.OrdinalIgnoreCase)
+                    ? $"static_cast<int32_t>(static_cast<unsigned char>({args[0]}))"
+                    : $"static_cast<int32_t>(static_cast<unsigned char>(std::string({args[0]}).at(0)))",
+                "chr" or "chrw" => $"static_cast<char>({ChrCodeArgument(args[0], call)})",
                 "replace" => $"([](string s, const string& from, const string& to){{ size_t pos = 0; while ((pos = s.find(from, pos)) != string::npos) {{ s.replace(pos, from.length(), to); pos += to.length(); }} return s; }})({args[0]}, {args[1]}, {args[2]})",
                 "abs" => $"abs({args[0]})",
                 "sqrt" => $"sqrt({args[0]})",

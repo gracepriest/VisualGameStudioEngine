@@ -262,6 +262,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     "CLng" => $"({value} ? -1L : 0L)",
                     "CDbl" => $"({value} ? -1.0 : 0.0)",
                     "CSng" => $"({value} ? -1f : 0f)",
+                    // True is all bits set, read at the target's width (#181): VB's CByte(True)
+                    // is 255 and CUInt(True) 4294967295, where Convert answers 1 for every one.
+                    "CShort" => $"({value} ? (short)-1 : (short)0)",
+                    "CSByte" => $"({value} ? (sbyte)-1 : (sbyte)0)",
+                    "CByte" => $"({value} ? byte.MaxValue : (byte)0)",
+                    "CUShort" => $"({value} ? ushort.MaxValue : (ushort)0)",
+                    "CUInt" => $"({value} ? uint.MaxValue : 0U)",
+                    "CULng" => $"({value} ? ulong.MaxValue : 0UL)",
                     _ => null
                 };
             }
@@ -275,9 +283,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     "CDbl" => $"{conversions}.ToDouble({value})",
                     "CSng" => $"{conversions}.ToSingle({value})",
                     "CBool" => $"{conversions}.ToBoolean({value})",
+                    "CByte" => $"{conversions}.ToByte({value})",
+                    "CShort" => $"{conversions}.ToShort({value})",
+                    "CSByte" => $"{conversions}.ToSByte({value})",
+                    "CUShort" => $"{conversions}.ToUShort({value})",
+                    "CUInt" => $"{conversions}.ToUInteger({value})",
+                    "CULng" => $"{conversions}.ToULong({value})",
                     _ => null
                 };
             }
+
+            // A Char is its own code: the String form's `s[0]` does not compile on a char (#181 —
+            // `AscW(ch)` over a String's characters is the shape that motivated typing these).
+            if (string.Equals(source, "Char", StringComparison.OrdinalIgnoreCase)
+                && call.FunctionName is "Asc" or "AscW")
+                return $"((int)({value}))";
 
             return null;
         }
