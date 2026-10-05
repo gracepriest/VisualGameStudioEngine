@@ -4161,17 +4161,24 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "console.writeline" => args.Count == 0 ? "cout << endl" : $"cout << {NumericPrintArg(args[0], call, 0)} << endl",
                 "console.write" => args.Count == 0 ? "cout << \"\"" : $"cout << {NumericPrintArg(args[0], call, 0)}",
                 "readline" => "([](){ string s; getline(cin, s); return s; })()",
-                "len" => $"static_cast<int32_t>({args[0]}.length())",
-                "left" => $"{args[0]}.substr(0, {args[1]})",
-                "right" => $"{args[0]}.substr({args[0]}.length() - {args[1]})",
-                "mid" => $"{args[0]}.substr({args[1]} - 1, {args[2]})",
+                // Task 7e: the receiver is wrapped in std::string(...) — a string LITERAL renders as a
+                // const char[] with no .length()/.substr() (`"hello".substr(0, 2)`, C2228), and wrapping an
+                // std::string is a copy, never a change of meaning. Right binds the receiver ONCE.
+                "len" => $"static_cast<int32_t>(std::string({args[0]}).length())",
+                "left" => $"std::string({args[0]}).substr(0, {args[1]})",
+                "right" => $"([](const std::string& s, int64_t n){{ return s.substr(s.length() - static_cast<size_t>(n)); }})({args[0]}, {args[1]})",
+                "mid" => $"std::string({args[0]}).substr({args[1]} - 1, {args[2]})",
                 "trim" => $"([](string s){{ auto start = s.find_first_not_of(\" \\t\"); auto end = s.find_last_not_of(\" \\t\"); return start == string::npos ? \"\" : s.substr(start, end - start + 1); }})({args[0]})",
                 "ucase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::toupper); return s; }})({args[0]})",
                 "lcase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::tolower); return s; }})({args[0]})",
-                "instr" => $"static_cast<int32_t>({args[0]}.find({args[1]}) + 1)",
+                "instr" => $"static_cast<int32_t>(std::string({args[0]}).find({args[1]}) + 1)",
                 // VB's Val / Str (Task 7d review) — BasicLang::VbVal / VbStr in the BCL runtime. Str's
                 // number text is the ONE shared stringifier's, so it cannot drift from CStr / Concat.
                 "val" => $"BasicLang::VbVal({args[0]})",
+                // Task 7e: emitted to undefined names before (a late native-compile failure).
+                "beep" => "BasicLang::VbBeep()",
+                "filecopy" => $"BasicLang::VbFileCopy({args[0]}, {args[1]})",
+                "filelen" => $"BasicLang::VbFileLen({args[0]})",
                 "str" => $"BasicLang::VbStr({StringifyForText(call != null && call.Arguments.Count > 0 ? call.Arguments[0] : null, args[0]) ?? $"to_string({args[0]})"})",
                 "replace" => $"([](string s, const string& from, const string& to){{ size_t pos = 0; while ((pos = s.find(from, pos)) != string::npos) {{ s.replace(pos, from.length(), to); pos += to.length(); }} return s; }})({args[0]}, {args[1]}, {args[2]})",
                 "abs" => $"abs({args[0]})",

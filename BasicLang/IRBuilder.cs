@@ -1156,6 +1156,22 @@ namespace BasicLang.Compiler.IR
             // Create entry block
             _currentBlock = _currentFunction.CreateBlock("entry");
 
+            // Task 7e: VB's FUNCTION-NAME RETURN VARIABLE — `SFact = 1`, `Total = Total + i`. The function's
+            // own name, assigned in its body, is a local holding the result; falling off the end (or Exit
+            // Function) returns it. It had no lowering: every backend saw a write to an undeclared name
+            // (JavaScript `SFact = 1;` ReferenceError, C# `n * SFact(n - 1) = 1;`) and returned 0.
+            var outerResultName = _functionResultName;
+            var outerResultVariable = _functionResultVariable;
+            _functionResultName = node.Name;
+            _functionResultVariable = null;
+            if (returnType.Name != "Void" && node.Body != null && AssignsToName(node.Body, node.Name))
+            {
+                _functionResultVariable = CreateVariable($"{node.Name}_FnResult", returnType, _nextVersion++);
+                _currentFunction.LocalVariables.Add(_functionResultVariable);
+                ReserveInCurrentFunction(_functionResultVariable.Name);   // ADR-0018 D1: a lowering's declared name
+                EmitInstruction(new IRAssignment(_functionResultVariable, CreateDefaultValue(returnType)));
+            }
+
             // Process body
             if (node.Body != null)
             {
@@ -1171,11 +1187,13 @@ namespace BasicLang.Compiler.IR
                 }
                 else
                 {
-                    // Return default value
-                    var defaultValue = CreateDefaultValue(returnType);
-                    EmitInstruction(new IRReturn(defaultValue));
+                    // The function-name return variable when the body assigns it; the type's default otherwise.
+                    EmitInstruction(new IRReturn(_functionResultVariable ?? (IRValue)CreateDefaultValue(returnType)));
                 }
             }
+
+            _functionResultName = outerResultName;
+            _functionResultVariable = outerResultVariable;
 
             // Clean up variable versions
             foreach (var param in node.Parameters)
@@ -1186,6 +1204,49 @@ namespace BasicLang.Compiler.IR
 
             _currentFunction = null;
             _currentBlock = null;
+        }
+
+        /// <summary>The Function being built, by name, and its function-name return variable when its body assigns
+        /// one (Task 7e) — null otherwise. See <see cref="Visit(FunctionNode)"/>.</summary>
+        private string _functionResultName;
+        private IRVariable _functionResultVariable;
+
+        /// <summary>Whether <paramref name="node"/> denotes the enclosing Function's return variable: its bare name,
+        /// bound by the analyzer to the Function itself (never a local, parameter or member of that name).</summary>
+        private bool IsFunctionResultReference(IdentifierExpressionNode node) =>
+            _functionResultVariable != null && node != null
+            && string.Equals(node.Name, _functionResultName, StringComparison.OrdinalIgnoreCase)
+            && _semanticAnalyzer.GetNodeSymbol(node) is { Kind: SymbolKind.Function };
+
+        /// <summary>Whether a statement anywhere under <paramref name="root"/> assigns to the bare name
+        /// <paramref name="name"/> — the sign of a function-name return variable. Walks the AST's node-valued
+        /// properties (the AST has no parent links, so this stays inside the body).</summary>
+        private static bool AssignsToName(ASTNode root, string name)
+        {
+            var stack = new Stack<ASTNode>();
+            var seen = new HashSet<ASTNode>(ReferenceEqualityComparer.Instance);
+            stack.Push(root);
+            while (stack.Count > 0)
+            {
+                var current = stack.Pop();
+                if (current == null || !seen.Add(current)) continue;
+                if (current is AssignmentStatementNode { Target: IdentifierExpressionNode target }
+                    && string.Equals(target.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (current is LambdaExpressionNode) continue;   // a lambda's body is another procedure
+
+                foreach (var property in current.GetType().GetProperties(
+                             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                {
+                    if (property.GetIndexParameters().Length > 0) continue;
+                    var value = property.GetValue(current);
+                    if (value is ASTNode child) stack.Push(child);
+                    else if (value is System.Collections.IEnumerable items && value is not string)
+                        foreach (var item in items)
+                            if (item is ASTNode element) stack.Push(element);
+                }
+            }
+            return false;
         }
 
         public void Visit(SubroutineNode node)
@@ -4948,9 +5009,18 @@ namespace BasicLang.Compiler.IR
                     break;
 
                 case ExitKind.Sub:
-                case ExitKind.Function:
-                    // Exit Sub/Function is like Return (without value for Sub)
                     EmitInstruction(new IRReturn());
+                    break;
+
+                case ExitKind.Function:
+                    // Task 7e: Exit Function returns the function-name return variable (VB), or the return type's
+                    // default when the body never assigns it. It returned NOTHING from a Function before.
+                    var functionType = _currentFunction?.ReturnType;
+                    EmitInstruction(_functionResultVariable != null
+                        ? new IRReturn(_functionResultVariable)
+                        : functionType == null || functionType.Name == "Void"
+                            ? new IRReturn()
+                            : new IRReturn(CreateDefaultValue(functionType)));
                     break;
             }
         }
@@ -5058,6 +5128,12 @@ namespace BasicLang.Compiler.IR
                 var symbol = _semanticAnalyzer.GetNodeSymbol(idExpr2);
 
                 IRVariable targetVar;
+                if (IsFunctionResultReference(idExpr2))
+                {
+                    // Task 7e: `SFact = …` — the function-name return variable.
+                    EmitInstruction(new IRAssignment(_functionResultVariable, value));
+                    return;
+                }
                 if (ModuleMemberSymbolOf(idExpr2) is Symbol moduleMember)
                 {
                     // A Module's variable, its own or another's — the same global the read binds.
@@ -5773,6 +5849,13 @@ namespace BasicLang.Compiler.IR
             if (string.Equals(node.Name, "Me", StringComparison.OrdinalIgnoreCase))
             {
                 _expressionResult = MeOfCurrentMember();
+                return;
+            }
+
+            // Task 7e: a READ of the function-name return variable (`Total = Total + i`).
+            if (IsFunctionResultReference(node))
+            {
+                _expressionResult = _functionResultVariable;
                 return;
             }
 
@@ -6539,6 +6622,29 @@ namespace BasicLang.Compiler.IR
                 var symbol = _semanticAnalyzer.GetNodeSymbol(node.Callee);
                 var calleeType = _semanticAnalyzer.GetNodeType(node.Callee);
 
+                // Task 7e: `s(i)` on a String value — VB's default Chars(i) — as the one-character built-in
+                // Mid(s, i + 1, 1), flagged intrinsic so no user `Mid` captures it. The value is read exactly as the
+                // bare name is (a property through its accessor, ADR-0007).
+                if (_semanticAnalyzer.IsStringCharIndex(node))
+                {
+                    var stringType = new TypeInfo("String", TypeKind.Primitive);
+                    var integerType = new TypeInfo("Integer", TypeKind.Primitive);
+                    idExpr.Accept(this);
+                    var text = _expressionResult;
+                    node.Arguments[0].Accept(this);
+                    var start = new IRBinaryOp(_currentFunction.GetNextTempName(), BinaryOpKind.Add,
+                        _expressionResult, new IRConstant(1, integerType), integerType);
+                    EmitInstruction(start);
+                    var chars = new IRCall(tempName ?? _currentFunction.GetNextTempName(), "Mid", stringType) { IsIntrinsic = true };
+                    chars.Arguments.Add(text);
+                    chars.Arguments.Add(start);
+                    chars.Arguments.Add(new IRConstant(1, integerType));
+                    chars.ByRefArguments.AddRange(new[] { false, false, false });
+                    EmitInstruction(chars);
+                    _expressionResult = chars;
+                    return;
+                }
+
                 // `f(args)` is a CALL, not an index, whenever f is itself callable (a Function
                 // or Subroutine). Its calleeType is the RETURN type, so a collection/array-
                 // returning function (e.g. `Function MakeList() As List(Of Integer)`) must NOT
@@ -6786,6 +6892,11 @@ namespace BasicLang.Compiler.IR
             // name, so a program that spells its types as declared is emitted as before.
             if (type?.Name != null && !string.Equals(type.Name, className, StringComparison.Ordinal)
                 && string.Equals(type.Name, className, StringComparison.OrdinalIgnoreCase))
+                className = type.Name;
+            // Task 7e: `New Outer.Inner()` — a NESTED class, emitted flat under its own name; the analyzer typed the
+            // node as that class (SemanticAnalyzer.NestedUserClass). JavaScript emitted `new OuterInner()`.
+            else if (type?.Name != null && className.EndsWith("." + type.Name, StringComparison.OrdinalIgnoreCase)
+                     && type.DeclaredMemberNames != null)
                 className = type.Name;
 
             // Create new object instruction

@@ -2351,6 +2351,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// reaches the built-in.</summary>
         private readonly Dictionary<string, Symbol> _stdLibSymbols = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Task 7e: calls that are a String value's default property, <c>s(i)</c> = <c>s.Chars(i)</c>; read by the
+        /// IR builder (<see cref="IsStringCharIndex"/>).</summary>
+        private readonly HashSet<CallExpressionNode> _stringCharIndexes = new(ReferenceEqualityComparer.Instance);
+
+        internal bool IsStringCharIndex(CallExpressionNode node) => node != null && _stringCharIndexes.Contains(node);
+
         /// <summary>Every built-in function, for the test that enumerates the VB-qualified spellings.</summary>
         internal IReadOnlyCollection<Symbol> StdLibSymbolsForTest => _stdLibSymbols.Values;
 
@@ -3063,6 +3069,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return new TypeInfo(name, TypeKind.Foreign);
             }
 
+            // Task 7e: `Outer.Inner` — a NESTED class, which every backend emits FLAT under its own name
+            // (`class Inner`). The dotted spelling fell to the .NET fallback as a phantom type named
+            // "Outer.Inner": C# CS0426, JavaScript `ReferenceError: OuterInner is not defined`.
+            if (NestedUserClass(name) is { } nested)
+            {
+                return nested;
+            }
+
             // First, a type parameter or a class/struct/interface symbol in scope — including one
             // imported from a sibling project file, which carries the full type with its members.
             // Preferred over the permissive .NET fallback below, which would otherwise return a
@@ -3117,6 +3131,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// The user class <paramref name="dottedName"/> names when it is <c>Outer.Inner</c> with <c>Inner</c> a class nested in
+        /// the user class <c>Outer</c> (nesting read from <c>Outer</c>'s declared member names), or null.
+        /// </summary>
+        private TypeInfo NestedUserClass(string dottedName)
+        {
+            if (string.IsNullOrEmpty(dottedName)) return null;
+            var dot = dottedName.LastIndexOf('.');
+            if (dot <= 0 || dot == dottedName.Length - 1) return null;
+
+            var outerName = dottedName.Substring(0, dot);
+            var innerName = dottedName.Substring(dot + 1);
+            var outer = ResolveTypeSymbol(outerName)?.Type ?? _typeManager.GetType(outerName) ?? NestedUserClass(outerName);
+            if (outer?.DeclaredMemberNames == null || !outer.DeclaredMemberNames.Contains(innerName)) return null;
+
+            var inner = ResolveTypeSymbol(innerName)?.Type ?? _typeManager.GetType(innerName);
+            return inner is { Kind: TypeKind.Class or TypeKind.Structure or TypeKind.Interface } ? inner : null;
         }
 
         private static bool IsTypeSymbolKind(SymbolKind kind) =>
@@ -12470,6 +12503,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // hides the bare name. Bound straight to the built-in (no member lookup, no .NET probe of a
             // receiver named Strings) and checked below exactly as the bare call is.
             _qualifiedIntrinsicCalls.Remove(node);
+            _stringCharIndexes.Remove(node);
             var qualifiedIntrinsic = QualifiedIntrinsic(node);
             if (qualifiedIntrinsic != null)
             {
@@ -12713,6 +12747,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (calleeSymbol.Kind == SymbolKind.Property && node.Arguments.Count == 0)
                 {
                     SetNodeType(node, calleeSymbol.Type ?? calleeType ?? _typeManager.ObjectType);
+                    return;
+                }
+                // Task 7e: `Name(0)` on a String value is VB's default property, Chars(0). Lowered by the IR builder
+                // as the one-character Mid (IsStringCharIndex) and typed String — ⚠ VB's result is a Char, but Char
+                // is not yet a type every backend has (JavaScript gains it in piece 2, 2.0b); the text is the same.
+                // It used to fall to the call arm: C# `Name(0)` CS1955, JavaScript a wrong result.
+                var valueType = calleeSymbol.Type ?? calleeType;
+                if (calleeSymbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property
+                        or SymbolKind.Constant
+                    && string.Equals(valueType?.Name, "String", StringComparison.OrdinalIgnoreCase)
+                    && valueType.ArrayRank == 0 && node.Arguments.Count == 1)
+                {
+                    node.Arguments[0].Accept(this);
+                    var indexType = GetNodeType(node.Arguments[0]);
+                    if (indexType != null && !indexType.IsIntegral())
+                        Error($"A String index must be an integer, got '{indexType}'", node.Arguments[0].Line, node.Arguments[0].Column);
+                    _stringCharIndexes.Add(node);
+                    SetNodeType(node, _typeManager.StringType);
                     return;
                 }
                 if (calleeSymbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Property

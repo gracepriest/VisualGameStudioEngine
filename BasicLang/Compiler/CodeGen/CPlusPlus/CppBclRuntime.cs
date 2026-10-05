@@ -295,6 +295,31 @@ inline double VbVal(const std::string& in) {
     return std::strtod(num.c_str(), nullptr);
 }
 
+/* VB's Beep / FileCopy / FileLen (Task 7e) — the bare calls used to be emitted to names nothing defines, a late
+   native-compile failure. Beep rings the terminal bell on stderr, never into the program's output; FileCopy
+   overwrites, as VB's does; FileLen is a Long. A missing file throws, as VB's FileNotFoundException does.
+   C stdio only (<cstdio> is in every program's include set), so no header is added to any program. */
+inline void VbBeep() { std::fputc('\a', stderr); std::fflush(stderr); }
+inline void VbFileCopy(const std::string& source, const std::string& destination) {
+    std::FILE* in = std::fopen(source.c_str(), ""rb"");
+    if (!in) throw std::runtime_error(""FileNotFoundException: Could not find file '"" + source + ""'."");
+    std::FILE* out = std::fopen(destination.c_str(), ""wb"");
+    if (!out) { std::fclose(in); throw std::runtime_error(""IOException: Could not write file '"" + destination + ""'.""); }
+    char buffer[65536];
+    size_t n;
+    while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0) std::fwrite(buffer, 1, n, out);
+    std::fclose(in);
+    std::fclose(out);
+}
+inline int64_t VbFileLen(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), ""rb"");
+    if (!f) throw std::runtime_error(""FileNotFoundException: Could not find file '"" + path + ""'."");
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fclose(f);
+    return static_cast<int64_t>(size);
+}
+
 /* VB's Str(n): the number's text, with a leading space where a non-negative number has no sign, and a
    fraction's leading zero dropped (Str(0.5) is "" .5"", Str(-0.5) is ""-.5""). */
 inline std::string VbStr(const std::string& text) {
