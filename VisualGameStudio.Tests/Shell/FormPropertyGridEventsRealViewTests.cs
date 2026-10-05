@@ -311,6 +311,63 @@ public partial class FormPropertyGridRealViewTests
         });
     }
 
+    /// <summary>
+    /// Round 5 fix 1: clicking the item ALREADY selected raises no selection change, so the pick mark it set must not
+    /// survive the drop-down — else the next auto-select (typing a matching name) counts as a pick and binds before Enter.
+    /// </summary>
+    [AvaloniaTest]
+    public void ClickingTheAlreadySelectedItem_LeavesNoPickBehind_ForTheNextAutoSelect()
+    {
+        using var rig = Open();
+        AddSubs(rig, "    Private Sub Fits(sender As Object, e As EventArgs)\n    End Sub\n" +
+                     "    Private Sub Other(sender As Object, e As EventArgs)\n    End Sub\n");
+        SelectOnCanvas(rig, "btn");
+        ShowEvents(rig);
+        var row = EventRow(rig, "Click");
+        rig.GridVm.CodeBehindText = rig.Code;
+        row.Commit("Fits");
+        Assert.That(HandlerCombo(rig, row).SelectedItem, Is.EqualTo("Fits"), "precondition: the combo shows its choice");
+
+        PickHandler(rig, row, "Fits");   // the already-selected item: no SelectionChanged
+        Assert.That(row.Handler, Is.EqualTo("Fits"));
+
+        // ⚠ Straight to the KEYBOARD: any other pointer release would clear the mark by itself (OnListPointerReleased), so
+        // only the keyboard path shows a mark that outlived its drop-down.
+        var combo = HandlerCombo(rig, row);
+        combo.GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible).Focus();
+        rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+        rig.Window.KeyTextInput("Other");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(row.Handler, Is.EqualTo("Fits"), "typing a matching name is not a pick, even after a click on the selected item");
+    }
+
+    /// <summary>
+    /// Round 5 fix 2: a HOST refusal arrives asynchronously. It reverts the cell only while the cell still shows the text it
+    /// refused — a name the user has re-typed since is never wiped.
+    /// </summary>
+    [AvaloniaTest]
+    public void AHostRefusal_RevertsOnlyTheTextItRefused_NeverTextTypedSince()
+    {
+        using var rig = Open();
+        SelectOnCanvas(rig, "btn");
+        ShowEvents(rig);
+        var row = EventRow(rig, "Click");
+
+        var box = HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
+        rig.Click(box);
+        rig.Window.KeyTextInput("Retyped");
+        Dispatcher.UIThread.RunJobs();
+
+        row.Refuse("the old name was refused", refusedText: "OldName");
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(HandlerCombo(rig, row).Text, Is.EqualTo("Retyped"), "a refusal of OTHER text leaves the cell alone");
+
+        row.Refuse("this one was refused", refusedText: "Retyped");
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(HandlerCombo(rig, row).Text ?? "", Is.Empty, "the refused text itself reverts to the bound handler");
+    }
+
     /// <summary>The stub's signature is the EVENT's: MouseDown gets <c>MouseEventArgs</c>, never the default's EventArgs.</summary>
     [AvaloniaTest]
     public void DoubleClickingMouseDown_WritesAMouseEventArgsStub_AtTwoZooms()

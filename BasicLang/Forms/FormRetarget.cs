@@ -140,11 +140,43 @@ public static class FormRetarget
         // declared, so the retargeted form stopped compiling.
         var owners = new[] { new FormBindOwner(document) }
             .Concat(document.AllControls().Concat(document.AllComponents()).Select(c => new FormBindOwner(document, c)));
+        var diagnostics = result.Diagnostics.ToList();
+        var claimedBy = new Dictionary<string, (FormBindOwner Owner, string Event)>(StringComparer.OrdinalIgnoreCase);
         foreach (var owner in owners)
         {
             foreach (var bind in owner.Binds.Where(b => !b.UsesReservedDataBinding).ToList())
             {
                 var plan = FormHandlers.PlanBind(document, owner, bind, code);
+
+                // ⛔ Round 5 fix 3 (Task 7 review): a handler SHARED by two owners crosses as one Sub, written in the FIRST
+                // one's destination signature — and the second may need another (measured: a window's Load and a Button's
+                // Click both naming `Init` → on the web Load is `Init()` and Click needs `(e As DomEvent)`, and the CLI
+                // refused the pair). A Sub that does not fit THIS owner's event is not reused: the owner gets its own
+                // computed name (the `_1` rule), a stub in its own signature, and a warning naming both. A working pair
+                // over a refusal.
+                if (plan.Outcome == HandlerOutcome.Navigated &&
+                    EventOf(owner, bind.Event, to) is { } evt &&
+                    FormHandlers.DescribeUnusableHandler(document, owner, evt, plan.Handler, FormCodeScan.Scan(code, document.Name)) is { } why)
+                {
+                    var shared = plan.Handler;
+                    var at = owner.Binds.IndexOf(bind);
+                    owner.Binds.RemoveAt(at);
+                    var fresh = FormHandlers.Plan(document, owner, evt, code);
+                    owner.Binds.Insert(at, bind);
+                    if (fresh.Outcome != HandlerOutcome.Refused)
+                    {
+                        bind.Handler = fresh.Handler;
+                        plan = fresh;
+                        var first = claimedBy.TryGetValue(shared, out var c) ? $"{c.Owner.Label}'s {c.Event}" : "another member";
+                        diagnostics.Add(new DesignDiagnostic(DesignCodes.RetargetBindLost,
+                            $"{DesignCodes.RetargetBindLost}: {owner.Label}'s {evt.Name} and {first} both call {shared}, and on " +
+                            $"{Describe(to)} their handlers need different signatures ({why}). {shared} stays with {first}; " +
+                            $"{owner.Label}'s {evt.Name} now calls {fresh.Handler}, a new stub — move what {shared} did for it there.",
+                            source.SourcePath, 0, 0, IsWarning: true));
+                    }
+                }
+
+                claimedBy.TryAdd(plan.Handler, (owner, bind.Event));
                 if (plan.Outcome == HandlerOutcome.Created)
                 {
                     code = plan.CodeText;
@@ -167,8 +199,13 @@ public static class FormRetarget
             Serialization.FormDocumentWriter.Create(document),
             scaffold.CodeFileName,
             regions.Text,
-            result.Diagnostics);
+            diagnostics);
     }
+
+    /// <summary>The owner's event whose name on <paramref name="target"/> is <paramref name="name"/>, or null.</summary>
+    private static FormEventDef? EventOf(FormBindOwner owner, string name, FormTarget target) =>
+        owner.Definition?.Events?.FirstOrDefault(e =>
+            string.Equals(FormEvents.NameOn(e, target), name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Why <paramref name="source"/> cannot be retargeted to <paramref name="to"/> at all — errors, each the

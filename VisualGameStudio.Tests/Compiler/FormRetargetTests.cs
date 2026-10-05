@@ -681,8 +681,10 @@ public class FormRetargetTests
         // ⚠ Measured: every event wired on the WEB is wired on WinForms too (the page's vocabulary is the subset), so the
         // web → WinForms direction has nothing to drop today — its lost arm is pinned on an event the kind does not declare
         // (FormRootRetargetTests' `beforeunload`). WinForms → web must reach real single-target events (Paint, FormClosing…).
-        Assert.That(exercised, from == FormTarget.WinForms ? Is.GreaterThan(0) : Is.GreaterThanOrEqualTo(0),
-            "the sweep reached the single-target events, or it passes by absence");
+        // ⚠ Web is PINNED at 0 (review nit): the day a web-only event appears, this fails and that event's lost arm gets a
+        // real assertion here instead of passing by absence.
+        Assert.That(exercised, from == FormTarget.WinForms ? Is.GreaterThan(0) : Is.EqualTo(0),
+            "WinForms → web must reach the single-target events; web → WinForms has none today (measured)");
     }
 
     // ==================================================================

@@ -1171,6 +1171,56 @@ Red first: 29 of 61 failed, each for its own reason (the CRITICAL real-view row:
 RE-CHECK green: `FormRootRetargetTests` (doc updated), `FormRetargetTests`, the Timer BL8027 rows, the IDE Retarget command
 tests (`SolutionExplorerRetargetTests`). 141/141 for `FullyQualifiedName~Retarget`.
 
+### Review round 5 (of `c7ba23c5`/`3375e7b9`) — fixes (base `3375e7b9`)
+- **`FormCodeScan` REBUILT on BasicLang's lexer** (coordinator decision). The public surface is unchanged
+  (`Scan`/`DeclaredSubs`/`FindSub`, the three records), and every existing scanner test passes on it. It now works on
+  statements: logical lines, joined while a paren is open unless the next line starts a declaration, split at top-level
+  `:`. Body/lambda/pending-property state is explicit.
+  - New tests (`FormCodeScanLexerTests`): 12 of 15 were red on the regex scanner. The other three (Custom Event, an
+    unterminated string, the Unknown-token directive spellings) were green on it and guard the lexer gaps below.
+  - Covered shapes: unterminated Sub, one-line `Sub X() : End Sub`, every declarator (`Dim a, b`, `Private a, b`,
+    `Const A, B`, `Dim WithEvents x`), Property header via `_`, an attribute line, or an `#If`; keyword-spelled names;
+    a paren left open mid-edit.
+- **Lexer gaps, each said in the code and pinned by a test:**
+  - `#End If`, `#IfDef` and `#IfNDef` are Unknown tokens; read by their text.
+  - `End Event`/`End AddHandler`/`End RemoveHandler`/`End RaiseEvent` become a bare `End` identifier with the second word
+    swallowed; that word is read from the line.
+  - The lexer THROWS on an unterminated string, but only when no later quote exists. Otherwise the string runs across
+    lines and swallows code (measured: a later Sub vanished). Either way the scan goes line by line, each line cut at its
+    error.
+  - `Auto` (and other keywords) as a member name; the word after a member keyword is taken as the name.
+  - Still not handled: VB14 multi-line strings and multi-line `csharp{…}` blocks degrade to the line-by-line read.
+- **Fix 1:** `_pointerPick` is cleared on DropDownClosed, on any non-item PointerPressed, and on any KeyDown. Test: click
+  the already-selected item, then type a matching name from the keyboard; it stays unbound.
+- **Fix 2:**
+  - Gestures run ONE AT A TIME through a chained completion. Only a request identical to the one in flight is dropped.
+    DEVIATION from "SemaphoreSlim": a semaphore's waiter resumes on the thread pool, and the measured
+    "Call from invalid thread" says the gesture must resume on the releasing (UI) thread.
+  - Typed-name failures (refused, unplannable, unwritable) go through `RefuseHandler`, never the Error List.
+  - A host refusal reverts the cell only while it still shows the refused text (`FormHandlerCellRevert.RefusedText`).
+- **Fix 3 (MEASURED first):**
+  - Load + Click sharing `Init` → web: the CLI refused the pair, "cannot convert from 'Action' to 'Action<DomEvent>'".
+  - Click + MouseDown sharing `H`: built (both `DomEvent`).
+  - Now a Navigated plan whose Sub does not fit this owner gets a fresh computed name and a BL8026 warning naming both
+    owners. Tests: unit, CLI build, and the same-signature case still shared.
+- **Fix 4:** `FormControlCatalog` comment now says CrossBinds; the Web "only on the source" sweep is pinned `== 0`.
+
+| Mutation (paired builds: killing tests cannot overlap) | Killed by |
+|---|---|
+| A member declaration does not close an open body / gestures drop instead of queue | unterminated-Sub + open-paren rows / `ADifferentHandlerRequest…` |
+| No `:` split / no identical-request drop | one-line + line-number rows / `ASecondHandlerRequest…` |
+| Only the first declarator / typed failures to the Error List | 6 declarator rows / 3 typed-name rows |
+| `WithEvents` not a modifier / revert ignores the refused text | 3 WithEvents rows / `AHostRefusal_RevertsOnly…` |
+| Attribute line ends a pending property / retarget fix removed | the attribute-line Property row / both shared-handler rows |
+| No raw-text `End Event` (**survived first**: an access-modified line after `End Event` closed the body anyway; the test now has a `Dim` field first) / both pick clears removed | the Custom Event row / the already-selected row |
+| No multi-line-string fallback / keyword names ignored | the unterminated-string row / the keyword-name row + the round-4 locals row |
+| `#End If` not recognised / paren-join guard removed | 3 directive rows / the open-paren row |
+
+Each pick clear ALONE is covered by the other on today's paths (a key always precedes typing). Removing both is killed.
+The per-line truncation (versus dropping the whole line) is not separately discriminated: the cut line is inside a body.
+Gates: the Form fast set is 4383 total, 1 failure (the known `EveryTextRoute_…`); `FullyQualifiedName~Retarget` 144/144;
+the round-5 filter 1260/1260. `dotnet clean` was run on the Shell after the AXAML change.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

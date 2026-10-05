@@ -435,6 +435,78 @@ public class FormRetargetPairTests
             "a retargeted window wired on its own Load and a Button's MouseDown must be one csc accepts.");
     }
 
+    /// <summary>A window whose Load AND a Button's Click both name <c>Init</c> — legal on WinForms (both EventArgs).</summary>
+    private const string WinFormsSharedInit = """
+        <Form Name="Login" Version="1" Width="400" Height="300">
+          <Bind Event="Load" Handler="Init"/>
+          <Controls>
+            <Button Id="btn" Text="Go" X="20" Y="20" Width="100" Height="30" TabIndex="0">
+              <Bind Event="Click" Handler="Init"/>
+            </Button>
+          </Controls>
+        </Form>
+        """;
+
+    /// <summary>
+    /// Round 5 fix 3 (Task 7 Important). MEASURED before the fix: on the web a Load stub is parameterless and a Click handler
+    /// takes <c>(e As DomEvent)</c>, so the pair wired the Button to <c>Init()</c> and the CLI refused it ("cannot convert
+    /// from 'Action' to 'Action&lt;DomEvent&gt;'"). The second owner now gets its own computed name (<c>btn_Click</c>, a new
+    /// stub) and a warning names both owners and the shared handler — a working pair rather than a refusal.
+    /// </summary>
+    [Test]
+    public void ToWeb_TwoOwnersSharingAHandlerWithIncompatibleSignatures_GetSeparateHandlers_AndAreNamed()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WinFormsSharedInit, "Login.blform"), FormTarget.Web);
+        var document = FormDocumentReader.Read(Path.Combine(_dir, pair.DocumentFileName), pair.DocumentText).Model;
+        var warning = pair.Diagnostics.SingleOrDefault(d => d.Code == DesignCodes.RetargetBindLost && d.Message.Contains("Init"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pair.CodeText, Does.Contain("Private Sub Init()"), "the form's Load keeps the shared name");
+            Assert.That(pair.CodeText, Does.Contain("Private Sub btn_Click(e As DomEvent)"), "the Button gets its own handler");
+            Assert.That(document.FindById("btn")!.Binds.Single().Handler, Is.EqualTo("btn_Click"));
+            Assert.That(document.Binds.Single().Handler, Is.EqualTo("Init"));
+            Assert.That(warning?.Message, Does.Contain("'btn'").And.Contain("form").And.Contain("btn_Click"), "both owners named");
+        });
+    }
+
+    /// <summary>The same pair through the real CLI: it BUILDS (it did not, measured, before the fix).</summary>
+    [Test]
+    [Category("Integration")]
+    public void ToWeb_TheSharedHandlerPair_BuildsWithTheRealCli()
+    {
+        var pair = FormRetarget.ConvertToPair(Read(WinFormsSharedInit, "Login.blform"), FormTarget.Web);
+        var (exit, output) = BuildWebPair(pair, "Login");
+
+        Assert.That(exit, Is.Zero, $"the real CLI refused the retargeted pair.\n{output}");
+    }
+
+    /// <summary>
+    /// The measured counter-case: Click and MouseDown sharing <c>H</c> take the SAME web signature (<c>e As DomEvent</c>),
+    /// so they keep sharing it — no new stub, no warning.
+    /// </summary>
+    [Test]
+    public void ToWeb_TwoEventsSharingAHandlerWithTheSameSignature_KeepSharingIt()
+    {
+        var pair = FormRetarget.ConvertToPair(Read("""
+            <Form Name="Login" Version="1" Width="400" Height="300">
+              <Controls>
+                <Button Id="btn" Text="Go" X="20" Y="20" Width="100" Height="30" TabIndex="0">
+                  <Bind Event="Click" Handler="H"/>
+                  <Bind Event="MouseDown" Handler="H"/>
+                </Button>
+              </Controls>
+            </Form>
+            """, "Login.blform"), FormTarget.Web);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormCodeScan.DeclaredSubs(pair.CodeText, "Login").Select(s => s.Name).Where(n => n != "New"),
+                Is.EqualTo(new[] { "H" }));
+            Assert.That(pair.Diagnostics.Select(d => d.Code), Has.None.EqualTo(DesignCodes.RetargetBindLost));
+        });
+    }
+
     /// <summary>Writes a web pair into a JavaScript project and builds it with the real CLI.</summary>
     private (int Exit, string Output) BuildWebPair(FormRetargetPair pair, string startupForm)
     {

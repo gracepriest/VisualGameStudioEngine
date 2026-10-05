@@ -366,6 +366,7 @@
                           Text="{Binding Handler, Mode=OneWay}"
                           AutomationProperties.Name="{Binding Name, StringFormat='Handler for {0}'}"
                           DropDownOpened="OnHandlerDropDownOpened"
+                          DropDownClosed="OnHandlerDropDownClosed"
                           SelectionChanged="OnHandlerPicked"
                           LostFocus="OnHandlerLostFocus"/>
               </Grid>

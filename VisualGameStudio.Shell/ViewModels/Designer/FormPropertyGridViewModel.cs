@@ -186,10 +186,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// The host refused a name typed into <paramref name="owner"/>'s <paramref name="evt"/> row (round 4 ruling 5): said in
     /// that row's description, and the cell reverts. Returns false when no such row is showing (the caller reports it).
     /// </summary>
-    public bool RefuseHandler(FormBindOwner owner, FormEventDef evt, string why)
+    public bool RefuseHandler(FormBindOwner owner, FormEventDef evt, string why, string? refusedText = null)
     {
         var row = EventRows.FirstOrDefault(r => ReferenceEquals(r.Owner.Control, owner.Control) && ReferenceEquals(r.Event, evt));
-        row?.Refuse(why);
+        row?.Refuse(why, refusedText);
         return row != null;
     }
 
@@ -217,13 +217,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// An Events-tab row's cell must show its bound handler again (a refusal — the row's own or the host's): the view puts
     /// the text back (see <see cref="FormEventRow.Reverted"/> for why a property notification is not enough).
     /// </summary>
-    public event EventHandler<FormEventRow>? HandlerCellReverted;
+    public event EventHandler<FormHandlerCellRevert>? HandlerCellReverted;
 
-    private void OnEventRowReverted(object? sender, EventArgs e)
+    private void OnEventRowReverted(object? sender, string? refusedText)
     {
         if (sender is FormEventRow row)
         {
-            HandlerCellReverted?.Invoke(this, row);
+            HandlerCellReverted?.Invoke(this, new FormHandlerCellRevert(row, refusedText));
         }
     }
 

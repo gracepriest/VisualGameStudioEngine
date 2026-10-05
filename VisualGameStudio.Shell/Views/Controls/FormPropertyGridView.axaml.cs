@@ -35,6 +35,8 @@ public partial class FormPropertyGridView : UserControl
         // A pointer release on a drop-down ITEM routes out of the popup through its combo (the popup's logical parent) and
         // so tunnels through the list first: that marks the NEXT selection change of that combo as the user's pick.
         PropertyList.AddHandler(PointerReleasedEvent, OnListPointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        // The mark lives for ONE pointer gesture: a new press (anywhere but an item) or any key ends it (round 5 fix 1).
+        PropertyList.AddHandler(PointerPressedEvent, OnListPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         PropertyList.ContainerPrepared += OnContainerPrepared;
     }
 
@@ -56,16 +58,18 @@ public partial class FormPropertyGridView : UserControl
     }
 
     /// <summary>A refused handler name (the row's or the host's): the cell shows the bound handler again.</summary>
-    private void OnHandlerCellReverted(object? sender, FormEventRow row) => RevertCell(row);
+    private void OnHandlerCellReverted(object? sender, FormHandlerCellRevert revert) => RevertCell(revert.Row, revert.RefusedText);
 
     /// <summary>
-    /// Puts the row's bound handler back into its combo, discarding what was typed. ⚠ <c>SetCurrentValue</c>, so the
-    /// one-way binding stays in place for the next host bind.
+    /// Puts the row's bound handler back into its combo, discarding the refused text. ⛔ Only while the cell still SHOWS
+    /// that text (round 5 fix 2): a host refusal arrives after the user may have typed something else, which is never wiped.
+    /// ⚠ <c>SetCurrentValue</c>, so the one-way binding stays in place for the next host bind.
     /// </summary>
-    private void RevertCell(FormEventRow row)
+    private void RevertCell(FormEventRow row, string? refusedText)
     {
         if (PropertyList.ContainerFromItem(row) is { } container &&
-            container.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault() is { } combo)
+            container.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault() is { } combo &&
+            (refusedText == null || string.Equals((combo.Text ?? "").Trim(), refusedText.Trim(), StringComparison.Ordinal)))
         {
             combo.SetCurrentValue(ComboBox.TextProperty, row.Handler);
         }
@@ -73,6 +77,21 @@ public partial class FormPropertyGridView : UserControl
 
     /// <summary>The handler combo whose drop-down ITEM the pointer was just released on — the only source of a pick.</summary>
     private ComboBox? _pointerPick;
+
+    private void OnListPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Source is not Visual source || source.FindAncestorOfType<ComboBoxItem>(includeSelf: true) == null)
+        {
+            _pointerPick = null;
+        }
+    }
+
+    /// <summary>
+    /// ⛔ The drop-down closed: whatever the pointer marked is over (round 5 fix 1). Clicking the item ALREADY selected raises
+    /// no selection change, so without this the mark outlived the drop-down and the next auto-select — typing a matching
+    /// name — was taken for the user's pick.
+    /// </summary>
+    private void OnHandlerDropDownClosed(object? sender, EventArgs e) => _pointerPick = null;
 
     private void OnListPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
@@ -493,6 +512,8 @@ public partial class FormPropertyGridView : UserControl
     /// </summary>
     private void OnListKeyDown(object? sender, KeyEventArgs e)
     {
+        _pointerPick = null;   // a key is never part of a pointer pick (round 5 fix 1)
+
         // Slice 5: Enter in an Events-tab row's handler combo COMMITS what was typed (a fitting Sub binds, a new name asks
         // the host for the stub, an empty cell unbinds). On the TUNNEL, before the editable combo takes Enter for itself.
         if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None && e.Source is Visual typedIn &&

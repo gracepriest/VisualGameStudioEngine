@@ -644,6 +644,79 @@ public class FormHandlerGestureTests
     }
 
     /// <summary>
+    /// Round 5 fix 2: gestures run ONE AT A TIME, in order — a DIFFERENT request arriving while one is in flight is queued,
+    /// never dropped (only an identical one is). Both handlers are written and both open.
+    /// </summary>
+    [Test]
+    public async Task ADifferentHandlerRequestWhileOneIsInFlight_IsQueued_AndBothComplete()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var gate = new TaskCompletionSource();
+        h.Files.WriteGate = gate;
+
+        var control = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);
+        var form = h.Vm.ActivateFormCommand.ExecuteAsync(null);
+        gate.SetResult();
+        await Task.WhenAll(control, form);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Files.Contents[h.CodePath], Does.Contain("Sub btnLogin_Click(").And.Contain("Sub LoginForm_Load("),
+                "both stubs, the second written after the first");
+            Assert.That(h.Navigations, Has.Count.EqualTo(2));
+        });
+    }
+
+    /// <summary>
+    /// Round 5 fix 2: a TYPED name whose write fails is the ROW's refusal (pane + revert) — not an Error List entry.
+    /// </summary>
+    [Test]
+    public async Task ATypedNameWhoseWriteFails_IsTheRowsRefusal_NotAnErrorListEntry()
+    {
+        var h = Open(FormTarget.WinForms);
+        var row = ShowEvents(h);
+        h.Vm.PropertyGrid.CodeBehindText = h.Files.Contents[h.CodePath];
+        h.Files.FailWrites = true;
+        var asked = new TaskCompletionSource();
+        h.Vm.PropertyGrid.HandlerRequested += (_, _) => asked.TrySetResult();
+
+        row.Commit("Typed");
+        await asked.Task;
+        await Task.Delay(50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Does.Contain("read-only"), "the row says why");
+            Assert.That(h.Diagnostics.SelectMany(d => d.Diagnostics), Is.Empty, "no Error List entry for a typed name");
+            Assert.That(h.Control.Binds, Is.Empty);
+        });
+    }
+
+    /// <summary>Round 5 fix 2: a typed name the PLANNER refuses (no designer region to write beside) is the row's refusal.</summary>
+    [Test]
+    public async Task ATypedNameThePlannerRefuses_IsTheRowsRefusal_NotAnErrorListEntry()
+    {
+        var h = Open(FormTarget.WinForms);
+        var row = ShowEvents(h);
+        var code = h.Files.Contents[h.CodePath];
+        h.Files.Contents[h.CodePath] = code.Replace("<vgs:designer", "<vgs-removed").Replace("</vgs:designer>", "</vgs-removed>");
+        h.Vm.PropertyGrid.CodeBehindText = h.Files.Contents[h.CodePath];
+        var asked = new TaskCompletionSource();
+        h.Vm.PropertyGrid.HandlerRequested += (_, _) => asked.TrySetResult();
+
+        row.Commit("Typed");
+        await asked.Task;
+        await Task.Delay(50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Does.Contain("region"), "the planner's reason, in the row");
+            Assert.That(h.Diagnostics.SelectMany(d => d.Diagnostics), Is.Empty);
+        });
+    }
+
+    /// <summary>
     /// Ruling 8: a row for an event with no name on the target is a defect, thrown at CONSTRUCTION — a throw inside a
     /// binding's getter is swallowed by the binding and the cell would just show nothing.
     /// </summary>

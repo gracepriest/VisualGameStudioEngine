@@ -773,22 +773,65 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private async Task ActivateHandlerAsync(
         BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
     {
+        if (DesignFile == null || FilePath == null)
+        {
+            return;
+        }
+
+        // ⛔ One gesture at a time, IN ORDER (round 5 fix 2): each waits for the one before it, so a second gesture reads
+        // the code-behind the first one wrote. Only a request IDENTICAL to the one in flight is dropped — Enter and the
+        // LostFocus right behind it asking for the same typed name; a different request (another control, another event)
+        // is queued, never lost. ⚠ A chained completion rather than SemaphoreSlim: the waiter's continuation must run on
+        // the releasing (UI) thread, and a semaphore's waiter resumes on the thread pool where there is no sync context.
+        var key = (owner.Control, owner.Form, evt, handlerName);
+        if (_handlerInFlight is { } current && current.Equals(key))
+        {
+            return;
+        }
+
+        var previous = _handlerGestureTail;
+        var done = new TaskCompletionSource();
+        _handlerGestureTail = done.Task;
+        await previous;
+        _handlerInFlight = key;
+        try
+        {
+            await RunHandlerGestureAsync(owner, evt, handlerName);
+        }
+        finally
+        {
+            _handlerInFlight = null;
+            done.SetResult();
+        }
+    }
+
+    /// <summary>The last handler gesture queued: the next one waits for it (<see cref="ActivateHandlerAsync"/>).</summary>
+    private Task _handlerGestureTail = Task.CompletedTask;
+
+    /// <summary>The gesture running now — a request identical to it is dropped.</summary>
+    private (BasicLang.Forms.FormControl?, BasicLang.Forms.FormDocument, BasicLang.Forms.FormEventDef?, string?)? _handlerInFlight;
+
+    private async Task RunHandlerGestureAsync(
+        BasicLang.Forms.FormBindOwner owner, BasicLang.Forms.FormEventDef? evt, string? handlerName)
+    {
         var file = DesignFile;
         if (file == null || FilePath == null)
         {
             return;
         }
 
-        // ⛔ One gesture at a time (round 4 ruling 6): Enter and the LostFocus right behind it can both ask for the handler
-        // while the first write is still in flight — the second would read the OLD code-behind, plan the same stub again,
-        // write it and navigate twice. A request arriving while one runs is dropped; the first one's result stands.
-        if (_activatingHandler)
-        {
-            return;
-        }
-
-        _activatingHandler = true;
         var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+
+        // ⛔ A TYPED name's failure — refused, not plannable, not writable — is said where it was typed (the row's
+        // description, the cell reverting if it still shows that name), never as an Error List entry (round 5 fix 2). Any
+        // other gesture's failure, or a typed one with no row showing, is reported as before.
+        void Fail(string message)
+        {
+            if (handlerName == null || evt == null || !PropertyGrid.RefuseHandler(owner, evt, message, handlerName))
+            {
+                ReportDesignerRefusal(codePath, BasicLang.Forms.DesignCodes.RegionAbsent, message);
+            }
+        }
 
         try
         {
@@ -814,11 +857,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 BasicLang.Forms.FormHandlers.DescribeUnusableHandler(file.Model, owner, evt, handlerName,
                     BasicLang.Forms.FormCodeScan.Scan(before, file.Model.Name)) is { } unusable)
             {
-                if (!PropertyGrid.RefuseHandler(owner, evt, unusable))
-                {
-                    ReportDesignerRefusal(codePath, BasicLang.Forms.DesignCodes.RegionAbsent, unusable);
-                }
-
+                Fail(unusable);
                 return;
             }
 
@@ -828,9 +867,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             if (plan.Outcome == BasicLang.Forms.HandlerOutcome.Refused)
             {
-                ReportDesignerRefusal(
-                    codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
-                    plan.Refusal ?? "the handler could not be created.");
+                Fail(plan.Refusal ?? "the handler could not be created.");
                 return;
             }
 
@@ -863,18 +900,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
         catch (Exception ex)
         {
-            ReportDesignerRefusal(
-                codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
-                $"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
-        }
-        finally
-        {
-            _activatingHandler = false;
+            Fail($"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
         }
     }
-
-    /// <summary>A handler gesture is running (<see cref="ActivateHandlerAsync"/>); a second one is dropped.</summary>
-    private bool _activatingHandler;
 
     /// <summary>
     /// Bumped by every write of the grid's code-behind text: a read that started under an older number lands on nothing

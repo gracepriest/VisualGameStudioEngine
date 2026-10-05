@@ -2516,7 +2516,7 @@ public static class FormControlCatalog
             // fieldset's `focusin`: focus moving INTO the box, which bubbles from its children exactly as WinForms
             // raises Enter for a container when one of its children becomes active (a fieldset itself takes no focus).
             // ⚠ Click stays, NON-default: existing documents bind it, and the retarget crosses any event wired on
-            // both targets (FormRetarget.ConvertBinds through FormEvents.WiredOn — pre-flight B1).
+            // both targets (FormRetarget.CrossBinds through FormEvents.WiredOn — pre-flight B1, slice 5 D-6).
             Events: GroupBoxEvents()),
         new("PictureBox",  "PictureBox",  "img",      null,       false, ControlRows(
             null, BackColor, null, CursorRow,

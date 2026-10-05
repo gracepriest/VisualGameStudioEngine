@@ -10,6 +10,9 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// </summary>
 public sealed record FormHandlerRequest(FormBindOwner Owner, FormEventDef Event, string? Handler);
 
+/// <summary>An Events-tab cell to put back to its bound handler — only while it still shows <paramref name="RefusedText"/> (null: always).</summary>
+public sealed record FormHandlerCellRevert(FormEventRow Row, string? RefusedText);
+
 /// <summary>
 /// One row of the grid's Events tab (property-grid slice 5, D-5): an event of the selected control — or of the Form with
 /// nothing selected — and the handler bound to it. ⛔ Built only from <see cref="FormEvents.WiredOn"/> (never
@@ -124,7 +127,7 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         var scan = _scan();
         if (FormHandlers.DescribeUnusableHandler(_form, Owner, Event, typed, scan) is { } refusal)
         {
-            Refuse(refusal);
+            Refuse(refusal, typed);
             return;
         }
 
@@ -154,19 +157,22 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     /// Refuses the value just committed: says why (the description pane), and makes the cell re-read its handler, so the
     /// refused text reverts to what is bound (round 4 ruling 5). Also the host's route, for a name it refuses.
     /// </summary>
-    public void Refuse(string why)
+    /// <param name="refusedText">The text refused. The cell reverts only while it still SHOWS that text (round 5 fix 2): a
+    /// host refusal arrives asynchronously, and a name the user has re-typed since must not be wiped. Null: revert anyway.</param>
+    public void Refuse(string why, string? refusedText = null)
     {
         Refusal = why;
         HandlerChanged();
-        Reverted?.Invoke(this, EventArgs.Empty);
+        Reverted?.Invoke(this, refusedText);
     }
 
     /// <summary>
-    /// The cell must show the bound handler again, throwing away what was typed (a refusal; Escape). ⚠ An EVENT, not only
-    /// <see cref="HandlerChanged"/>: measured, re-raising an unchanged <c>Handler</c> ("" → "") does not replace text the
-    /// user typed into the editable combo — the one-way binding's value did not change — so the view sets the text itself.
+    /// The cell must show the bound handler again, throwing away the refused text (the argument; null = whatever is there).
+    /// ⚠ An EVENT, not only <see cref="HandlerChanged"/>: measured, re-raising an unchanged <c>Handler</c> ("" → "") does
+    /// not replace text the user typed into the editable combo — the one-way binding's value did not change — so the view
+    /// sets the text itself.
     /// </summary>
-    public event EventHandler? Reverted;
+    public event EventHandler<string?>? Reverted;
 
     /// <summary>
     /// ⛔ The bind changed under the row (round 4 ruling 1, CRITICAL) — the host's double-click/typed-name bind edits the
