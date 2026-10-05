@@ -5998,9 +5998,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         // for every Short, Byte, SByte and UShort.
                         if (!TryEmitConsoleValueWrite("Write", args[0]))
                         {
-                            // A REFERENCE only, spelled as it always was. ⚠ A user class here still
-                            // names a `Write(Foo)` that does not exist — a separate, pre-existing gap.
-                            var argType = MapType(args[0].Type);
+                            // A REFERENCE only: Write(object) for a class, an interface, a delegate
+                            // or an array, Write(char[]) for a Char array (task #191 — this used
+                            // to name a `Write(Foo)` that does not exist).
+                            var argType = ConsoleReferenceOverload(args[0].Type);
                             WriteLine($"    call void [mscorlib]System.Console::Write({argType})");
                         }
                         _currentStack--;
@@ -6902,6 +6903,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // and is the conversion CStr(o) takes here too.
             if (EmitConvertFromObject(operand, "ToString", "string")) return;
 
+            // ⛔ A class, interface, delegate or array REFERENCE (task #191) reached
+            // Concat(string, string) raw, as if it were a string: `"k=" & obj` printed `k=` and
+            // whatever the object header read as string storage. It is an object already, so it
+            // takes the Object operand's own conversion: Convert.ToString(object) is
+            // `o?.ToString() ?? ""`, which is C#'s `"k=" + obj` — the class's own
+            // `Overrides ToString`, else its type name, and Nothing as "".
+            if (IsNonStringReference(operand.Type))
+            {
+                WriteLine("    call string [mscorlib]System.Convert::ToString(object)");
+                return;
+            }
+
             if (IlTypeSpec(operand.Type) == "char")
             {
                 WriteLine("    call string [mscorlib]System.Char::ToString(char)");
@@ -7111,6 +7124,53 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             WriteLine($"    box {boxToken}");
             return true;
+        }
+
+        /// <summary>
+        /// True for a REFERENCE this backend knows is one (task #191): an array, or a class,
+        /// interface or delegate the program itself declares — a value whose text is its own
+        /// <c>ToString()</c> and which Console takes as <c>object</c>. An <c>Object</c> is not
+        /// claimed: it has its own conversion (<see cref="EmitConvertFromObject"/>). Shared by
+        /// <c>&amp;</c> (<see cref="EmitConcatOperandAsString"/>) and <c>Console.Write</c>
+        /// (<see cref="ConsoleReferenceOverload"/>), so the two cannot disagree about what is a
+        /// reference.
+        ///
+        /// <para>⛔ Never <c>TypeKind.Class</c> alone: a .NET type the program names is
+        /// <c>Class</c> whatever it really is, so Decimal and DateTime — VALUE types — read as
+        /// references and reached <c>Convert.ToString(object)</c> unboxed (measured: the byte
+        /// compare's Decimal <c>&amp;</c>). A Structure is in <see cref="IRModule.Classes"/> too,
+        /// marked <see cref="IRClass.IsStruct"/>; it boxes (<see cref="ValueTypeBoxToken"/>).</para>
+        /// </summary>
+        private bool IsNonStringReference(TypeInfo type)
+        {
+            if (type?.Name == null) return false;
+            if (type.Kind == TypeKind.Array) return true;
+            if (_module == null) return false;
+            return (_module.Classes.TryGetValue(type.Name, out var cls) && !cls.IsStruct)
+                   || _module.Interfaces.ContainsKey(type.Name)
+                   || _module.Delegates.ContainsKey(type.Name);
+        }
+
+        /// <summary>
+        /// The <c>Console.Write</c> overload a REFERENCE argument binds (task #191): a Char array
+        /// has one of its own, <c>(char[])</c>, which prints its characters as VB and C# do;
+        /// every other class, interface, delegate or array binds <c>(object)</c>; anything else
+        /// keeps the spelling it always had.
+        ///
+        /// <para>⛔ The raw spelling named <c>Write(Foo)</c> — and <c>Write(Char[])</c>,
+        /// <c>Write(Integer[])</c> — none of which ilasm can even read: every
+        /// <c>Console.Write</c> of a user class failed to assemble. ⚠ A one-dimensional Char
+        /// array must NOT go to <c>(object)</c>: that would turn ilasm's refusal into a silent
+        /// <c>System.Char[]</c>. (It is read off the element type, not the array's spec, which
+        /// spells a Char array <c>class 'Char'[]</c> today — a declaration gap of its own that
+        /// keeps any Char array local from assembling at all.)</para>
+        /// </summary>
+        private string ConsoleReferenceOverload(TypeInfo type)
+        {
+            if (!IsNonStringReference(type)) return MapType(type);
+            var isCharVector = type.Kind == TypeKind.Array && type.ArrayRank <= 1
+                               && type.ElementType != null && MapType(type.ElementType) == "char";
+            return isCharVector ? "char[]" : "object";
         }
 
         /// <summary>True for a slot that holds a value only BOXED: an <c>object</c>.</summary>
