@@ -17,6 +17,14 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #186 DONE, `Nothing` into a value type is its DEFAULT, the VB way, on every backend (owner decision "fix #186"; `git log --grep '#186'`)
+- **Fixed:** `Dim n As Integer = Nothing` (0), a Boolean, Char, Structure, Enum, `T` or DateTime, at every #173 site, in a typed array literal and an `If()`, was refused ("Nothing has no value of type …; write 0"); `n = Nothing` and `Case Nothing` ran wrong (False for 0 on C#/JS/MSIL, no C++ build). `TypeInfo.NothingIsDefaultValue` is the one list; `IRBuilder.NothingAs` lowers it (a primitive: the zero literal; else a typed null = "default of T": C# `default(T)`, C++ `T{}`). `n Is Nothing` and `Case Is Nothing` on a value type stay refused (BC30020).
+- **Tests (11 new, 25 moved):** `NothingIntoValueTypeExecutionTests` (Integration, 9: 8 groups of 28 vbc-answered probes x CLI / `-O` / `CompileProjectFiles`, groups 1-5 on all four backends; a table pin; roster now 115) and `NothingIntoValueTypeCompileTests` (fast, 2: the kept BC30020 refusals, JS BL7003/4/7). MOVED: `NothingConversionTests` 16, `TypedArrayLiteralTests` 6, `ConditionalExpressionTests` 3 (refusal pins to "admitted, lowers to the default"). Mutants m1-m3 killed. CLAUDE.md's `New T() { … }` sentence now says Nothing is admitted into any `T`.
+- **Gates (Linux):** fast subset 0 failed / 12,660 passed / 94 skipped; Integration, one filter each, 0 failed: `NothingIntoValueTypeExecution` 9, `NothingConversion` 81, `TypedArrayLiteral` 69 (+1 skipped), `ConditionalExpression` 128, `Coercion` 69, `Optional` 50, `SelectCase` 81, `CharWidensToString` 13, `JsExecutionTierRoster` 5. The full suite was NOT run; Windows owes the MSVC and MSIL runs.
+- ⛔ **Gaps, NO test pins them** (fixture header): a Structure is JS BL7005 and MSIL a class (#192); generic `T`, Enum and tuple are C# only; a Union and DateTime/TimeSpan/Guid on JS and MSIL fail the Nothing-free control alike; `Function() Nothing` into a Func, `Const K As T = Nothing` (also for String) and a literal passed ByRef stay refused.
+
+---
+
 ## 🔑 NEWEST — 2026-10-05: #182 TESTED, the C# backend escapes every reserved keyword used as a name (`@out`, `@lock`, `@checked`; fix `41031ecb`, C# only)
 - **Tests (11):** `CSharpKeywordIdentifierExecutionTests` (Integration, 9: probes K01-K14 vs vbc through the CLI, `--optimize`, `CompileProjectFiles`; K08 two-file through `build` + `CompileProjectFiles`; C# only, so in `JsExecutionTierRosterTests.NotJavaScriptExecution`, NOT the roster) + `CSharpKeywordIdentifierShapeTests` (fast, 2: Roslyn compiles every probe's C#; every Roslyn-reserved keyword BasicLang accepts as a local / class name is escaped). Mutants M1-M4 each killed by name (fixture header).
 - **Gates (Linux):** fast subset 12,646 passed / 0 failed / 94 skipped; Integration, each filter alone: `CSharpKeywordIdentifier` 11, `CSharp` 1,277, `JsExecutionTierRosterTests` 5, `NameReservation` 443, `NameBinding` 314, `LambdaBody` 336 - all 0 failed; the full suite was NOT run.
@@ -3622,9 +3630,9 @@ single new failure against the 170-name baseline.
     `Not x Is Nothing` is `Not (x Is Nothing)` and `Not n = 5` is `Not (n = 5)`. A `Not` in
     operand position (`x = Not b`) is still the unary. Only an explicit `(Not x) Is Nothing` still
     reaches D1 (3)'s refusal, which names `x IsNot Nothing`.
-  - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type #173's
-    `NothingAdviceFor` admits `Nothing` into — the ONE classification, no parallel list; value
-    types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
+  - **D2 (operand rule, `VisitIdentityComparison`):** an operand is `Nothing` or a type that is not
+    on `TypeInfo.NothingIsDefaultValue` (#186's list; it was #173's `NothingAdviceFor`) — the ONE
+    classification, no parallel list; value types are refused BC30020-style, each refusal naming its own fix. A nullable is admitted only
     against `Nothing` (naming `.HasValue` otherwise). Two non-`Nothing` operands must be related
     (one converts to the other, or one is `Object`) or the comparison is refused as always-False.
     `Case Is Nothing` follows the SAME rule (`CheckCaseIsNothingOperand`).
@@ -3724,12 +3732,11 @@ single new failure against the 170-name baseline.
     `NothingAdviceFor` (the typed array literal's own rule, `CheckTypedLiteralElement`, now routed
     through the same method) — the ONE-answer invariant is pinned directly
     (`NothingConversionTests.TypedArrayLiteral_AndDimSite_AgreeOnNothing`).
-  - A value type STAYS refused, with advice ("Nothing has no value of type 'Integer'; write 0").
-    `NothingAdviceFor` gained four new arms once value types started reaching it that used to call
-    a reference type: the P1 native structs (DateTime/TimeSpan/Guid — NativeOwned, reference-typed
-    StringBuilder excepted), a type parameter, a tuple, and `Union`. `Integer?` — the one value type
-    VB itself admits `Nothing` into — is admitted. VB's value-type Nothing-DEFAULT (rather than
-    refusal) is the owner decision **#186**, out of scope here.
+  - ⚠ SUPERSEDED BY **#186** (2026-10-05, the top of this file): a value type used to STAY refused here, with
+    advice ("Nothing has no value of type 'Integer'; write 0"), and `NothingAdviceFor` gained four arms (the P1
+    native structs, a type parameter, a tuple, `Union`). #186 adopted VB's rule instead: `Nothing` into a value
+    type is its DEFAULT at every site below, those four arms included, and `NothingAdviceFor` is gone
+    (`TypeInfo.NothingIsDefaultValue` is the list). `Integer?` is admitted as it always was.
   - **IR:** `CoerceToDeclaredType` re-types an Object-typed null constant to the type it is stored
     into (the same in-place re-typing a numeric literal already gets); a `Nothing` argument to a
     `Func`/`Action` INVOCATION is typed from the delegate's own generic arguments

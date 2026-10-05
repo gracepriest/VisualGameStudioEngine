@@ -260,11 +260,12 @@ public class TypedArrayLiteralTests
     }
 
     /// <summary>
-    /// <c>Nothing</c> is typed <c>Object</c>, so it has its own arm: admitted into any reference (or
-    /// synthetic .NET) element type, refused into a value type with the honest message.
+    /// <c>Nothing</c> is typed <c>Object</c>, so it has its own arm: admitted into a reference (or synthetic .NET) element type as a null reference, and — ⭐ #186,
+    /// VB's rule — into a VALUE element type as that type's default (<c>New Integer() {Nothing}</c> holds 0). It was refused with "Nothing has no value of type
+    /// 'Integer'; write 0", the Dim site's own refusal; the two stay one answer (<see cref="NothingConversionTests.TypedArrayLiteral_AndDimSite_AgreeOnWhatNothingBecomes"/>).
     /// </summary>
     [Test]
-    public void TypedLiteral_Nothing()
+    public void TypedLiteral_Nothing_IsAdmitted_IntoAReferenceAndAValueElement()
     {
         var (okS, errorsS, _, _) = Analyze("Dim a() As String = New String() {\"a\", Nothing}");
         Assert.That(okS, Is.True, string.Join("; ", errorsS));
@@ -273,33 +274,48 @@ public class TypedArrayLiteralTests
             "Dim c As New Circle()\nDim all() As Shape = New Shape() {c, Nothing}", prelude: ShapePrelude);
         Assert.That(okShape, Is.True, string.Join("; ", errorsShape));
 
-        var (okI, errorsI, _, _) = Analyze("Dim a() As Integer = New Integer() {Nothing}");
-        Assert.That(okI, Is.False);
-        Assert.That(errorsI, Has.Some.Contains("Nothing has no value of type 'Integer'; write 0"));
+        var (okI, errorsI, _, _) = Analyze("Dim a() As Integer = New Integer() {1, Nothing}");
+        Assert.That(okI, Is.True, string.Join("; ", errorsI));
+        Assert.That(errorsI, Has.None.Contains("Nothing has no value"));
+        Assert.That(ElementConstants("Dim a() As Integer = New Integer() {1, Nothing}"), Is.EqualTo(new[] { "Integer:1", "Integer:0" }),
+            "the Nothing element is the Integer 0, beside the written 1");
+    }
+
+    /// <summary>The constants stored into the typed literal's array, in order, as "Type:Value" (null for a typed null, NUL for ChrW(0)).</summary>
+    private static string[] ElementConstants(string body, string prelude = "")
+    {
+        var source = prelude + "\nSub Main()\n" + body + "\nEnd Sub";
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var program = parser.Parse();
+        Assert.That(parser.Errors, Is.Empty, string.Join("; ", parser.Errors.Select(e => e.Message)));
+        var analyzer = new SemanticAnalyzer();
+        Assert.That(analyzer.Analyze(program), Is.True, string.Join("; ", analyzer.Errors.Select(e => e.Message)));
+        var module = new IRBuilder(analyzer).Build(program, "T");
+        var stores = module.Functions.Single(f => f.Name == "Main").Blocks.SelectMany(b => b.Instructions).OfType<IRArrayStore>().ToList();
+        return stores.Select(st => st.Value is IRConstant c
+            ? $"{c.Type?.Name}:{(c.Value is char ch && ch == '\0' ? "NUL" : c.Value is bool bv ? (bv ? "True" : "False") : c.Value is null ? "null" : Convert.ToString(c.Value, System.Globalization.CultureInfo.InvariantCulture))}"
+            : "<not a constant>").ToArray();
     }
 
     /// <summary>
-    /// The value-type refusal's ADVICE is per kind. "write 0" for an enum sends the user to a second
-    /// refusal (<c>New Color() {0}</c> is "cannot put an 'Integer' in a 'Color()'"), so each arm names
-    /// the thing that actually has a value of that type. The head is the spec's fragment for all.
+    /// ⭐ #186: the old per-kind refusal ("write a member of 'Color'", "write New Pt()", "write False", …) is gone, because VB converts Nothing to a value type's default.
+    /// Each element kind is ADMITTED and stored as its default: a Boolean False, a Char ChrW(0), and for an Enum, a Structure and a `Type … End Type` UDT a null
+    /// constant typed with the element type (which means "default of T": C# `default(T)`, C++ `T{}`). Backend limits, pre-existing and each with a Nothing-free
+    /// control that fails alike: Structure on JavaScript is BL7005 and on MSIL a class (#192); an Enum runs on C# only (header of the execution fixture).
     /// </summary>
-    [TestCase("Enum Color\nRed\nEnd Enum", "Dim a() As Color = New Color() {Nothing}",
-        "Nothing has no value of type 'Color'; write a member of 'Color'")]
-    [TestCase("Structure Pt\nPublic X As Integer\nEnd Structure", "Dim a() As Pt = New Pt() {Nothing}",
-        "Nothing has no value of type 'Pt'; write New Pt()")]
-    // A `Type … End Type` UDT is TypeKind.UserDefinedType, a value type distinct from Structure; without
-    // its own arm the null default admitted Nothing into it (csc CS0037 later).
-    [TestCase("Type Pt2\nX As Integer\nEnd Type", "Dim a() As Pt2 = New Pt2() {Nothing}",
-        "Nothing has no value of type 'Pt2'; write New Pt2()")]
-    [TestCase("", "Dim a() As Boolean = New Boolean() {Nothing}",
-        "Nothing has no value of type 'Boolean'; write False")]
-    [TestCase("", "Dim a() As Char = New Char() {Nothing}",
-        "Nothing has no value of type 'Char'; write a character literal")]
-    public void TypedLiteral_Nothing_IntoAValueType_IsRefusedWithKindAwareAdvice(string prelude, string body, string expectedInMessage)
+    [TestCase("Enum Color\nRed\nEnd Enum", "Dim a() As Color = New Color() {Nothing}", "Color:null")]
+    [TestCase("Structure Pt\nPublic X As Integer\nEnd Structure", "Dim a() As Pt = New Pt() {Nothing}", "Pt:null")]
+    // A `Type … End Type` UDT is TypeKind.UserDefinedType, a value type distinct from Structure; without its own arm of NothingIsDefaultValue the null
+    // default would have been stored into it (csc CS0037 later).
+    [TestCase("Type Pt2\nX As Integer\nEnd Type", "Dim a() As Pt2 = New Pt2() {Nothing}", "Pt2:null")]
+    [TestCase("", "Dim a() As Boolean = New Boolean() {Nothing}", "Boolean:False")]
+    [TestCase("", "Dim a() As Char = New Char() {Nothing}", "Char:NUL")]
+    public void TypedLiteral_Nothing_IntoAValueType_IsAdmitted_AsItsDefault(string prelude, string body, string expectedElement)
     {
         var (ok, errors, _, _) = Analyze(body, prelude);
-        Assert.That(ok, Is.False, "expected a refusal");
-        Assert.That(errors, Has.Some.Contains(expectedInMessage));
+        Assert.That(ok, Is.True, "Nothing into a value-type element is its default: " + string.Join("; ", errors));
+        Assert.That(errors, Has.None.Contains("Nothing has no value"));
+        Assert.That(ElementConstants(body, prelude), Is.EqualTo(new[] { expectedElement }));
     }
 
     /// <summary>

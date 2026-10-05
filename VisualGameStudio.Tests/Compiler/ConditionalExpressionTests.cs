@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using BasicLang.Compiler;
 using BasicLang.Compiler.AST;
+using BasicLang.Compiler.CodeGen;
+using BasicLang.Compiler.CodeGen.CSharp;
 using BasicLang.Compiler.IR;
 using NUnit.Framework;
 
@@ -18,8 +20,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //  BasicLang's own choice where it differs, each named below.
 //
 //  ⛔ WHERE BASICLANG DELIBERATELY DIFFERS FROM vbc — pinned as the DECISION, not as a defect:
-//    - `If(c, 1, Nothing)` is refused ("Nothing has no value of type 'Integer'; write 0"); vbc gives 0. It is the rule
-//      `Dim x As Integer = Nothing` already has.
+//    - (#186 retired the first: `If(c, 1, Nothing)` is now 0, as vbc gives, and `Nothing` is a value type's default everywhere. See
+//      `ANothingOperand_OfAValueType_TakesTheOtherOperandsDefault`.)
 //    - The two-argument `If(value, fallback)` (coalesce) is a parse diagnostic; vbc accepts it. Filed as a follow-up.
 //    - A module-scope `Const K = If(True, 1, 2.5)` is refused ("cannot be computed at compile time"); vbc folds it. The
 //      LOCAL spelling compiles (i8const runs it).
@@ -375,19 +377,30 @@ public class ConditionalExpressionTests
     }
 
     /// <summary>
-    /// `Nothing` takes the other operand's type and is then judged against it: fine for a reference type, refused with
-    /// advice for a value type, exactly as `Dim x As Integer = Nothing` is. ⚠ vbc gives 0 for `If(t, 1, Nothing)`; the
-    /// refusal is BasicLang's rule, not a defect.
+    /// `Nothing` takes the other operand's type and is then converted to it: a null reference for a reference type, and — ⭐ #186, VB's rule — the type's DEFAULT
+    /// for a value type, exactly as `Dim x As Integer = Nothing` is 0. It was refused with "Nothing has no value of type 'Integer'; write 0" where vbc gives 0.
+    /// The program is accepted, the conditional keeps the OTHER operand's type, and the C# it lowers to holds a plain `0`: no `null` and no `default(…)`, which is
+    /// what a Nothing left untyped, or typed null, would spell. (The RUN, on all four backends, is `NothingIntoValueTypeExecutionTests`.)
     /// </summary>
-    [TestCase("If(t, 1, Nothing)", "Nothing has no value of type 'Integer'; write 0", TestName = "NothingSecond_OfAValueType_IsRefused")]
-    [TestCase("If(t, Nothing, 1)", "Nothing has no value of type 'Integer'; write 0", TestName = "NothingFirst_OfAValueType_IsRefused")]
-    [TestCase("If(t, 1.5, Nothing)", "Nothing has no value of type 'Double'", TestName = "NothingSecond_OfADouble_IsRefused")]
-    public void ANothingOperand_OfAValueType_IsRefusedWithAdvice(string expression, string message)
+    [TestCase("If(t, 1, Nothing)", "Integer", TestName = "NothingSecond_OfAValueType_IsItsDefault")]
+    [TestCase("If(t, Nothing, 1)", "Integer", TestName = "NothingFirst_OfAValueType_IsItsDefault")]
+    [TestCase("If(t, 1.5, Nothing)", "Double", TestName = "NothingSecond_OfADouble_IsItsDefault")]
+    public void ANothingOperand_OfAValueType_TakesTheOtherOperandsDefault(string expression, string resultType)
     {
-        var errors = T123Front.Errors(ConditionalProbes.InMain("Dim t As Boolean = True\nDim x = " + expression));
+        var source = ConditionalProbes.InMain("Dim t As Boolean = True\nDim x = " + expression);
+        var run = T123Front.Run(source);
+        var conditional = run.Nodes<ConditionalExpressionNode>().SingleOrDefault();
 
-        Assert.That(errors, Has.Count.EqualTo(1), string.Join(" | ", errors));
-        Assert.That(errors[0], Does.Contain(message));
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.AllErrors, Is.Empty, "Nothing into a value-type operand is its default, as in VB");
+            Assert.That(conditional, Is.Not.Null);
+            Assert.That(run.TypeOf(conditional), Is.EqualTo(resultType), "the conditional keeps the other operand's type");
+        });
+
+        var csharp = new ImprovedCSharpCodeGenerator(new CodeGenOptions { Namespace = "TestOutput", GenerateMainMethod = false, GenerateComments = false })
+            .Generate(JsTestSupport.BuildModule(source));
+        Assert.That(csharp, Does.Not.Contain("null").And.Not.Contain("default("), "the Nothing operand is a plain zero literal: " + csharp);
     }
 
     [TestCase("If(t, \"x\", Nothing)")]

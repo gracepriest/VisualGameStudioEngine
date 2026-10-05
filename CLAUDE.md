@@ -344,8 +344,9 @@ still works but warns).
 refused with the fix in the message) — whose elements are checked by the literal's OWN rules, NOT
 the `Dim` path's: a non-literal must be `T` or WIDEN to it (no narrowing — stricter than `Dim`); a
 numeric literal has a literal-fit rule stricter than `Dim`'s (a floating literal never enters an
-integral `T`) plus `CheckConstantFitsNumericTarget` per element; `Nothing` is admitted only into a
-reference `T`; and either side being an unresolvable .NET type defers to csc. Never "harmonise" them
+integral `T`) plus `CheckConstantFitsNumericTarget` per element; `Nothing` is admitted into any
+`T` (a value type gets its default, task #186); and either side being an unresolvable .NET type
+defers to csc. Never "harmonise" them
 with the `Dim` path — see `docs/superpowers/specs/2026-09-19-menus-toolbars-statusbars-design.md` §9.
 
 ## C++ backend (`CppCodeGenerator.cs` ↔ engine)
