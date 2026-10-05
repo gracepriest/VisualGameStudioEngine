@@ -1,7 +1,7 @@
 # BRIEF: The optimizer's shared kill vocabulary — what it cannot see, and who checks it
 
 Date: 2026-09-24; HEAD `6168628`; builds on ADR-0004 D2 and ADR-0005 D2.
-Every table was compiled AND run at `6168628` on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend, because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134). CSE is a standard pass, so the straight-line shapes in Q1 and Q3 are exercised by all three entry points; LICM (Q2) is aggressive-only and is not.
+Every table was compiled AND run at `6168628` on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend, because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134). *(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline; the tables below were measured before that.)* CSE is a standard pass, so the straight-line shapes in Q1 and Q3 are exercised by all three entry points; LICM (Q2) is aggressive-only and is not.
 
 ## The common thread
 

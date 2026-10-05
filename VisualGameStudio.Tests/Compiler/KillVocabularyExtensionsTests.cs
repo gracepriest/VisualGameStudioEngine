@@ -520,7 +520,8 @@ internal static class KillVocabularyExtensionsProbes
     internal const string B1rExpected = "seed\nseed\n13,3,11";
 
     /// <summary>MyBase.Bump() as a plain Sub (statement call, no result read) — the shape whose C#
-    /// leg drops the call entirely (task #139, unrelated to ADR-0006 D1).</summary>
+    /// leg DROPPED the call entirely until task #139 (unrelated to ADR-0006 D1; fixed — C# now
+    /// writes `base.Bump();` and agrees with the other three backends).</summary>
     internal const string B1 = """
         Function Seed(v As Integer) As Integer
             Console.WriteLine("seed")
@@ -556,7 +557,6 @@ internal static class KillVocabularyExtensionsProbes
         """;
 
     internal const string B1Expected = "seed\nseed\n13,3";
-    internal const string B1CSharpKnownWrong = "seed\nseed\n3,3";
 
     /// <summary>MyBase.SetIt(p) passes p BY REFERENCE — IRBaseMethodCall's variable-argument arm.</summary>
     internal const string B2 = """
@@ -876,8 +876,8 @@ internal static class KillVocabularyExtensionsProbes
     internal const string InlineExpected = "seed\nseed\n102,3";
 
     /// <summary>B1L — LICM's own IRBaseMethodCall probe: MyBase.Bump() inside a loop must block
-    /// hoisting K * 2. C#'s statement-call drop (task #139) applies here too, wrong FOR THAT
-    /// reason, independent of LICM.</summary>
+    /// hoisting K * 2. (Until task #139 C# dropped the statement-level call and printed a wrong
+    /// answer FOR THAT reason, independent of LICM; fixed — all four backends print vbc's.)</summary>
     internal const string B1L = """
         Function Seed(v As Integer) As Integer
             Console.WriteLine("seed")
@@ -913,7 +913,6 @@ internal static class KillVocabularyExtensionsProbes
         """;
 
     internal const string B1LExpected = "seed\n12";
-    internal const string B1LCSharpKnownWrong = "seed\n6";
 
     /// <summary>W1L — LICM's own Select-Case-With-When probe: the When guard's call (Bump, which
     /// bumps K) inside a loop must block hoisting K * 2.</summary>
@@ -974,45 +973,30 @@ public class KillVocabularyExtensionsExecutionTests
     public void B1r_AggressivePipeline_AllFourBackendsAgree()
         => FourBackends.RunsOnEveryBackendAggressive(KillVocabularyExtensionsProbes.B1r, KillVocabularyExtensionsProbes.B1rExpected);
 
-    // ---- B1: IRBaseMethodCall (Sub) — C++/JS/MSIL correct; C# is task #139, UNRELATED to D1 -------
+    // ---- B1: IRBaseMethodCall (Sub), all four backends. C# dropped the statement-level call until
+    //      task #139 (unrelated to D1) and printed `seed|seed|3,3`; it now writes `base.Bump();` and
+    //      prints vbc's `13,3` like C++, JavaScript and MSIL. B1 has no loop, so the in-process C# leg
+    //      of RunsOnEveryBackend is safe here (B1L's, which has one, runs through CSharpProcessRunner).
 
     [Test]
-    public void B1_StandardPipeline_CppJsMsilCorrect_CSharpTask139()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(KillVocabularyExtensionsProbes.B1))),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "C++");
-            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "JavaScript");
-            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "MSIL");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1CSharpKnownWrong),
-                "C# — task #139 (the backend DROPS a statement-level MyBase call entirely), "
-                + "UNRELATED to ADR-0006 D1; if this changed, re-measure before touching it.");
-        });
+    public void B1_StandardPipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackend(KillVocabularyExtensionsProbes.B1, KillVocabularyExtensionsProbes.B1Expected);
 
     [Test]
-    public void B1_AggressivePipeline_CppJsMsilCorrect_CSharpTask139()
-        => Assert.Multiple(() =>
-        {
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(KillVocabularyExtensionsProbes.B1))),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "C++");
-            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "JavaScript");
-            Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1Expected), "MSIL");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(KillVocabularyExtensionsProbes.B1)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1CSharpKnownWrong), "C# — task #139, same as standard pipeline");
-        });
+    public void B1_AggressivePipeline_AllFourBackendsAgree()
+        => FourBackends.RunsOnEveryBackendAggressive(KillVocabularyExtensionsProbes.B1, KillVocabularyExtensionsProbes.B1Expected);
 
     // ---- B2: IRBaseMethodCall's variable-argument (ByRef) arm. C++ ONLY, per the fixture brief's
     //      own scope: JavaScript structurally refuses ByRef (BL7002); MSIL fails for an UNRELATED,
     //      pre-existing gap — a virtual MyBase call to an inherited method RUN-FAILS with
     //      "Method not found: Void BaseBox.SetIt(Int32)" (MEASURED, matrix-final.txt), nothing to
-    //      do with the kill vocabulary; C# is task #139 (the SAME statement-call drop B1/B1L pin),
-    //      also unrelated to D1. None of the three is asserted — matching this suite's convention
-    //      of never asserting "wrong" against a leg for a reason this family does not cover.
+    //      do with the kill vocabulary. C# is a KNOWN GAP named for #265, pinned below: since #139
+    //      the statement-level call IS written (it used to be DROPPED, and the program printed the
+    //      unchanged `3,3`), but IRBaseMethodCall carries no ByRef flags, so the call is written
+    //      `base.SetIt(p);` with no `ref` and Roslyn refuses it with CS1620. A refusal, not a wrong
+    //      answer, and not the kill vocabulary's. JavaScript and MSIL are not asserted — matching
+    //      this suite's convention of never asserting "wrong" against a leg for a reason this
+    //      family does not cover.
 
     [Test]
     public void B2_Cpp_StandardAndAggressivePipeline()
@@ -1021,6 +1005,27 @@ public class KillVocabularyExtensionsExecutionTests
             Is.EqualTo(KillVocabularyExtensionsProbes.B2Expected), "standard pipeline");
         Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(KillVocabularyExtensionsProbes.B2))),
             Is.EqualTo(KillVocabularyExtensionsProbes.B2Expected), "aggressive pipeline");
+    }
+
+    /// <summary>
+    /// ⛔ KNOWN GAP, task #265 (the ByRef / Optional / parameter-type facts a base call does not carry): C# refuses B2 with CS1620 — no `ref` on `base.SetIt(p)` — through the standard
+    /// and the aggressive pipeline. Task #139 wrote the call; before it C# DROPPED it and printed `seed|seed|3,3` where vbc prints `seed|seed|102,3`. Pinned so it flips when #265 lands:
+    /// a different diagnostic set, including none, means #265 moved — update this pin, do not delete it. (Compiled, never run: nothing here executes.)
+    /// </summary>
+    [Test]
+    public void B2_CSharp_RefusesWithCS1620_KnownGap_Task265()
+    {
+        foreach (var (label, csharp) in new[]
+        {
+            ("standard", ReturnCoercionTests.EmitCSharpForTest(KillVocabularyExtensionsProbes.B2)),
+            ("aggressive", ReturnCoercionTests.EmitCSharpAggressiveForTest(KillVocabularyExtensionsProbes.B2)),
+        })
+        {
+            Assert.That(csharp, Does.Contain("base.SetIt(p);"), $"{label}: the call is written (task #139), without `ref`");
+            var errors = MyBaseMethodCallStatementShapeTests.RoslynErrors(csharp);
+            Assert.That(errors, Has.Length.EqualTo(1), $"{label}: {string.Join(" | ", errors)}");
+            Assert.That(errors[0], Does.Contain("error CS1620"), $"{label}: #265 moved? {errors[0]}");
+        }
     }
 
     [Test]
@@ -1206,22 +1211,23 @@ public class KillVocabularyExtensionsExecutionTests
 [NonParallelizable] // the C# leg redirects Console.Out
 public class KillVocabularyExtensionsAggressiveLoopExecutionTests
 {
-    /// <summary>B1L — IRBaseMethodCall inside a loop blocks LICM's hoist. C++/JavaScript/MSIL
-    /// correct; C# is task #139 (the SAME statement-call drop B1 pins), unrelated to LICM.</summary>
+    /// <summary>B1L — IRBaseMethodCall inside a loop blocks LICM's hoist. All four backends print
+    /// vbc's `seed|12`. (C# dropped the statement-level MyBase.Bump() call until task #139 and
+    /// printed `seed|6`, unrelated to LICM.) B1L holds a For loop, so the C# leg runs in a child
+    /// process with a time limit (<see cref="CSharpProcessRunner"/>, #256), never in the test host,
+    /// and runs BEFORE the MSIL leg, which ends the block as Ignored on a machine without ilasm.</summary>
     [Test]
-    public void B1L_CppJsMsilCorrect_CSharpTask139()
+    public void B1L_AllFourBackendsAgree()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(KillVocabularyExtensionsProbes.B1L))),
                 Is.EqualTo(KillVocabularyExtensionsProbes.B1LExpected), "C++");
             Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(KillVocabularyExtensionsProbes.B1L)),
                 Is.EqualTo(KillVocabularyExtensionsProbes.B1LExpected), "JavaScript");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(KillVocabularyExtensionsProbes.B1L))),
+                Is.EqualTo(KillVocabularyExtensionsProbes.B1LExpected), "C#");
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(KillVocabularyExtensionsProbes.B1L)),
                 Is.EqualTo(KillVocabularyExtensionsProbes.B1LExpected), "MSIL");
-            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpAggressive(KillVocabularyExtensionsProbes.B1L)),
-                Is.EqualTo(KillVocabularyExtensionsProbes.B1LCSharpKnownWrong),
-                "C# — task #139 (the backend drops the statement-level MyBase.Bump() call "
-                + "entirely), the SAME defect B1 pins, UNRELATED to LICM or ADR-0006 D1.");
         });
 
     /// <summary>W1L — a Select Case When guard's call inside a loop blocks LICM's hoist. C++

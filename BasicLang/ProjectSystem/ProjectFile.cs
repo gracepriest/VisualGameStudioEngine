@@ -141,6 +141,25 @@ namespace BasicLang.Compiler.ProjectSystem
         // Build configurations
         public Dictionary<string, BuildConfiguration> Configurations { get; set; } = new Dictionary<string, BuildConfiguration>();
 
+        /// <summary>
+        /// Does a build in <paramref name="configuration"/> optimize? The ONE answer for this project
+        /// model: the CLI's managed build route (C#, JavaScript, MSIL) and <c>CppProjectBuilder</c> (the
+        /// native route, which the CLI build, the IDE's C++ build and IntelliSense all reach) ask this,
+        /// and a yes means the AGGRESSIVE IR pipeline (<c>CompilerOptions.OptimizeAggressive</c>) —
+        /// and, natively, <c>-O2</c>/<c>/O2</c> too. Release says yes, Debug says no.
+        ///
+        /// <para>⛔ Keep it one rule. The native route used to build its <c>CompilerOptions</c> without
+        /// asking (task #134), so a C++ Release <c>.blproj</c> ran the STANDARD pipeline while every
+        /// other backend's ran the aggressive one, and an aggressive-only defect could not be seen
+        /// through a C++ project at all.</para>
+        ///
+        /// <para>A configuration this project does not declare does not optimize; the lookup is the
+        /// dictionary's own (case-sensitive). The project-wide <see cref="OptimizationsEnabled"/> is
+        /// not consulted — only the named configuration decides.</para>
+        /// </summary>
+        public bool OptimizationsEnabledFor(string configuration)
+            => Configurations.TryGetValue(configuration, out var config) && config.OptimizationsEnabled;
+
         public ProjectFile()
         {
             // Add default configurations

@@ -1,7 +1,7 @@
 # BRIEF: User code behind a classified IR kind — a property used by its bare name
 
 Date: 2026-09-24; HEAD `96cd93f` plus the uncommitted ADR-0006 D1 patches (the state this question is about).
-Every table was compiled AND run on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134); CSE is a standard pass, so all three entry points exercise it here.
+Every table was compiled AND run on 4 backends × 3 entry points: CLI, CLI `--optimize`, Release `.blproj`. Each table gives one verdict per backend because the three entry points agreed in every cell. ⚠ A C++ Release `.blproj` runs the STANDARD pipeline (task #134). *(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline; the tables below were measured before that.)* CSE is a standard pass, so all three entry points exercise it here.
 
 ## The question
 
@@ -64,7 +64,7 @@ For the verifier: under A, V and S′ see the calls with no new mechanism; under
 
 Related, not part of this question:
 - CopyPropagation keeps its own kill rules with no call arm: `K = 5 : Inc() : K + 1` prints 6 where 16 is right, on all four backends (task #146). It is being fixed under the existing one-vocabulary rule.
-- C# drops a statement-level `MyBase.M()` (task #139).
+- C# drops a statement-level `MyBase.M()` (task #139). *(Fixed 2026-10-04.)*
 
 ---
 *Corrections by the orchestrator after review (2026-09-24), each re-measured:*

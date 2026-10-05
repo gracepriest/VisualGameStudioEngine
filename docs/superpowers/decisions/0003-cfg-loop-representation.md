@@ -168,7 +168,7 @@ superseded it and on what terms.
       4 backends × 3 entry points: 8 cells wrong→right, 0 right→wrong; a truly invariant
       product (L6) still hoists. A lambda-captured local (probe L5) stays wrong pending a
       capture set (task #122), and a C++ Release `.blproj` runs the STANDARD pipeline, so it
-      never ran LICM at all (task #134).
+      never ran LICM at all (task #134). *(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline.)*
     - (b) `CfgLoopShapesAggressiveTests` (13 shapes, four backends) passes with LICM on; master's
       own run tests cover JavaScript, C++ and C#, not MSIL.
 - **D4 (delete `IsReducible`) — reversed.** Restored, with master's orientation fix, because

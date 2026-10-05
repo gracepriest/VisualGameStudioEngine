@@ -1505,12 +1505,15 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void MyBaseCallIntoAnObjectParameter_Msil_PinsPreExistingMissingMethod_Against213()
     {
-        // ⚠ C# is NOT usable as the oracle here — measured while writing this probe: the C#
-        // backend drops a `MyBase.Method(args)` call to a non-constructor method ENTIRELY
-        // (Derived's method body comes out empty), for ANY parameter type, not only Object. That
-        // is task #139 (C# drops a statement-level `MyBase.M()` call), not #213.
+        // ⭐ C# IS a usable oracle here since task #139. Until then it was not — measured while
+        // writing this probe: the C# backend dropped a `MyBase.Method(args)` call to a
+        // non-constructor method ENTIRELY (Derived's method body came out empty), for ANY
+        // parameter type, not only Object. #139 fixed that: C# now writes `base.Show(5);` and
+        // prints vbc's `5` (asserted, with JavaScript's, by MyBaseMethodCallStatementExecutionTests
+        // row `p2_object`). C++ refuses the program (`'Object' has no C++ mapping`). This test
+        // stays an MSIL-only pin on #213.
         //
-        // MSIL, unlike C#, does NOT drop the call — it emits one, but names the wrong signature:
+        // MSIL does NOT drop the call — it emits one, but names the wrong signature:
         // `call instance void 'Base'::'Show'(int32)` where `Show` is declared `(object 'o')`,
         // because the boxing coercion this fix adds does not reach a MyBase method-call's
         // arguments (a call site distinct from the ordinary user-procedure/method/constructor/

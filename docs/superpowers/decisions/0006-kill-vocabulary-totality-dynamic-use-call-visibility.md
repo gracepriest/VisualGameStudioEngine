@@ -216,6 +216,10 @@ completeness-checked.
   all: a copy fact for a field survives a call that writes the field,
   MEASURED wrong on all four backends including C#, out of this ADR's
   scope.
+- *Update 2026-10-04: task #139 is fixed — C# writes a statement-level
+  `MyBase.M(...)` call, and B1 and B1L print vbc's answer on all four
+  backends. B2 on C# is now a CS1620 refusal (no `ref` on the call), the
+  known gap #265. The text above is left as it was written.*
 - `IRVerifier.CheckInvariantV`'s "reachable" is implemented as EVERY
   instruction of every block a function's `Blocks` collection holds — a
   SUPERSET of what a pass can actually reach at runtime (it does not
@@ -316,6 +320,7 @@ definition in a preheader and a Guard-name write placed after the in-loop
 use fails the verifier. Because a C++ Release `.blproj` runs the standard
 pipeline (#134), these probes are exercised only through CLI `--optimize`;
 the verifier must run after the aggressive pipeline in test builds.
+*(Fixed by #134, 2026-10-05: a C++ Release `.blproj` now runs the aggressive pipeline.)*
 
 NOTE (clarifying, not a ruling change): L5 (a lambda-captured local
 written in the loop) prints 6 on C++ at EVERY entry point, including the
