@@ -3485,6 +3485,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return false;
             }
 
+            // #139: `MyBase.M(args)` is a call too, and gets the IRCall rule. It used to fall to
+            // the IRValue arm below, which emits a value only when it is a named destination, so
+            // a statement-level base call — a void one, or a Function whose result is discarded —
+            // was never written: measured, `MyBase.Show(n + 1)` left the override's body without
+            // the call on C# while C++, JavaScript and MSIL ran it.
+            if (instruction is IRBaseMethodCall baseCall)
+            {
+                var hasReturn = baseCall.Type != null && !baseCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
+
+                if (IsNamedDestination(baseCall))
+                    return true;
+
+                // Void, or the result is unused: a statement, for its side effects.
+                if (!hasReturn || GetUseCount(baseCall) == 0)
+                    return true;
+
+                // A used result is inlined at its one use (more than one use is ADR-0001's
+                // materialised local, answered first above).
+                return false;
+            }
+
             if (instruction is IRValue v)
             {
                 // Only emit expression-producing values when they represent an assignment
@@ -4946,20 +4967,27 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// skipped by the body walk — reaching it here writes nothing.</summary>
         public void Visit(IRBaseConstructorCall baseConstructorCall) { }
 
+        /// <summary>
+        /// The statement forms of <c>MyBase.M(args)</c>, as <see cref="Visit(IRCall)"/> writes a
+        /// call's: an assignment for a named destination, a bare call when the method is void or
+        /// its result is unused (#139). A used result never reaches here
+        /// (<see cref="ShouldEmitInstruction"/>); <see cref="EmitExpression(IRValue)"/> inlines it.
+        ///
+        /// <para>⛔ Not <c>T tN = base.M(...);</c>, which is what this wrote before #139 made it
+        /// reachable: a declaration is a redeclaration (CS0128) when the destination is a declared
+        /// variable, and an unused temp has no reason to be declared at all.</para>
+        /// </summary>
         public void Visit(IRBaseMethodCall baseCall)
         {
             var methodName = SanitizeName(baseCall.MethodName);
             var args = string.Join(", ", baseCall.Arguments.Select(EmitExpression));
+            var invocation = $"base.{methodName}({args})";
+            var hasReturn = baseCall.Type != null && !baseCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
-            if (baseCall.Type == null || baseCall.Type.Name == "Void")
-            {
-                WriteLine($"base.{methodName}({args});");
-            }
-            else
-            {
-                var resultType = MapType(baseCall.Type);
-                WriteLine($"{resultType} {baseCall.Name} = base.{methodName}({args});");
-            }
+            if (hasReturn && IsNamedDestination(baseCall))
+                WriteLine($"{GetValueName(baseCall)} = {invocation};");
+            else if (!hasReturn || GetUseCount(baseCall) == 0)
+                WriteLine($"{invocation};");
         }
 
         public void Visit(IRFieldAccess fieldAccess)

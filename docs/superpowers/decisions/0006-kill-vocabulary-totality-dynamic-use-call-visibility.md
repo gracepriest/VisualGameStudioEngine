@@ -216,6 +216,10 @@ completeness-checked.
   all: a copy fact for a field survives a call that writes the field,
   MEASURED wrong on all four backends including C#, out of this ADR's
   scope.
+- *Update 2026-10-04: task #139 is fixed — C# writes a statement-level
+  `MyBase.M(...)` call, and B1 and B1L print vbc's answer on all four
+  backends. B2 on C# is now a CS1620 refusal (no `ref` on the call), the
+  known gap #265. The text above is left as it was written.*
 - `IRVerifier.CheckInvariantV`'s "reachable" is implemented as EVERY
   instruction of every block a function's `Blocks` collection holds — a
   SUPERSET of what a pass can actually reach at runtime (it does not
