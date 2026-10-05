@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🔑 NEWEST — 2026-10-05: #182 TESTED, the C# backend escapes every reserved keyword used as a name (`@out`, `@lock`, `@checked`; fix `41031ecb`, C# only)
+- **Tests (11):** `CSharpKeywordIdentifierExecutionTests` (Integration, 9: probes K01-K14 vs vbc through the CLI, `--optimize`, `CompileProjectFiles`; K08 two-file through `build` + `CompileProjectFiles`; C# only, so in `JsExecutionTierRosterTests.NotJavaScriptExecution`, NOT the roster) + `CSharpKeywordIdentifierShapeTests` (fast, 2: Roslyn compiles every probe's C#; every Roslyn-reserved keyword BasicLang accepts as a local / class name is escaped). Mutants M1-M4 each killed by name (fixture header).
+- **Gates (Linux):** fast subset 12,646 passed / 0 failed / 94 skipped; Integration, each filter alone: `CSharpKeywordIdentifier` 11, `CSharp` 1,277, `JsExecutionTierRosterTests` 5, `NameReservation` 443, `NameBinding` 314, `LambdaBody` 336 - all 0 failed; the full suite was NOT run.
+- ⛔ **Gaps, NO test pins them:** C++ / JavaScript / MSIL have their own keyword manglers and fail the same way (#276: C++ `this`, `int`, `void`, `delete`; JS `this`, `var`; MSIL K06 NRE and a generic `params`); front end (#277): an Enum member to a typed local types as Object, a lowercase Enum name, generic ctor args / member return types not substituted, and `Class Decimal` / `Class SByte` binds the built-in.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #184 DONE, a Char widens to a String the VB way on every backend (fix `54d49c67`)
 - **Fixed:** `Dim s As String = c`, `= Chr(65)`, `Return c`, a Char argument, `For Each s As String In "ab"`, a field / module variable / Const / Optional default / array literal and `Case "a"c` were refused or broke the backends. `TypeInfo.IsCharToStringWidening` is the one table; `IRBuilder.WidenCharToString` re-types a literal, else `CStr`. String to Char, a Char into a ByRef String, a Char `Set(value)` and `Is` on a Char stay refused, as in vbc.
 - **Tests (13, + 1 moved):** `CharWidensToStringExecutionTests` (Integration, 7: 5 groups of 19 vbc-answered probes on C#/C++/MSIL + a JS group of the 7 with no Char local, each x CLI / `-O` / `CompileProjectFiles`, a table pin; roster now 114) and `CharWidensToStringCompileTests` (fast, 6: the four refusals, JS BL7004, the `CStr` IR shape). `ForEachOverStringTests.ExplicitString_IsRefused_PerTask184` MOVED to `ExplicitString_IsAccepted_AndPrintsVbcsAnswer`. Mutants m1-m3 killed.

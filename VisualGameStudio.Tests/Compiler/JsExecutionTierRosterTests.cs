@@ -567,6 +567,8 @@ public class JsExecutionTierRosterTests
         // Builds and runs the C# backend's output through the CLI and dotnet — no Node.
         "CSharpFieldAssignmentExecutionTests",
         "CSharpInlinedOperandExecutionTests",
+        // Task #182: a reserved C# keyword used as a name (`@out`, `@lock`) — C# only, so it runs the emitted C# through CSharpProcessRunner and never Node.
+        "CSharpKeywordIdentifierExecutionTests",
         // Runs user operators on C# and C++ only — JavaScript refuses them (BL7006), which
         // UserOperatorTests asserts without spawning Node.
         "UserOperatorExecutionTests",
