@@ -139,11 +139,35 @@ namespace BasicLang.Compiler.StdLib
         private static string Arg(string[] args, int index) =>
             args != null && index < args.Length ? args[index] : "undefined";
 
+        /// <summary>
+        /// The members of .NET's <c>System.Math</c> reachable QUALIFIED — <c>Math.Max(a, b)</c> — each the same lowering as
+        /// its bare VB spelling above (Round is banker's rounding, as .NET's is). ⛔ Portable-controls Task 14: only the
+        /// bare names mapped, so <c>Math.Max</c> was "no lowering" on every JavaScript build, with or without a
+        /// <c>Using System</c> (measured), and the library needs Max/Min/Abs/Floor/Ceiling/Round/Sqrt/Pow.
+        /// </summary>
+        private static readonly HashSet<string> QualifiedMathMembers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Max", "Min", "Abs", "Floor", "Ceiling", "Round", "Sqrt", "Pow", "Sin", "Cos", "Tan", "Exp", "Log"
+        };
+
+        /// <summary><c>Math.X</c> / <c>System.Math.X</c> → <c>X</c> when X is one of <see cref="QualifiedMathMembers"/>.</summary>
+        private static string Normalize(string functionName)
+        {
+            if (string.IsNullOrEmpty(functionName)) return functionName;
+            foreach (var prefix in new[] { "System.Math.", "Math." })
+            {
+                if (functionName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    && QualifiedMathMembers.Contains(functionName.Substring(prefix.Length)))
+                    return functionName.Substring(prefix.Length);
+            }
+            return functionName;
+        }
+
         public bool CanHandle(string functionName) =>
-            !string.IsNullOrEmpty(functionName) && _emitters.ContainsKey(functionName);
+            !string.IsNullOrEmpty(functionName) && _emitters.ContainsKey(Normalize(functionName));
 
         public string EmitCall(string functionName, string[] arguments) =>
-            functionName != null && _emitters.TryGetValue(functionName, out var emit)
+            functionName != null && _emitters.TryGetValue(Normalize(functionName), out var emit)
                 ? emit(arguments ?? Array.Empty<string>())
                 : null;
 

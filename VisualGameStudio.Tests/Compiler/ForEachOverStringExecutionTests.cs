@@ -174,32 +174,27 @@ public class ForEachOverStringExecutionTests
             "3");
 
     /// <summary>
-    /// The BL7004 refusal text, pinned ONCE for each of its two shapes so a future JavaScript
-    /// Char change is visible here rather than only in a probe matrix. S1's shape (a DECLARED Char
-    /// local) and S5's shape (a bare Char LITERAL, which reaches the generator with no declared
-    /// position at all — <c>JsCapabilityChecker.BannedConstantRejection</c>) are deliberately
-    /// different code paths and get different messages.
+    /// S1 and S5 on JavaScript. They were pinned as BL7004 refusals (a declared Char local; a bare
+    /// Char literal) until portable-controls Task 14 gave the backend a Char (a one-character
+    /// string): both now RUN, and print what the other backends print.
     /// </summary>
     [Test]
-    public void S1AndS5_JavaScript_KeepTheirDesignedBL7004Refusals()
+    public void S1AndS5_RunOnJavaScript()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(
-                Reject(
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(
                     "Sub Main()\n" +
                     " Dim c As Char\n" +
                     " For Each c In \"xyz\"\n" +
                     "  Console.Write(c)\n" +
                     " Next\n" +
-                    "End Sub"),
-                Is.EqualTo(
-                    "BL7004: 'Char' cannot be lowered to JavaScript — JavaScript has no character " +
-                    "type. Use String. (found as local variable 'c' in Sub 'Main'.)"),
-                "S1 (a declared Char local)");
+                    " Console.WriteLine()\n" +
+                    " Console.WriteLine(c)\n" +
+                    "End Sub")),
+                Is.EqualTo("xyz\nz"), "S1 (a declared Char local)");
 
-            Assert.That(
-                Reject(
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(
                     "Function CountA(s As String) As Integer\n" +
                     " Dim n As Integer = 0\n" +
                     " For Each ch In s\n" +
@@ -209,20 +204,9 @@ public class ForEachOverStringExecutionTests
                     "End Function\n" +
                     "Sub Main()\n" +
                     " Console.WriteLine(CountA(\"banana\"))\n" +
-                    "End Sub"),
-                Is.EqualTo(
-                    "BL7004: the literal 'a' is a Char, which cannot be lowered to JavaScript — " +
-                    "JavaScript has no character type. Use String."),
-                "S5 (a bare Char literal)");
+                    "End Sub")),
+                Is.EqualTo("3"), "S5 (a bare Char literal)");
         });
-    }
-
-    private static string Reject(string source)
-    {
-        var module = JsTestSupport.BuildModule(source);
-        var ex = Assert.Throws<ForeignFeatureException>(
-            () => new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator().Generate(module));
-        return ex!.Message;
     }
 
     /// <summary>S7 — a String FUNCTION RESULT concatenated back together, on all four backends.

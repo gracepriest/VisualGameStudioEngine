@@ -210,6 +210,24 @@ public class RuntimeGapsTask7eTests
         End Module
         """, "threw\nthrew");
 
+    /// <summary>
+    /// VB's Chars is a CHAR (portable-controls Task 14): <c>Dim c As Char = s(1)</c> was refused as a String → Char
+    /// narrowing, because Chars was typed String while JavaScript had no Char.
+    /// </summary>
+    [Test]
+    public void IndexingAString_IsAChar() => RunsOnCsJsCpp("""
+        Module Program
+            Sub Main()
+                Dim s As String = "abc"
+                Dim c As Char = s(1)
+                Console.WriteLine(c)
+                Console.WriteLine(AscW(s(2)))
+                If s(0) = "a"c Then Console.WriteLine("first a")
+                Console.WriteLine(s(0) & s(2))
+            End Sub
+        End Module
+        """, "b\n99\nfirst a\nac");
+
     /// <summary>⛔ C++ emitted bare <c>Beep()</c> / <c>FileCopy(…)</c> / <c>FileLen(…)</c> calls to names nothing defines — a late
     /// native-compile failure. Run on C++ and C# (JavaScript has no file system: those are refused there by design).</summary>
     [Test]

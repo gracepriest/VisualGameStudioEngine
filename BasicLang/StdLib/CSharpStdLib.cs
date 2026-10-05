@@ -62,11 +62,16 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["Join"] = new StdLibFunction { Name = "Join", Category = StdLibCategory.String, ParameterTypes = new[] { "String[]", "String" }, ReturnType = "String" },
             ["Chr"] = new StdLibFunction { Name = "Chr", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "String" },
             ["Asc"] = new StdLibFunction { Name = "Asc", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
+            // Task 14 (O13): the Unicode pair. VB's ChrW returns a CHAR (Chr stays String here — recorded); AscW
+            // takes a Char or a String (its first character).
+            ["AscW"] = new StdLibFunction { Name = "AscW", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
+            ["ChrW"] = new StdLibFunction { Name = "ChrW", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "Char" },
             // VB's Val/Str (Task 7d review): the call was emitted as a bare `Val(x)` nothing defines.
             ["Val"] = new StdLibFunction { Name = "Val", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Double" },
             ["Str"] = new StdLibFunction { Name = "Str", Category = StdLibCategory.String, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
-            // Task 7e: VB's String default property (`s(i)` = s.Chars(i)) — IRBuilder.StringCharsIntrinsic.
-            ["Chars"] = new StdLibFunction { Name = "Chars", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "Integer" }, ReturnType = "String" },
+            // Task 7e: VB's String default property (`s(i)` = s.Chars(i)) — IRBuilder.StringCharsIntrinsic. A CHAR since
+            // Task 14 gave JavaScript a Char (`Dim c As Char = s(1)` was a String → Char narrowing before).
+            ["Chars"] = new StdLibFunction { Name = "Chars", Category = StdLibCategory.String, ParameterTypes = new[] { "String", "Integer" }, ReturnType = "Char" },
 
             // Math
             ["Abs"] = new StdLibFunction { Name = "Abs", Category = StdLibCategory.Math, ParameterTypes = new[] { "Double" }, ReturnType = "Double" },
@@ -350,13 +355,15 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "join" => EmitJoin(args[0], args[1]),
                 "chr" => EmitChr(args[0]),
                 "asc" => EmitAsc(args[0]),
+                "ascw" => EmitAsc(args[0]),
+                "chrw" => $"(char)({args[0]})",
                 // VB's own runtime, in the shared framework every generated project targets: Val's
                 // leading-number parse (blanks stripped, &H/&O, stops at the first invalid character)
                 // and Str's leading space for a non-negative number are its rules, not a re-implementation.
                 "val" => $"Microsoft.VisualBasic.Conversion.Val({args[0]})",
                 "str" => $"Microsoft.VisualBasic.Conversion.Str({args[0]})",
                 // C#'s indexer throws IndexOutOfRangeException past the end, exactly as VB's Chars does.
-                "chars" => $"({args[0]})[{args[1]}].ToString()",
+                "chars" => $"({args[0]})[{args[1]}]",
                 _ => null
             };
         }
@@ -390,7 +397,9 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitSplit(string str, string delimiter) => $"{str}.Split({delimiter})";
         public string EmitJoin(string array, string delimiter) => $"string.Join({delimiter}, {array})";
         public string EmitChr(string code) => $"((char){code}).ToString()";
-        public string EmitAsc(string str) => $"(int){str}[0]";
+        /// <summary>VB's Asc/AscW take a Char OR a String (its first character); `(int)'A'[0]` did not compile, so the
+        /// argument goes through ToString() first (a no-op for a String).</summary>
+        public string EmitAsc(string str) => $"(int)(({str}).ToString()[0])";
 
         #endregion
 

@@ -6,11 +6,13 @@ using BasicLang.Compiler.CodeGen.JavaScript;
 namespace VisualGameStudio.Tests.Compiler;
 
 /// <summary>
-/// Plan tasks 8-9 — BL7003 (<c>Long</c>) and BL7004 (<c>Char</c>).
+/// Plan tasks 8-9 — BL7003 (<c>Long</c>), and what was BL7004 (<c>Char</c>).
 ///
 /// <para><b>Long</b> is out because a JS number is a double: it loses integer precision
 /// past 2^53, and BigInt — the only exact alternative — contaminates every arithmetic
-/// expression it touches. <b>Char</b> is out because JS has no character type at all.</para>
+/// expression it touches. <b>Char</b> is IN since portable-controls Task 14 (O13): a
+/// one-character string. BL7004 is retired, never reused; the Char cases below now assert that
+/// every position LOWERS (<see cref="JavaScriptCharTests"/> runs the values against C#).</para>
 ///
 /// <para><b>These fixtures are position-driven, not feature-driven.</b> Rejecting a banned
 /// type in the obvious place (a local) is easy; the bug is a banned type sitting in a
@@ -71,51 +73,43 @@ public class JsBannedTypeTests
             Does.Contain("BL7003"));
     }
 
-    // ---------------------------------------------------------------- BL7004 Char
+    // ---------------------------------------------------------------- Char (BL7004 retired)
 
     [TestCase("Sub Main()\nDim c As Char\nEnd Sub", TestName = "Char_AsLocal")]
     [TestCase("Sub F(c As Char)\nEnd Sub\nSub Main()\nEnd Sub", TestName = "Char_AsParameter")]
     [TestCase("Function F() As Char\nEnd Function\nSub Main()\nEnd Sub", TestName = "Char_AsReturnType")]
     [TestCase("Class C\nPublic V As Char\nEnd Class\nSub Main()\nEnd Sub", TestName = "Char_AsClassField")]
     [TestCase("Sub Main()\nDim a() As Char\nEnd Sub", TestName = "Char_AsArrayElementType")]
-    public void Char_IsRejected(string source)
-    {
-        var message = Reject(source);
-        Assert.That(message, Does.Contain("BL7004"));
-        Assert.That(message, Does.Contain("String"), "must point the user at String");
-    }
+    [TestCase("Sub Main()\nDim c As System.Char\nEnd Sub", TestName = "SystemChar_Spelling")]
+    public void Char_Lowers_InEveryDeclaredPosition(string source) => SupportedTypes_AreNotRejected(source);
 
     /// <summary>
-    /// The .NET spellings resolve to the same 64-bit / character types and must be refused
-    /// identically. A position-complete checker that only knows the BasicLang spelling is
-    /// still wrong: <c>Using System</c> makes <c>Int64</c> and <c>System.Char</c> ordinary
-    /// declarations in fully-walked positions.
+    /// The .NET spellings resolve to the same 64-bit types and must be refused identically. A
+    /// position-complete checker that only knows the BasicLang spelling is still wrong:
+    /// <c>Using System</c> makes <c>Int64</c> an ordinary declaration in fully-walked positions.
+    /// (<c>System.Char</c> lowers since Task 14 — see <see cref="Char_Lowers_InEveryDeclaredPosition"/>.)
     /// </summary>
     [TestCase("Sub Main()\nDim a As Int64\nEnd Sub", "BL7003", TestName = "Int64_Spelling")]
     [TestCase("Sub Main()\nDim a As System.Int64\nEnd Sub", "BL7003", TestName = "SystemInt64_Spelling")]
     [TestCase("Sub Main()\nDim a As ULong\nEnd Sub", "BL7003", TestName = "ULong_SameDefect")]
     [TestCase("Sub Main()\nDim a As UInt64\nEnd Sub", "BL7003", TestName = "UInt64_Spelling")]
-    [TestCase("Sub Main()\nDim c As System.Char\nEnd Sub", "BL7004", TestName = "SystemChar_Spelling")]
     public void DotNetSpellingsOfBannedTypes_AreAlsoRejected(string source, string code)
     {
         Assert.That(Reject(source), Does.Contain(code));
     }
 
     /// <summary>
-    /// A banned type can reach the output carrying NO declared position at all, as a bare
-    /// literal operand. <c>IRConstant</c> is never an entry in <c>block.Instructions</c> —
-    /// every construction site assigns it to the expression result — so the declared-position
-    /// walk is structurally blind to it.
-    ///
-    /// <para>Measured before this guard existed: <c>Console.WriteLine("a"c)</c> compiled clean
-    /// and emitted <c>console.log(a);</c> — a bare undeclared JavaScript identifier, i.e. a
-    /// ReferenceError in the browser from a build that reported success. That is exactly the
-    /// silent-wrong-output class this backend exists to refuse.</para>
+    /// A Char can reach the output carrying NO declared position at all, as a bare literal
+    /// operand (<c>IRConstant</c> is never in <c>block.Instructions</c>). Before any guard,
+    /// <c>Console.WriteLine("a"c)</c> emitted <c>console.log(a);</c> — a bare undeclared identifier,
+    /// a ReferenceError from a green build; then BL7004 refused it. Since Task 14 the literal is a
+    /// one-character JavaScript STRING literal.
     /// </summary>
     [Test]
-    public void CharLiteral_IsRejected_EvenWithNoDeclaredPosition()
+    public void CharLiteral_IsAOneCharacterStringLiteral()
     {
-        Assert.That(Reject("Sub Main()\nConsole.WriteLine(\"a\"c)\nEnd Sub"), Does.Contain("BL7004"));
+        var js = new JavaScriptCodeGenerator().Generate(JsTestSupport.BuildModule("Sub Main()\nConsole.WriteLine(\"a\"c)\nEnd Sub"));
+        Assert.That(js, Does.Contain("console.log(\"a\")"));
     }
 
     /// <summary>
@@ -125,7 +119,6 @@ public class JsBannedTypeTests
     /// so the shared walker explicitly skips it.
     /// </summary>
     [TestCase("Long", "BL7003", TestName = "Event_AsLong")]
-    [TestCase("Char", "BL7004", TestName = "Event_AsChar")]
     [TestCase("Stream", "BL7007", TestName = "Event_AsBclType")]
     public void Event_CarryingABannedType_IsRejected(string type, string code)
     {

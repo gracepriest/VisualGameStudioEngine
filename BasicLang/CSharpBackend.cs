@@ -5486,6 +5486,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </summary>
         private static string ConcatOperand(IRBinaryOp bin, IRValue operand, string rendered)
         {
+            // VB's `&` of a CHAR is text: C#'s char + char is an int addition (`s(0) & s(2)` printed 196 — Task 14, once
+            // Chars typed Char), so a Char operand is spelled as its string.
+            if (bin.Operation == BinaryOpKind.Concat
+                && string.Equals(operand?.Type?.Name, "Char", StringComparison.OrdinalIgnoreCase))
+                return $"({rendered}).ToString()";
             if (bin.Operation != BinaryOpKind.Concat || operand is not IRConstant { Value: null })
                 return rendered;
             var other = ReferenceEquals(operand, bin.Left) ? bin.Right : bin.Left;

@@ -36,6 +36,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return "false";
                 case "String":
                     return "\"\"";
+                // A Char is a one-character string (Task 14); its default is NUL, whose code point is 0 — never null,
+                // which AscW would read as a TypeError.
+                case "Char":
+                    return "\"\\0\"";
                 default:
                     return "null";
             }

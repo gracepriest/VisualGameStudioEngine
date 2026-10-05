@@ -1711,6 +1711,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("Val", SymbolKind.Function, _typeManager.GetType("Double"),
                 new[] { ("str", _typeManager.GetType("String")) });
 
+            // Portable-controls Task 14 (O13): the character functions were never registered, so `AscW(c) + 1` typed
+            // Object ("'+' requires numeric operands") and `Return ChrW(n)` from an `As Char` function returned Object.
+            // VB's shapes: Asc/AscW take a Char or a String (its first character — hence Object here) and answer the
+            // code; ChrW answers a CHAR. Chr answers a String here, as the backends' Chr lowering does (VB's is Char —
+            // recorded, not changed: it would move every existing `Chr(n) & …`).
+            RegisterStdLibFunction("Asc", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+            RegisterStdLibFunction("AscW", SymbolKind.Function, _typeManager.GetType("Integer"),
+                new[] { ("value", _typeManager.GetType("Object")) });
+            RegisterStdLibFunction("Chr", SymbolKind.Function, _typeManager.GetType("String"),
+                new[] { ("code", _typeManager.GetType("Integer")) });
+            RegisterStdLibFunction("ChrW", SymbolKind.Function, _typeManager.GetType("Char"),
+                new[] { ("code", _typeManager.GetType("Integer")) });
+
             // File I/O Functions
             RegisterStdLibFunction("FileOpen", SymbolKind.Function, _typeManager.GetType("Integer"),
                 new[] { ("filename", _typeManager.GetType("String")), ("mode", _typeManager.GetType("String")) });
@@ -2413,7 +2427,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (indexType != null && !indexType.IsIntegral())
                 Error($"A String index must be an integer, got '{indexType}'", node.Arguments[0].Line, node.Arguments[0].Column);
             _stringCharIndexes.Add(node);
-            SetNodeType(node, _typeManager.StringType);
+            // A CHAR (Task 14): JavaScript has a Char now, so VB's type stands — `Dim c As Char = s(1)` was a String → Char
+            // narrowing refused on every backend.
+            SetNodeType(node, _typeManager.GetType("Char") ?? _typeManager.StringType);
             return true;
         }
 
@@ -11430,8 +11446,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     break;
 
                 case "&":
-                    // String concatenation
-                    if (leftType.Name == "String" || rightType.Name == "String")
+                    // String concatenation. A CHAR is text too (VB: `s(0) & s(2)`; Task 14 — Chars is a Char now).
+                    if (leftType.Name == "String" || rightType.Name == "String"
+                        || leftType.Name == "Char" || rightType.Name == "Char")
                     {
                         resultType = _typeManager.StringType;
                     }
@@ -11470,6 +11487,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     else if (IsDifferentEnums(leftType, rightType))
                     {
                         Error(DifferentEnumsMessage(node.Operator, leftType, rightType), node.Line, node.Column);
+                    }
+                    // Two Chars order by code point, as in VB (`a < z`; Task 14).
+                    else if (leftType.Name == "Char" && rightType.Name == "Char")
+                    {
                     }
                     // Comparison operators - allow type parameters (generics)
                     else if (!leftType.IsNumeric() && !rightType.IsNumeric() &&

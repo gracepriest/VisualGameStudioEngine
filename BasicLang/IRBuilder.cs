@@ -6807,8 +6807,9 @@ namespace BasicLang.Compiler.IR
             var text = _expressionResult;
             node.Arguments[0].Accept(this);
             var index = _expressionResult;
+            // A CHAR since Task 14 — the analyzer's type, so the value and the IR agree.
             var chars = new IRCall(tempName ?? _currentFunction.GetNextTempName(), StringCharsIntrinsic,
-                new TypeInfo("String", TypeKind.Primitive)) { IsIntrinsic = true };
+                _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Char", TypeKind.Primitive)) { IsIntrinsic = true };
             chars.Arguments.Add(text);
             chars.Arguments.Add(index);
             chars.ByRefArguments.AddRange(new[] { false, false });
@@ -6817,7 +6818,7 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>The IR name of VB's String default property (<c>s(i)</c> = <c>s.Chars(i)</c>); every backend lowers it
-        /// (C# <c>s[i].ToString()</c>, JavaScript a checked index, C++ <c>.at(i)</c>).</summary>
+        /// (C# <c>s[i]</c>, JavaScript a checked index, C++ <c>.at(i)</c>) — a Char since Task 14.</summary>
         internal const string StringCharsIntrinsic = "Chars";
 
         /// <summary>

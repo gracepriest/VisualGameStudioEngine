@@ -1828,6 +1828,13 @@ namespace BasicLang.Compiler.IR.Optimization
             if (!TryPromoteMixedNumeric(ref a, ref b))
                 return null;
 
+            // ⛔ An ORDERING of a pair CompareLt/CompareGt cannot order is not folded at all. They answered "false" for
+            // every other pair, so `"a"c < "z"c` folded to False (portable-controls Task 14, measured on C# once Char
+            // ran on every backend) — the shape of chip task_5d27b8c8. Left at run time, the backend compares exactly.
+            if (cmp.Comparison is CompareKind.Lt or CompareKind.Le or CompareKind.Gt or CompareKind.Ge
+                && !IsOrderablePair(a, b))
+                return null;
+
             try
             {
                 bool result = cmp.Comparison switch
@@ -2043,21 +2050,28 @@ namespace BasicLang.Compiler.IR.Optimization
             return Equals(a, b);
         }
         
+        /// <summary>The pairs <see cref="CompareLt"/>/<see cref="CompareGt"/> really order; any other is not folded.</summary>
+        private static bool IsOrderablePair(object a, object b) =>
+            (a is int && b is int) || (a is long && b is long) || (a is float && b is float)
+            || (a is double && b is double) || (a is char && b is char);
+
         private bool CompareLt(object a, object b)
         {
             if (a is int ia && b is int ib) return ia < ib;
             if (a is long la && b is long lb) return la < lb;
             if (a is float fa && b is float fb) return fa < fb;
             if (a is double da && b is double db) return da < db;
+            if (a is char ca && b is char cb) return ca < cb;   // by code point, as VB orders Chars
             return false;
         }
-        
+
         private bool CompareGt(object a, object b)
         {
             if (a is int ia && b is int ib) return ia > ib;
             if (a is long la && b is long lb) return la > lb;
             if (a is float fa && b is float fb) return fa > fb;
             if (a is double da && b is double db) return da > db;
+            if (a is char ca && b is char cb) return ca > cb;
             return false;
         }
     }

@@ -2165,6 +2165,18 @@ O13, spec §4.10, M18.
   `Dim c As Char = s(1)` is REJECTED as a String → Char narrowing on every backend. Once Char exists here, type the Chars
   intrinsic as `Char` (C#: drop the `.ToString()` in the `chars` arm; JS: a one-character string IS this task's Char;
   C++: `.at()` without the `std::string(1, …)` wrap) and add the `Dim c As Char = s(1)` row to `RuntimeGapsTask7eTests`.
+- ✅ Done (Task 14 commit): Char on JS (a one-character string; default `"\0"`; BL7004 retired; `Char`/`System.Char` in
+  the capability checker's primitives); Chars typed Char on every backend (`IndexingAString_IsAChar`); `Asc`/`AscW`/`Chr`/
+  `ChrW` REGISTERED in the analyzer (they typed Object — `AscW(c) + 1` was refused) with C#/JS/C++ lowerings (C++ had
+  none); Char ordering and `&` of a Char in the analyzer; C# spells a Char `&` operand as its string (char + char was an
+  int); the qualified `Math.Max/Min/Abs/Floor/Ceiling/Round/Sqrt/Pow/Sin/Cos/Tan/Exp/Log` on JS (Round = banker's).
+  ⛔ Also an OPTIMIZER fix found here: an ordering fold of a pair `CompareLt`/`CompareGt` cannot order answered `false`
+  (`"a"c < "z"c` folded to False on C#) — such a pair is no longer folded (the shape of chip `task_5d27b8c8`).
+- ⚠ Seen in Task 14's neighbour run, PRE-EXISTING (identical at `cc6eceda`, measured in a detached worktree):
+  `PrimitiveStaticSurfaceRunTests.CSharp_Runs` (`dbl(-Infinity)` → FormatException) and `Cpp_Runs` / `Cpp_Aggressive_Runs`
+  (MSVC C2312 — a `catch (const std::runtime_error&)` caught twice). Not on the known-failure list: triage at Task 17.
+- ⚠ Recorded: `Chr` still answers a String (VB's is Char) — changing it moves every `Chr(n) & …`; `ChrW` is the Char
+  spelling. The C++ `Asc` reads the code point unsigned but only for the first byte (no UTF-8 decoding).
 
 **Files:**
 - Modify: `BasicLang/JsCapabilityChecker.cs` — `BannedTypes` (`:297-306`): remove the `["Char"] = ("BL7004", …)` row; keep BL7004 in the remarks as retired (never reuse)

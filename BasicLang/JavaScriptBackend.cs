@@ -1837,7 +1837,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // that channel, and it is not theoretical: before it existed,
                 // Console.WriteLine("a"c) emitted `console.log(a);` — a bare undeclared
                 // identifier, a ReferenceError in the browser from a green build.
-                case char: throw JsCapabilityChecker.BannedConstantRejection("Char", v);
+                // A Char is a one-character string (Task 14, O13). The character is escaped like any string literal.
+                case char ch: return "\"" + EscapeJsString(ch.ToString()) + "\"";
                 case long: throw JsCapabilityChecker.BannedConstantRejection("Long", v);
                 case ulong: throw JsCapabilityChecker.BannedConstantRejection("ULong", v);
 
@@ -2063,9 +2064,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                              + $"return s[i]; }})({args[0]}, {args[1]})";
                     return true;
 
+                // A Char is a one-character string here (Task 14), so Chr and ChrW agree, as do Asc and AscW.
                 case "chr" when args.Count == 1:
+                case "chrw" when args.Count == 1:
                     result = $"String.fromCharCode({args[0]})"; return true;
                 case "asc" when args.Count == 1:
+                case "ascw" when args.Count == 1:
                     result = $"{Recv()}.charCodeAt(0)"; return true;
 
                 default:

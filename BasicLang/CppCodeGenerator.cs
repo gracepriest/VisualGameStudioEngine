@@ -4216,7 +4216,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "val" => $"BasicLang::VbVal({args[0]})",
                 // Task 7e: VB's String default property (`s(i)` = s.Chars(i), IRBuilder.StringCharsIntrinsic);
                 // .at() throws std::out_of_range past the end, as VB's Chars throws.
-                "chars" => $"std::string(1, std::string({args[0]}).at(static_cast<size_t>({args[1]})))",
+                // A CHAR since Task 14.
+                "chars" => $"std::string({args[0]}).at(static_cast<size_t>({args[1]}))",
+                // Task 14: Asc/AscW (a Char, or a String's first character) and Chr (a String) / ChrW (a Char) — no
+                // lowering existed. The code point is read UNSIGNED (a char above 127 is negative on MSVC).
+                "asc" or "ascw" => $"([](const auto& v) {{ if constexpr (std::is_same_v<std::decay_t<decltype(v)>, char>) return static_cast<int32_t>(static_cast<unsigned char>(v)); else return static_cast<int32_t>(static_cast<unsigned char>(std::string(v).at(0))); }})({args[0]})",
+                "chr" => $"std::string(1, static_cast<char>({args[0]}))",
+                "chrw" => $"static_cast<char>({args[0]})",
                 // Task 7e: emitted to undefined names before (a late native-compile failure).
                 "beep" => "BasicLang::VbBeep()",
                 "filecopy" => $"BasicLang::VbFileCopy({args[0]}, {args[1]})",
