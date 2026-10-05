@@ -1229,6 +1229,60 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine();
         }
 
+        /// <summary>
+        /// An explicit implementation stub for an interface METHOD whose implementation this class
+        /// INHERITS: <c>Rect</c> lists <c>IShape</c>, and only <c>BaseShape</c> declares
+        /// <c>Area</c> (#131) — the method twin of <see cref="GenerateInheritedAccessorStub"/>,
+        /// for the same reason: the base method is not virtual, cannot fill the slot, and
+        /// <c>Rect</c> did not load (TypeLoadException "Method 'Area' in type 'Rect' ... does not
+        /// have an implementation").
+        ///
+        /// <para>One stub per interface SLOT, declared with the interface's signature and naming
+        /// it in full in <c>.override</c> — a method name alone is ambiguous once the interface
+        /// overloads it. The forward is a <c>callvirt</c> on the base method, spelled with the
+        /// base's own signature: when that method is Overridable, a further-derived class's
+        /// Overrides must answer through the interface too, as it does in C#. The stub's own
+        /// name is not the base method's, so it never takes that slot and cannot call itself.</para>
+        ///
+        /// <para>⛔ NO STUB WHEN THE TWO SIGNATURES ARE SPELLED DIFFERENTLY IN IL. The stub hands
+        /// its arguments on one for one, so the slot and the base method must agree exactly.
+        /// Today they disagree only for a ByRef parameter, which the interface declares without
+        /// its <c>&amp;</c> (a separate defect: the class's OWN implementation does not load
+        /// either). A stub there passes an <c>int32</c> where the base expects an
+        /// <c>int32&amp;</c> — measured: InvalidProgramException at the first call through the
+        /// interface, from a class that now loads. Leaving it out keeps the class as broken as
+        /// it was, and broken the same way: TypeLoadException.</para>
+        /// </summary>
+        private void GenerateInheritedMethodStub(InterfaceImplementationLookup.InheritedMethod inherited)
+        {
+            var slot = inherited.InterfaceMethod;
+            var method = inherited.Method;
+            var iface = SanitizeName(inherited.Interface.Name);
+            var owner = SanitizeName(inherited.DeclaringClass.Name);
+            var slotName = SanitizeName(slot.Name);
+            var slotReturn = IlTypeSpec(slot.ReturnType);
+            var slotParams = string.Join(", ", slot.Parameters.Select(IlParameterSpec));
+            var baseParams = method.Implementation?.Parameters ?? new List<IRVariable>();
+            var baseReturn = IlTypeSpec(method.ReturnType);
+            var baseParamList = string.Join(", ", baseParams.Select(ParamSpec));
+            if (slotReturn != baseReturn || slotParams != baseParamList) return;
+
+            var stubName = IlName($"{RawName(inherited.Interface.Name)}.{RawName(slot.Name)}");
+
+            WriteLine("  .method private hidebysig newslot virtual final");
+            WriteLine($"          instance {slotReturn} {stubName}({slotParams}) cil managed");
+            WriteLine("  {");
+            WriteLine($"    .override method instance {slotReturn} {iface}::{slotName}({slotParams})");
+            WriteLine($"    .maxstack {Math.Max(8, slot.Parameters.Count + 1)}");
+            WriteLine("    ldarg.0");
+            for (var i = 1; i <= slot.Parameters.Count; i++)
+                WriteLine(i <= 3 ? $"    ldarg.{i}" : i < 256 ? $"    ldarg.s {i}" : $"    ldarg {i}");
+            WriteLine($"    callvirt instance {baseReturn} {owner}::{SanitizeName(method.Name)}({baseParamList})");
+            WriteLine("    ret");
+            WriteLine($"  }} // end of method {RawName(slot.Name)} (inherited implementation)");
+            WriteLine();
+        }
+
         private void GenerateUserClass(IRClass irClass)
         {
             _currentClass = irClass;
@@ -1316,6 +1370,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             foreach (var method in irClass.Methods)
             {
                 GenerateClassMethod(irClass, method);
+            }
+
+            // Interface methods this class takes on through its own Implements list but inherits
+            // the implementation of — see GenerateInheritedMethodStub.
+            foreach (var inherited in InterfaceImplementationLookup.InheritedInterfaceMethods(_module, irClass))
+            {
+                GenerateInheritedMethodStub(inherited);
             }
 
             if (needsInitializer)
