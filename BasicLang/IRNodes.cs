@@ -394,10 +394,10 @@ namespace BasicLang.Compiler.IR
     /// <para>Kill vocabulary (ADR-0006): PURE — a read of both operands and a definition of its
     /// own name, nothing else. No backend's rendering of it can run user code.</para>
     ///
-    /// <para>⚠ The C++ backend has no null state for a String or an array (#173 writes Nothing as
-    /// the EMPTY value), so there a Nothing test is an EMPTINESS test — one helper,
-    /// <c>CppCodeGenerator.EmitNullTest</c>, shared with <see cref="IRNothingPatternCase"/>
-    /// (ADR-0011 D3).</para>
+    /// <para>⚠ The C++ backend has no null state for a String (#173 writes Nothing as the EMPTY
+    /// value), so there a Nothing test on a String is an EMPTINESS test; an array has a real null
+    /// state (#196). One helper, <c>CppCodeGenerator.EmitNullTest</c>, shared with
+    /// <see cref="IRNothingPatternCase"/> (ADR-0011 D3).</para>
     /// </summary>
     public class IRIdentityCompare : IRValue
     {

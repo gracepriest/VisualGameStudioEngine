@@ -3454,11 +3454,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <para>The read side of #173's write side (<see cref="NothingOf"/>), keyed on the SAME
         /// mapped spelling:</para>
         /// <list type="bullet">
-        /// <item><c>std::string</c> and <c>BasicLang::Array&lt;T&gt;</c> hold no null state —
-        /// <c>NothingOf</c> writes Nothing as the EMPTY value — so the test is EMPTINESS.
-        /// ⚠ A DIVERGENCE, measured and deliberate: <c>"" Is Nothing</c> and an empty array
-        /// <c>Is Nothing</c> are True here and False on C#, JavaScript and MSIL. It flips for arrays
-        /// when <c>Array&lt;T&gt;</c> gets a real null state (D3(c)), in this one place.</item>
+        /// <item><c>BasicLang::Array&lt;T&gt;</c> has a REAL null state (#196, ADR-0011 D3(c)):
+        /// <c>NothingOf</c> writes the default-constructed handle, which owns no storage, so the
+        /// test is <c>is_nothing()</c> and an EMPTY array is not Nothing — as on C#, JavaScript
+        /// and MSIL. It tested emptiness until then (see CppArrayRuntime).</item>
+        /// <item><c>std::string</c> holds no null state — <c>NothingOf</c> writes Nothing as the
+        /// EMPTY value — so the test is EMPTINESS. ⚠ A DIVERGENCE, measured and deliberate:
+        /// <c>"" Is Nothing</c> is True here and False on C#, JavaScript and MSIL.</item>
         /// <item><c>BasicLang::NetRef</c>: <c>NothingOf</c> writes the empty handle, which has no
         /// <c>==</c> but an <c>explicit operator bool</c>, so the test is <c>!x</c>.</item>
         /// <item>Everything else — a <c>shared_ptr</c> (class, interface, collection), a
@@ -3473,7 +3475,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         {
             var mapped = type == null ? null : MapType(type);
             if (mapped != null && mapped.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
-                return $"({expr}).empty()";
+                return $"({expr}).is_nothing()";
             if (string.Equals(mapped, "std::string", StringComparison.Ordinal))
                 return expr.StartsWith("\"", StringComparison.Ordinal)
                     ? $"std::string({expr}).empty()"
@@ -5018,8 +5020,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return $"({value} >= {ValueText(r.LowerBound)} && {value} <= {ValueText(r.UpperBound)})";
                 case IRComparisonPatternCase cmp:
                     return $"{value} {MapCasePatternOperator(cmp.Operator)} {ValueText(cmp.CompareValue)}";
-                // ADR-0011 D3 (1): the ONE C++ null test, shared with `x Is Nothing`. On a String or
-                // an array it is an emptiness test — `x == nullptr` did not compile for either (#189).
+                // ADR-0011 D3 (1): the ONE C++ null test, shared with `x Is Nothing`. On a String it
+                // is an emptiness test, on an array `is_nothing()` (#196) — `x == nullptr` did not
+                // compile for either (#189).
                 case IRNothingPatternCase:
                     return EmitNullTest(value, valueType);
                 case IROrPatternCase or:
@@ -5091,8 +5094,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return ElementLValue(gep);
                 // An array literal or a packed ParamArray: the node carries its elements, since
                 // its stores never reached a block. Array<T>'s initializer_list constructor.
+                // ⚠ Except an EMPTY one (`{}`, a ParamArray given no arguments): empty braces
+                // value-initialize, and a value-initialized Array<T> is the NULL handle (#196).
+                // An empty array converts in from an empty std::vector, which owns storage.
                 case IRArrayAlloc alloc when _guardNodes != null && alloc.InlineElements != null:
-                    return $"{MapType(alloc.Type)}{{" + string.Join(", ", alloc.InlineElements.Select(GetValueName)) + "}";
+                {
+                    var arrayType = MapType(alloc.Type);
+                    if (alloc.InlineElements.Count == 0 && arrayType.StartsWith("BasicLang::Array<", StringComparison.Ordinal))
+                        return $"{arrayType}(std::vector<{MapType(alloc.ElementType)}>())";
+                    return $"{arrayType}{{" + string.Join(", ", alloc.InlineElements.Select(GetValueName)) + "}";
+                }
                 default:
                     // Anything else that is an un-emitted guard node has no declared temp, so a
                     // name would dangle. Refuse it by name instead of handing g++ an undeclared
@@ -6882,15 +6893,18 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// undefined behaviour — the typed literal <c>New String() {"a", Nothing}</c> segfaulted
         /// on it, measured — and <c>"[" + nullptr</c> does not compile.</description></item>
         /// <item><description><c>BasicLang::Array&lt;T&gt;</c> (CppArrayRuntime): a shared
-        /// handle whose default is an EMPTY array, never null.</description></item>
+        /// handle whose DEFAULT is its null state (#196) — <c>Array&lt;T&gt;{}</c> is Nothing,
+        /// a handle with no storage, and <c>EmitNullTest</c> tells it from an EMPTY array, as
+        /// .NET does. An empty array is never spelled this way (see
+        /// <see cref="RenderInline"/>'s array-literal arm).</description></item>
         /// <item><description><c>BasicLang::NetRef</c>: <c>{}</c> is the empty handle, which is
         /// what Nothing crosses as (spec §8.2's handle 0) — GetDefaultValue's own
         /// answer.</description></item>
         /// </list>
         ///
-        /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> or an empty
-        /// array only through <c>Is Nothing</c> and <c>Case Is Nothing</c>, which on C++ both go
-        /// through <c>EmitNullTest</c> and test EMPTINESS for these two (ADR-0011 D3), so
+        /// <para>⚠ A DIVERGENCE, recorded: VB tells <c>Nothing</c> from <c>""</c> only through
+        /// <c>Is Nothing</c> and <c>Case Is Nothing</c>, which on C++ both go through
+        /// <c>EmitNullTest</c> and test EMPTINESS for a String (ADR-0011 D3), so
         /// <c>"" Is Nothing</c> is True here and False elsewhere. C#, JavaScript and MSIL keep a
         /// real null. Keyed on the MAPPED spelling, so a registry handle type and a
         /// marker-carrying one (§8.5) cannot take different answers.</para>
@@ -6949,6 +6963,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // matching .NET (a `Dim l As List(Of Integer)` without New is null; a member
                 // call on it throws, mirroring NullReferenceException — no null guard added).
                 _ when IsCollectionType(type) => "nullptr",
+                // An unsized array (`Dim a() As Integer`) is Nothing, as on .NET: `{}` is the
+                // default-constructed BasicLang::Array, a handle with no storage (#196).
                 _ when type.Kind == TypeKind.Array => "{}",
                 _ when type.Kind == TypeKind.Pointer => "nullptr",
                 // P1 relies on this `{}` fallback: it zero-inits the five NativeOwned value
