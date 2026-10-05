@@ -135,6 +135,11 @@ internal static class FourBackends
 
     internal static string RunEmittedCSharpText(string csharp)
     {
+        // ⚠ Microsoft.VisualBasic.Core is FORCED in: every generated project references it (the C# backend
+        // emits Microsoft.VisualBasic.Conversion.Val/Str and CompilerServices.Conversions), but "every assembly
+        // loaded in this AppDomain" contains it only if an earlier test happened to load it — the same program
+        // compiled or failed (CS0234) by test ORDER (Task 7d review).
+        _ = typeof(Microsoft.VisualBasic.Conversion).Assembly;
         var references = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location))

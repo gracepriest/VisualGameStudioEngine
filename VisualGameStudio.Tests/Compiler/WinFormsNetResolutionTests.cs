@@ -81,6 +81,19 @@ public class WinFormsNetResolutionTests
         });
     }
 
+    /// <summary>⛔ Three assemblies ship in BOTH the framework and the desktop pack; the DESKTOP copy must win, and only once.</summary>
+    [Test]
+    public void TheDesktopCopy_OfASharedAssemblyName_Wins()
+    {
+        var merged = NetReferenceResolver.WithWindowsDesktop(
+            new[] { @"C:\fw\System.Runtime.dll", @"C:\fw\System.Drawing.dll", @"C:\fw\WindowsBase.dll" },
+            new[] { @"C:\desk\System.Drawing.dll", @"C:\desk\WindowsBase.dll", @"C:\desk\System.Windows.Forms.dll" });
+        Assert.That(merged, Is.EquivalentTo(new[]
+        {
+            @"C:\fw\System.Runtime.dll", @"C:\desk\System.Drawing.dll", @"C:\desk\WindowsBase.dll", @"C:\desk\System.Windows.Forms.dll"
+        }));
+    }
+
     // ---- Inherits Form: a bare inherited call is the Form's
 
     /// <summary>⛔ <c>Close()</c> in a Form subclass beside a Module <c>Sub Close</c>: emitted <c>Util.Close()</c> before. VB calls
@@ -137,6 +150,36 @@ public class WinFormsNetResolutionTests
                     " Private Sub OnGo(sender As Object, e As EventArgs)\n End Sub\nEnd Class\n"),
                 ("Main.bas", "Sub Main()\nEnd Sub\n"))),
             Is.Empty);
+
+    /// <summary>Every diagnostic of either channel, any severity: the analyzer's (errors AND warnings) and the .NET one.</summary>
+    private static string AllDiagnostics(CompilationResult r) =>
+        string.Join(" | ", r.AllErrors.Select(e => $"{e.Severity}: {e.Message}")
+            .Concat(r.NetDiagnostics.Select(d => $"{d.Code}{(d.IsWarning ? " (warning)" : "")}: {d.Message}")));
+
+    /// <summary>
+    /// ⛔ Task 7d review (CRITICAL + owner principle: arming adds NO diagnostic to a valid WinForms program). A real
+    /// form: <c>MyBase.OnPaint(e)</c> / <c>MyBase.OnKeyDown(e)</c> / <c>MyBase.OnLoad(e)</c> / <c>MyBase.WndProc(m)</c> in
+    /// overrides (protected — were BL6017 ERRORS), <c>lb.Items.Add</c>, <c>Controls.OfType(…).Count()</c>,
+    /// <c>e.Graphics.DrawLine</c> (receivers that degrade to Object — were BL6017 warnings) and
+    /// <c>Application.Run(New Form1())</c> (was BL6019). Zero diagnostics of any kind.
+    /// </summary>
+    [Test]
+    public void AValidFormProgram_HasNoDiagnosticsAtAll_WhenArmed()
+    {
+        var result = CompileWinForms(
+            ("Form1.bas",
+                "Using System\nUsing System.Drawing\nUsing System.Linq\nUsing System.Windows.Forms\n" +
+                "Public Class Form1\n Inherits Form\n Private Button1 As Button\n Private lb As ListBox\n" +
+                " Public Sub New()\n  Me.Button1 = New Button()\n  Me.lb = New ListBox()\n  Me.lb.Items.Add(\"a\")\n" +
+                "  Dim first As Object = Me.lb.Items.Item(0)\n  Me.Controls.Add(Me.Button1)\n" +
+                "  Dim n As Integer = Me.Controls.OfType(Of Button)().Count()\n  Me.DoubleBuffered = True\n End Sub\n" +
+                " Protected Overrides Sub OnPaint(e As PaintEventArgs)\n  MyBase.OnPaint(e)\n  e.Graphics.DrawLine(Pens.Black, 0, 0, 10, 10)\n  Me.Invalidate()\n End Sub\n" +
+                " Protected Overrides Sub OnKeyDown(e As KeyEventArgs)\n  If e.KeyCode = Keys.Enter Then\n   Me.Close()\n  End If\n  MyBase.OnKeyDown(e)\n End Sub\n" +
+                " Protected Overrides Sub OnLoad(e As EventArgs)\n  MyBase.OnLoad(e)\n End Sub\n" +
+                " Protected Overrides Sub WndProc(ByRef m As Message)\n  MyBase.WndProc(m)\n End Sub\nEnd Class\n"),
+            ("Main.bas", "Using System.Windows.Forms\nSub Main()\n Application.EnableVisualStyles()\n Application.Run(New Form1())\nEnd Sub\n"));
+        Assert.That(AllDiagnostics(result), Is.Empty);
+    }
 
     // ---- the catalog: every control, every property, through the ARMED compiler — no false error
 

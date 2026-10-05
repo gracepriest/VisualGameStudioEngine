@@ -929,6 +929,14 @@ public class CrossFileBindingTests
             " PrintLine(Val(\"x9\"))\n PrintLine(Conversion.Val(\" 7\"))\n PrintLine(Microsoft.VisualBasic.Val(\"&HFF\"))\n" +
             " PrintLine(Str(42) & \"|\")\n PrintLine(Conversion.Str(-3) & \"|\")\nEnd Sub\n"));
 
+    /// <summary>Task 7d review: VB's Str drops a fraction's leading zero (<c>Str(0.5)</c> is " .5", <c>Str(-0.5)</c> is "-.5" —
+    /// JS and C++ printed " 0.5"/"-0.5"), and Val reads a 32-bit hex value as an Integer (<c>&amp;HFFFFFFFF</c> is -1).</summary>
+    [Test]
+    public void StrOfAFraction_AndValOfA32BitHexValue_FollowVb() => RunsOnEveryBackend("-1\n65536\n| .5|\n|-.5|",
+        ("Main.bas",
+            "Sub Main()\n PrintLine(Val(\"&HFFFFFFFF\"))\n PrintLine(Val(\"&H10000\"))\n" +
+            " PrintLine(\"|\" & Str(0.5) & \"|\")\n PrintLine(\"|\" & Str(-0.5) & \"|\")\nEnd Sub\n"));
+
     /// <summary>Outside any class the bare built-in still works, beside its qualified spelling.</summary>
     [Test]
     public void BareAndQualifiedBuiltIns_BothRunOutsideAClass() => RunsOnEveryBackend("he\nlo",

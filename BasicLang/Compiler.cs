@@ -143,11 +143,8 @@ namespace BasicLang.Compiler
             string projectFilePath = null,
             IReadOnlyList<string> packageAssemblies = null)
         {
-            // WinForms/WPF projects target a DIFFERENT shared framework this closure cannot see
-            // (Microsoft.WindowsDesktop.App); every unqualified Form/Window/MessageBox would be
-            // structurally unresolvable and §6.3 forbids manufacturing warnings on valid
-            // programs. Leave those projects un-armed until the closure can include the desktop
-            // reference set.
+            // WPF targets the WindowsDesktop shared framework too and is NOT armed: nothing here has
+            // measured its surface, and §6.3 forbids manufacturing diagnostics on valid programs.
             if (project != null && project.UseWpf)
                 return;
 
@@ -162,7 +159,7 @@ namespace BasicLang.Compiler
                 var desktop = Net.NetReferenceResolver.WindowsDesktopAssemblies;
                 if (desktop.Count == 0)
                     return;
-                NetResolverFactory = () => resolver ??= Net.NetTypeResolver.Create(
+                NetResolverFactory = () => resolver ??= Net.NetTypeResolver.CreateShared(
                     Net.NetReferenceResolver.WithWindowsDesktop(
                         Net.NetReferenceResolver.Resolve(project, projectFilePath ?? project.FilePath, packageAssemblies).All,
                         desktop));

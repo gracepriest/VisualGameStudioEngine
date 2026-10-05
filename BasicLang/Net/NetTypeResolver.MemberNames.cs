@@ -8,6 +8,32 @@ namespace BasicLang.Net
     internal sealed partial class NetTypeResolver
     {
         /// <summary>
+        /// One resolver per distinct reference closure, shared across compilations in this process — keyed on
+        /// every path WITH its size and write time, so a rebuilt referenced assembly is a new key, never stale.
+        ///
+        /// <para>⛔ Task 7d review (perf): a WinForms closure is ~230 assemblies; building its resolver, and the
+        /// extension-method scan behind <see cref="DeclaresNameableMember"/>, cost ~390 ms on EVERY compile
+        /// (each <c>CompilerOptions</c> made its own). The class remarks already say "build ONE per reference
+        /// closure and keep it"; this is the keeping. Used for the WinForms closure only — the other routes keep
+        /// their per-options instance.</para>
+        /// </summary>
+        internal static NetTypeResolver CreateShared(IReadOnlyList<string> assemblyPaths)
+        {
+            var key = string.Join("|", assemblyPaths.Select(p =>
+            {
+                try
+                {
+                    var info = new System.IO.FileInfo(p);
+                    return info.Exists ? $"{p}*{info.Length}*{info.LastWriteTimeUtc.Ticks}" : p;
+                }
+                catch (Exception) { return p; }
+            }));
+            return SharedResolvers.GetOrAdd(key, _ => new Lazy<NetTypeResolver>(() => Create(assemblyPaths))).Value;
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<NetTypeResolver>> SharedResolvers = new();
+
+        /// <summary>
         /// Whether a member named <paramref name="name"/> (VB's case-insensitive match) is NAMEABLE on
         /// <paramref name="fullName"/>: declared by the type or a base with an accessibility the caller has —
         /// public, or protected too when <paramref name="includeProtected"/> (the caller is a derived class
@@ -31,7 +57,8 @@ namespace BasicLang.Net
             if (symbol == null) return true;
 
             var types = new List<INamedTypeSymbol>();
-            for (var type = symbol; type != null; type = type.BaseType) types.Add(type);
+            for (var type = symbol; type != null; type = type.BaseType)
+                types.Add(type);
             types.AddRange(symbol.AllInterfaces);
 
             foreach (var type in types)

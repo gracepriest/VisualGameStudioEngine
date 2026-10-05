@@ -3337,6 +3337,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void NetWarning(string code, string message, int line, int column)
         {
+            // ⛔ Owner principle (Task 7d review): arming a WinForms project adds NO diagnostic to a valid program.
+            // It is armed for NAME resolution (an inherited `Close()`, a misspelled member as a precise BL6017
+            // error); the §6.5 C#-path WARNING row was never armed for WinForms, and armed it fires on valid code
+            // whose receivers this analyzer types Object (`lb.Items.Add`, `e.Graphics.DrawLine`) or whose
+            // arguments it cannot marshal (`Application.Run(New Form1())`, BL6019). So that row stays silent.
+            if (!_netNativeBackend && IsWinFormsArmed()) return;
             if (!_netReportedFindings.Add(code + "|" + message)) return;
             var where = line > 0 ? $" (line {line.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
             // P2a-2 THE FLIP (spec §6.3): on the NATIVE backend every §6.5 finding this
@@ -3599,7 +3605,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // member that is not there at all is a BasicLang ERROR, not a late csc one.
             if (IsWinFormsTypeName(fullName))
             {
-                if (!NetResolver().DeclaresNameableMember(fullName, memberName, includeProtected: false))
+                // ⛔ Protected members are nameable through MyBase/Me and from inside any class over a .NET base
+                // (`MyBase.OnPaint(e)` in `Protected Overrides Sub OnPaint` — MyBase types as the Form itself).
+                // A false error here breaks every override a form has (Task 7d review, CRITICAL). Lenient by design:
+                // a protected member named from a non-derived class is csc's to refuse.
+                var includeProtected = node.Object is MyBaseExpressionNode
+                    || node.Object is IdentifierExpressionNode { Name: var receiver }
+                       && string.Equals(receiver, "Me", StringComparison.OrdinalIgnoreCase)
+                    || NetBaseOf(_currentScope?.GetClassScope()?.ClassType) != null;
+                if (!NetResolver().DeclaresNameableMember(fullName, memberName, includeProtected))
                     ReportMissingWinFormsMember(fullName, memberName, line, column);
                 return;
             }
@@ -3608,6 +3622,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 $".NET type '{fullName}' has no accessible member named '{memberName}'.",
                 line, column);
         }
+
+        /// <summary>Whether the armed closure includes WinForms — a <c>UseWindowsForms</c> project with the WindowsDesktop
+        /// pack (<c>CompilerOptions.EnableNetResolution</c>). Cached: asked on every .NET warning.</summary>
+        private bool IsWinFormsArmed() =>
+            _winFormsArmed ??= _netResolverFactory != null
+                && NetResolver().ResolveTypeDetailed("System.Windows.Forms.Form").Outcome == NetTypeLookupOutcome.Resolved;
+
+        private bool? _winFormsArmed;
 
         private static bool IsWinFormsTypeName(string fullName) =>
             fullName != null && fullName.StartsWith("System.Windows.Forms.", StringComparison.Ordinal);

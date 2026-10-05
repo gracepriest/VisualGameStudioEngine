@@ -295,9 +295,13 @@ inline double VbVal(const std::string& in) {
     return std::strtod(num.c_str(), nullptr);
 }
 
-/* VB's Str(n): the number's text, with a leading space where a non-negative number has no sign. */
+/* VB's Str(n): the number's text, with a leading space where a non-negative number has no sign, and a
+   fraction's leading zero dropped (Str(0.5) is "" .5"", Str(-0.5) is ""-.5""). */
 inline std::string VbStr(const std::string& text) {
-    return (!text.empty() && text[0] == '-') ? text : "" "" + text;
+    std::string t = text;
+    if (t.rfind(""0."", 0) == 0) t = t.substr(1);
+    else if (t.rfind(""-0."", 0) == 0) t = ""-"" + t.substr(2);
+    return (!t.empty() && t[0] == '-') ? t : "" "" + t;
 }
 
 /* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already

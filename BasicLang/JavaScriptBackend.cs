@@ -3322,7 +3322,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (string.Equals(name, "Str", StringComparison.OrdinalIgnoreCase))
             {
                 var text = TextOf(call.Arguments[0], rendered[0], mustBeString: true);
-                result = $"((t) => t.startsWith(\"-\") ? t : \" \" + t)({text})";
+                // VB drops the leading zero of a fraction: Str(0.5) is " .5", Str(-0.5) is "-.5".
+                result = "((t) => { if (t.startsWith(\"0.\")) t = t.slice(1); else if (t.startsWith(\"-0.\")) t = \"-\" + t.slice(2); "
+                         + $"return t.startsWith(\"-\") ? t : \" \" + t; }})({text})";
                 return true;
             }
 

@@ -227,6 +227,11 @@ namespace BasicLang.Net
         /// the dotnet root the running runtime lives in; the runtime's own version when that pack is
         /// installed, otherwise the highest of the same major.minor. The test suite's
         /// <c>WinFormsCompile</c> binds exactly this pair (runtime assemblies + desktop ref pack).</para>
+        ///
+        /// <para>⚠ Keyed on the RUNNING runtime's major.minor: a machine with only another version's pack (say
+        /// only 10.0 with the compiler on 8.0) is silently UN-armed — as before this existed, never wrong. The
+        /// NuGet cache (<c>~/.nuget/packages/microsoft.windowsdesktop.app.ref/&lt;version&gt;/ref/netM.m</c>, where a
+        /// restore of any WinForms project puts the same pack) is the fallback when the dotnet root has none.</para>
         /// </summary>
         internal static IReadOnlyList<string> WindowsDesktopAssemblies => WindowsDesktopSet.Value;
 
@@ -242,21 +247,30 @@ namespace BasicLang.Net
             if (string.IsNullOrEmpty(dotnetRoot) || !Version.TryParse(runtimeVersionText.Split('-')[0], out var runtimeVersion))
                 return empty;
 
-            var packRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.WindowsDesktop.App.Ref");
-            if (!Directory.Exists(packRoot)) return empty;
-
             var tfm = $"net{runtimeVersion.Major}.{runtimeVersion.Minor}";
-            var candidates = Directory.GetDirectories(packRoot)
-                .Select(d => (Dir: d, Ok: Version.TryParse(Path.GetFileName(d).Split('-')[0], out var v), Version: v))
-                .Where(c => c.Ok && c.Version.Major == runtimeVersion.Major && c.Version.Minor == runtimeVersion.Minor)
-                .OrderByDescending(c => string.Equals(Path.GetFileName(c.Dir), runtimeVersionText, StringComparison.OrdinalIgnoreCase))
-                .ThenByDescending(c => c.Version);
-            foreach (var candidate in candidates)
+            var nugetRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+            if (string.IsNullOrEmpty(nugetRoot))
+                nugetRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+
+            foreach (var packRoot in new[]
+                     {
+                         Path.Combine(dotnetRoot, "packs", "Microsoft.WindowsDesktop.App.Ref"),
+                         Path.Combine(nugetRoot, "microsoft.windowsdesktop.app.ref"),
+                     })
             {
-                var refDir = Path.Combine(candidate.Dir, "ref", tfm);
-                if (!Directory.Exists(refDir)) continue;
-                var dlls = Directory.GetFiles(refDir, "*.dll");
-                if (dlls.Length > 0) return dlls;
+                if (!Directory.Exists(packRoot)) continue;
+                var candidates = Directory.GetDirectories(packRoot)
+                    .Select(d => (Dir: d, Ok: Version.TryParse(Path.GetFileName(d).Split('-')[0], out var v), Version: v))
+                    .Where(c => c.Ok && c.Version.Major == runtimeVersion.Major && c.Version.Minor == runtimeVersion.Minor)
+                    .OrderByDescending(c => string.Equals(Path.GetFileName(c.Dir), runtimeVersionText, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(c => c.Version);
+                foreach (var candidate in candidates)
+                {
+                    var refDir = Path.Combine(candidate.Dir, "ref", tfm);
+                    if (!Directory.Exists(refDir)) continue;
+                    var dlls = Directory.GetFiles(refDir, "*.dll");
+                    if (dlls.Length > 0) return dlls;
+                }
             }
             return empty;
         });
