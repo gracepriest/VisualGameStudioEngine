@@ -27,7 +27,7 @@ Every file:line below was read on `86897991`. Line numbers drift, so re-anchor b
 
 | # | What | Why it decides something | How |
 |---|---|---|---|
-| M1 | `MergablePropertyAttribute.AllowMerge` for the WinForms property behind EVERY catalog row of every WinForms kind, the Form's rows, and the intrinsic `Location`, `Size`, `TabIndex`, `Anchor`, `Dock`. **Expected** (to be confirmed): `Items`/`Nodes`/`Columns`-shaped collections false, everything else true, `Location` true | D-2: which rows a multi-selection offers is VS's rule (`MergableProperty`), not a hand list. If `Location` turns out false, D-2's Location ruling flips with it | a throw-away `net8.0-windows` console in the scratchpad that reflects `TypeDescriptor.GetProperties(instance)` over the same kinds `tools/WinFormsMetadataDump/Program.cs:124-155` walks; print `kind.property = AllowMerge` |
+| M1 | `MergablePropertyAttribute.AllowMerge` (⚠ .NET's real spelling is "Mergable", one e; our catalog field is spelled `Mergeable`) for the WinForms property behind EVERY catalog row of every WinForms kind, the Form's rows, and the intrinsic `Location`, `Size`, `TabIndex`, `Anchor`, `Dock`. **Expected** (to be confirmed): **`TabIndex` false** (`Control.TabIndex` carries `[MergableProperty(false)]`); `Items`/`Nodes`/`Columns`-shaped collections false; everything else true, `Location` true | D-2: which rows a multi-selection offers is VS's rule (`MergableProperty`), not a hand list. If `Location` turns out false, D-2's Location ruling flips with it. TabIndex false → TabIndex is NOT offered for a multi-selection (D-2 rule 3), and Task 2's row-set tests expect that | a throw-away `net8.0-windows` console in the scratchpad that reflects `TypeDescriptor.GetProperties(instance)` over the same kinds `tools/WinFormsMetadataDump/Program.cs:124-155` walks; print `kind.property = AllowMerge` |
 | M2 | Single selection today: drag a selected control on the canvas, then nudge it with an arrow key. Does the grid's X row show the new number without reselecting? | `OnDesignModelRevisionChanged` (`CodeEditorDocumentViewModel.cs:1455-1461`) refreshes only Reference choices. If X goes stale, D-9's `RefreshValues` fixes a pre-existing single-select defect as well as the multi one (Arrange while three are selected) | a scratch `[AvaloniaTest]` on the real-view rig (`FormPropertyGridRealViewTests.Open`) |
 | M3 | A real Ctrl+click on the real document view's canvas (rig + `RawInputModifiers.Control`, the `FormCanvasMultiSelectTests.cs:128` pattern) leaves `Selection.Controls` = [lbl, btn], `PropertyGrid.SelectedControl` = btn, and the grid rebuilt ONCE (count `Rows` resets) | D-1's ordering argument: the view model's `Selection.Changed` handler runs before the canvas's, and the canvas's TwoWay echo is a no-op | same rig |
 | M4 | A real `ComboBox` (the Bool/Enum typed editor) bound to a `StringValue` of `""` (no matching item): does it push `null`, push `""`, or push nothing on bind, and on a real click away? | D-4: a mixed Bool/Enum row must never write on bind. `Commit` ignores null (`FormPropertyRow.cs:951`) but not `""`, and `""` on an Enum is Judge's RESET verdict | same rig, a hand-made mixed fixture |
@@ -96,8 +96,12 @@ A row is offered iff ALL hold, for every selected control:
    `FormPropertyDef.Mergeable` (default true), set false where the oracle says so. The oracle gains the measured
    attribute (M1, Task 1), and the parity test compares the two, so it cannot drift.
 3. **Intrinsic rows** follow the same two rules, by geometry: Location/Size/Anchor/Dock iff every member has
-   `PixelGeometry`; Col/Row iff every member has `GridGeometry`; TabIndex iff every member is positioned (the `:640`
-   filter). **Name is never offered.** VS hides `(Name)` for a multi-selection, and a shared id is meaningless.
+   `PixelGeometry`; Col/Row iff every member has `GridGeometry`. **Name is never offered.** VS hides `(Name)` for a
+   multi-selection, and a shared id is meaningless. **TabIndex is never offered either** (coordinator ruling, VS):
+   `Control.TabIndex` is `[MergableProperty(false)]` — M1 confirms it, and `FormMultiSelectCatalogTests` pins the
+   intrinsic decision against the snapshot's `Control.TabIndex` entry. If M1 measured it mergeable, that test fails
+   and the decision is re-opened, never silently kept. A shared TabIndex would also hand every member the same tab
+   stop.
 4. **Location IS offered** (re-decided against the spec's "not offered" — the spec line was a design guess, and the
    owner's delegation is VS parity). VS lists Location for a multi-selection because `Control.Location` is mergeable
    (confirmed or refuted by M1). And it is useful: X alone is "line these three up at 96", the gesture the grid's own
@@ -115,9 +119,13 @@ measured, so the gate can see a wrong row.
 - A merged row's text is the members' `DisplayValue` when they are all equal (ordinal, after each member's own canonical
   display), else `""` with `IsMixed = true`. So a Button and a Label with no `BackColor` show `Control` when both kinds
   default to `Control`, and blank when their defaults differ.
-- **Grey** (`IsDefaultShown`): every member absent and not mixed. **Bold** and **Reset**: true when ANY member is bold /
-  can reset. Spec §2.7's "bold, grey and reset read ONE value" holds across the set: Reset is offered whenever it would
-  remove something, and bold says the same thing. A mixed row is never grey.
+- **Grey** (`IsDefaultShown`): every member absent and not mixed. A mixed row is never grey.
+- **Bold** and **Reset** follow VS's merged descriptor (coordinator ruling): **bold = ANY member bold** (VS's merged
+  `ShouldSerializeValue` is true when any object would serialize); **Reset offered = ALL members can reset** (VS's merged
+  `CanResetValue` requires every object). Each member's own bold/reset still reads its ONE value (spec §2.7); only the
+  combination differs. Consequence, stated so nobody "fixes" it: a selection where one member is set and one is absent
+  is BOLD but offers NO Reset (the absent member cannot reset). **Lost — Reset when ANY member can reset** (my first
+  draft): it is not VS's rule, and the owner's delegation is VS parity.
 - **Frozen**: if any member's row is frozen (D9 Degraded), the merged row is frozen, its reason names the member
   (`'btn2': <reason>`), and it shows the shared raw text or blank. Nothing may coerce a preserved value, even in company.
 - **Composites** (Font, Padding, Size, Location): the merged parent is blank when the WHOLE values differ. Each merged
@@ -131,7 +139,7 @@ measured, so the gate can see a wrong row.
 | Editor | Mixed shows | A commit writes |
 |---|---|---|
 | Text | blank | the typed text to every member, each JUDGED on its own (D-5) |
-| Int (NumericUpDown) | ⚠ **the TEXT editor**, blank (`IsNumericUpDown` false and `IsTextBox` true while `IsMixed`; both raised when mixedness changes). `ITypedValueRow` unchanged | the parsed number to all; unparseable text is ignored (as `IntRow` does today) |
+| Int (NumericUpDown) | ⚠ **the TEXT editor**, blank (`IsNumericUpDown` false and `IsTextBox` true while `IsMixed`; both raised when mixedness changes). `ITypedValueRow` unchanged. ⛔ A row that becomes UN-mixed while its text box has focus (another route wrote the members equal — an Arrange, a revision refresh) swaps editors under the focus: the dying TextBox's LostFocus pushes its stale `""` and that push must write NOTHING (blank on a no-longer-mixed row is not an edit: the guard is "a `""` push from the mixed editor is ignored", keyed on the editor having been the mixed one, not on today's mixedness) | the parsed number to all; unparseable text is ignored (as `IntRow` does today) |
 | Bool / Enum / Cursor combo | blank (no item selected). A `null` push is ignored today (`:951`). A `""` push from a mixed combo is ALSO ignored while mixed (M4 decides whether it can happen). ⛔ Never Judge's Reset verdict by accident | the picked member to all |
 | Bool double-click | — | mixed → `true` for all (VS cycles to its first standard value); not mixed → flips, as today |
 | Colour drop-down | no swatch, blank text | the picked colour to all |
@@ -159,7 +167,9 @@ toggles:** VS's AnchorEditor is a whole-value editor. Per-member toggling is a s
      TextBox (`OpaqueOnWinForms`, per kind), so it is refused for the set.
   2. `tally.Reset()`, then each member commits (its own NoOp/Reset/Write verdict against its own present value).
   3. If `tally.Count > 0`: `RaiseValueChanged()` on the merged row (parts follow), then `onChanged()` **once**.
-- **Reset** on a merged row resets every member that can reset, then raises one `Edited`. A merged PART pre-judges
+- **Reset** on a merged row (offered only when EVERY member can reset, D-3) resets every member, then raises one
+  `Edited`. A Reset VERDICT from a cleared editor follows the same rule: when some member cannot reset, the editor snaps
+  back and nothing is written (all-or-nothing). A merged PART pre-judges
   each member's composed whole, then commits through each member's part, with the same tally.
 - **Lost — partial apply** (write where accepted, skip the refusals). VS cancels the whole designer transaction when one
   object throws, and a half-applied edit is a state the user cannot see from the grid.
@@ -209,6 +219,19 @@ toggles:** VS's AnchorEditor is a whole-value editor. Per-member toggling is a s
 - `FormHandlerRequest` gains `IReadOnlyList<FormBindOwner> Owners` (`Owner` stays = the primary). The host's de-dupe key
   includes every owner. The host's closing `SelectInDesigner(owner.Control)` (`:910`) becomes "keep the selection
   when the owner is already in it". A gesture must not collapse a multi-selection.
+- `PropertyGrid.RefuseHandler(owner, evt, …)` (`FormPropertyGridViewModel.cs:189-194`, today matched on
+  `r.Owner.Control`) finds the row whose `Owners` CONTAIN the refused owner — so a host refusal of a typed name in a
+  multi-selection lands on the merged row's pane and reverts its cell, never in the Error List.
+- **The canvas double-click on a MEMBER of a multi-selection** (coordinator ruling, VS; the same rule as the Events
+  tab): `OnCanvasDoubleTapped` (`FormCanvasControl.cs:717-744`) calls `SelectForGesture(control)`, which already keeps
+  the group for a member (`:864-868`) — and with D-13 the first press made the clicked control the PRIMARY. Then
+  `ActivateControlAsync` (`CodeEditorDocumentViewModel.cs:750-754`) passes, when the control is in a multi-selection,
+  EVERY selected owner whose `WiredOn` list contains the clicked control's DEFAULT event (same `Name` and
+  `WinFormsArgs`), primary first-planned: ONE stub named `<clickedId>_<DefaultEvent>` (or navigation to the clicked
+  control's bound handler), bound on all of those owners, ONE write, and the selection NOT collapsed (`:910`). A
+  selected member whose kind lacks that event (a TrackBar has no Click) is left unbound — VS wires only the components
+  that have the event. A double-click on a control OUTSIDE the selection selects it alone first (`SelectForGesture`
+  `:864-866`), exactly as today.
 - **Lost — a neutral handler name** (`Buttons_Click`): VS names it after a component, and this codebase's reference
   control is the primary (Arrange already uses it). **Lost — "double-click navigates only when every member shares
   the handler":** the single-selection rule applied to the primary is one rule, and the user sees where they landed.
@@ -221,6 +244,15 @@ Arrange, a drag, an arrow nudge or a Paste while three controls are selected the
 immediately. M2 says whether single selection had the same staleness; either way this is the one fix.
 **Lost — rebuilding the rows on every revision:** a rebuild drops focus and the expanded-part state mid-edit, and would
 re-run slice 5's stale-LostFocus hazard.
+
+⛔ **Re-entrancy.** The grid's OWN edit bumps the revision (`WriteDesignerEditBack` `:1213`), so `RefreshValues` runs
+INSIDE the row's `Commit` → `_onChanged` → `Edited` → write chain, and again around a refused value's posted two-step
+echo (`RaiseEditorRefresh` `FormPropertyRow.cs:1094-1111`, which sets `_editorEcho` and relies on the binding seeing a
+CHANGED value). Rules: `RefreshValues` raises notifications only — it never commits, never sets `_editorEcho`, and a
+row whose `_editorEcho` is set is skipped (its posted step owns the refresh). Tested through the real editor path in
+Task 3/4: a refused value on a merged row still snaps the real TextBox back (the slice-2 echo test's shape, multi), an
+accepted value raises `Edited` exactly once with `RefreshValues` running inside it, and no second write/undo step
+appears.
 
 ### D-10 — Web vs WinForms
 
@@ -241,8 +273,34 @@ running program on both targets.
   `TheDocumentView_KeepsTheCanvasAndTrayBindings` stays as it is.
 - **Arrow nudge / Shift+arrow resize / grid-cell move** apply to every selected control that has geometry, each
   parent-relative (`MoveTo`, never re-parenting, the existing rule), with ONE `CommitGeometry`.
+- **Ancestor/descendant rule** (coordinator ruling, VS): a selected control that lies INSIDE another selected control
+  (a Button in a selected Panel — Ctrl+click can select both; the marquee cannot, `ControlsIn` takes the container
+  only) is EXCLUDED from Delete and from a nudge. Deleting the Panel already removes it (removing it first, then the
+  Panel, would be harmless but is two model paths for one intent); nudging both would move the child twice (once with
+  its container, once itself). One helper, `FormSelectionTopLevel(document, controls)` (via
+  `FormGeometryEdit.ParentOf`, `CodeEditorDocumentViewModel.cs:506`'s walk), used by both gestures.
+- **Docked members are skipped by a nudge** (a strip's edge is a `Dock` property, not a rect; `FormDockLayout.EdgeOf`
+  ≠ null, the same test the drag uses at `FormCanvasControl.cs:1042`). Items too (no geometry). Delete removes them
+  normally.
 - **Lost — leaving both primary-only:** the grid makes a multi-selection visible and editable. Deleting one control of
   three is the surprise VS users will hit first.
+
+### D-13 — Clicking an already-selected member makes it the PRIMARY and keeps the group (coordinator ruling, VS)
+
+- `FormSelection` gains `Promote(FormControl control)`: when the control is selected and not already last, it moves to
+  the END (the primary) and `Changed` is raised; otherwise a no-op that raises nothing. The store's own API — never a
+  `Toggle` + `Add` pair (two Changed, a transient state where the grid rebuilds for a selection without it).
+- `ApplyClickSelection`'s already-selected branch (`FormCanvasControl.cs:829-834`) calls `selection.Promote(hit)`, so the
+  grid, Arrange's reference and the D-8 handler name all follow the control the user pointed at.
+- ⚠ **The collapse-on-release is REMOVED** (`_collapseTo`, `:833`, `:1271-1279`). VS keeps the group when you click a
+  member without a modifier (you click empty canvas or an unselected control to start over). With collapse kept, the
+  first click of a double-click on a member would collapse the selection on its RELEASE — before the double-tap
+  arrives — and D-8's canvas route could never see a multi-selection. Measured fact to state in the test: no existing
+  test pins the collapse (grep `_collapseTo` behaviour: none in `FormCanvasMultiSelectTests`/`FormSelectionTests`).
+  **Lost — keep the collapse and defer it past the double-click time:** a timer-driven selection change is
+  untestable-by-construction headless and still not VS.
+- A drag that starts on a member still moves the whole group (`DraggingOneMemberMovesEveryMemberByTheSameDelta`
+  stays green).
 
 ### D-12 — Deferred, recorded as follow-ups (§44), not done
 
@@ -260,10 +318,22 @@ existing oracle machinery. No ADR.
 
 ## 4. The tasks (TDD, one commit per task)
 
+**Test cadence (owner instruction 2026-10-05 — "we're running too many tests"; this governs every task below).**
+- **Per task:** build `VisualGameStudio.Tests` once, then run ONLY the fixtures the task touches or names in its
+  RE-CHECK line, with `--no-build --filter "FullyQualifiedName~<Fixture>|…"`. **No fast subset and no Integration set
+  per task.** Task 7's own new Integration fixture is run by itself (it is the task's test), nothing else Integration.
+- **Mutations per task: 1–2 meaningful ones**, the first listed (★) and at most one more. The other lines under
+  "Mutations" are candidates for a reviewer, not obligations. A mutant is applied with the **Edit** tool and the
+  project REBUILT (a mutant survives a revert until you rebuild); record killed or EQUIVALENT, with the measurement.
+- **ONE gate before the PR** (Task 9 step 3, which is both the slice gate and the programme's Closing gate): the fast
+  subset ONCE plus the property-grid `Form*`/`WinFormsCatalog*` Integration fixtures ONCE, both on the MERGED tree
+  (master merged in, in a detached worktree), compared by failure NAMES against master, any new name A/B'd.
+- **No full suite at all** (owner, 2026-10-05: "no full test suite after the fast subset has passed — not even in
+  Task 9's Closing").
+- This is about how often big sets run, not about writing fewer tests: every real-view and acceptance test below stays.
+
 Every task:
 - Red test(s) first. Run them and see them fail for the RIGHT reason. Implement. Green.
-- Mutation-check each new branch: apply with the **Edit** tool and **REBUILD** (a mutant survives a revert until you
-  rebuild). Record each as killed or EQUIVALENT, with the measurement.
 - Stage by name (never `git add -A`, never `csc.dll`). Message via a scratchpad file + `git commit -F`.
 - Every real-view test:
   - `[AvaloniaTest]`, looping the rig's `TwoZooms` (800×560 below zoom 1.0, 1400×900 at 1.0);
@@ -278,9 +348,9 @@ Every task:
 
 ### Task 0 — Baseline and measurements
 
-- Build `VisualGameStudio.Tests` Release at `86897991`.
-- Run the fast subset with BOTH streams captured. Record the total/passed/failed/skipped counts and the **sorted failure
-  NAMES** with the base SHA. Expected: only the known machine rows (§5).
+- Build `VisualGameStudio.Tests` Release at `86897991`. **No fast-subset baseline run** (cadence rule): the baseline
+  names are slice 5's gate on master's code (`2813205d`, HANDOFF `:42-48`, listed in §5). A name the slice gate shows
+  that is not on that list is A/B'd then, on a detached `origin/master` worktree.
 - Run M1–M5 (§0), record them in §6, and re-decide anything they contradict.
 - No commit, unless a decision changed (then this document, alone).
 
@@ -290,7 +360,12 @@ Files:
 - `tools/WinFormsMetadataDump/Program.cs`: `DescribeProperty` emits `mergeable` from
   `p.Attributes[typeof(MergablePropertyAttribute)]`, true when absent.
 - `tools/WinFormsMetadataDump/README.md`: what `mergeable` means.
-- `VisualGameStudio.Tests/Data/winforms-metadata.json`: REGENERATED by the tool, never hand-edited.
+- `VisualGameStudio.Tests/Data/winforms-metadata.json`: REGENERATED by the tool, never hand-edited. ⛔ **Regenerate
+  only at the SAME WindowsDesktop runtime the committed file names** (its header records the runtime version,
+  `Program.cs:113`). ⛔ **The diff must be ONLY added `"mergeable": …` keys** — check it (`git diff --stat` plus a read of
+  the diff: every changed line an added `mergeable` key, no reordered/changed default, description or event line). Any
+  other change means the runtime or the tool differs: STOP, do not commit the file, record what differed in §6 and ask
+  the coordinator.
 - `VisualGameStudio.Tests/Compiler/WinFormsMetadata.cs`: `WinFormsPropertyEntry.Mergeable`.
 - `BasicLang/Forms/FormControlCatalog.cs`: `FormPropertyDef.Mergeable = true`, and `SharesShapeWith(other)` (D-2 rule 1),
   set false on exactly the rows M1 names.
@@ -302,15 +377,15 @@ Tests (Edit the existing files; any new file is NEW):
 - New `FormMultiSelectCatalogTests` (fast):
   - every WinForms catalog row's `Mergeable` equals the snapshot's (catalog-driven);
   - the intrinsic `Location`/`Size`/`TabIndex`/`Anchor`/`Dock` vs the snapshot's `Control` entries, which D-2 rule 3
-    relies on;
+    relies on: Location/Size/Anchor/Dock mergeable, **TabIndex NOT mergeable** (so the multi row set omits it);
   - `SharesShapeWith` over EVERY pair of same-named rows across kinds (catalog-driven): `TextAlign`
     ContentAlignment × HorizontalAlignment is false, Button.BackColor × Label.BackColor is true;
   - the predicate is symmetric.
 
 Mutations:
-- the dump always writes `true` (the parity row for an `Items` row goes red);
-- `SharesShapeWith` ignores `WinFormsEnumType` (the TextAlign pair);
-- `Mergeable` dropped from the comparer (a flipped catalog row survives — must be killed by the parity cell).
+- ★ `SharesShapeWith` ignores `WinFormsEnumType` (the TextAlign pair);
+- ★ `Mergeable` dropped from the comparer (a flipped catalog row survives — must be killed by the parity cell);
+- the dump always writes `true` (the parity row for an `Items` row goes red).
 
 RE-CHECK: `WinFormsCatalogParityTests.TheSnapshot_CoversEveryWinFormsKindInTheCatalog_AndTheForm`, `EveryOracleExemption_StillSuppressesAFinding`, the README's "When to regenerate".
 
@@ -320,7 +395,10 @@ Files:
 - `ViewModels/Designer/FormPropertyGridViewModel.cs`:
   - `SelectedControls`, `IsMultiSelection`, `SetSelection`;
   - `Rebuild` branches: one control → today's path; several → merged rows;
-  - `AddIntrinsicRows`/`IntRow`/`GeometryComposite` take the change callback;
+  - `AddIntrinsicRows`/`IntRow`/`GeometryComposite` take the change callback, and `AddIntrinsicRows` RETURNS the
+    control's intrinsic rows (a list) instead of appending to `Rows`: the single path appends them, the multi path
+    builds them PER MEMBER (with `tally.Mark`) and merges by name. One builder, two consumers — never a second copy of
+    the geometry switch;
   - selector/header per D-6;
   - `RebuildEventRows` shows no rows in multi until Task 5, with the D-6 text.
 - `ViewModels/Designer/FormPropertyRow.cs`:
@@ -333,25 +411,36 @@ Files:
   `PropertyGrid.SetSelection(Selection.Controls)`, and nothing else in the class writes `PropertyGrid.SelectedControl`.
 
 Tests (new `FormPropertyGridMultiSelectTests`, fast, `MultiDoc`):
-- the row set for {btn, btn2}, {btn, lbl}, {btn, txt} (no `TextAlign`; no `Name`; `Location` present per D-2);
+- the row set for {btn, btn2}, {btn, lbl}, {btn, txt} (no `TextAlign`; no `Name`; **no `TabIndex`**; `Location` and
+  `Size` present per D-2);
 - catalog-driven: for EVERY pair of kinds in `FormControlCatalog.For(target)` × both targets, the offered names equal
   the D-2 intersection computed independently from the catalog (`SharesShapeWith` + `Mergeable` + geometry). The
   merged rows' order is the primary's;
 - equal values shown, a differing value blank + `IsMixed`, two absent rows of kinds with different defaults blank;
-- grey only when all absent; bold/Reset when any;
+- grey only when all absent; bold when ANY member is bold; Reset offered only when ALL members can reset (one set + one
+  absent: bold, no Reset — D-3);
 - a frozen member freezes the set with the member named;
 - a strip in the selection drops the geometry rows;
 - `SetSelection` rebuilds once (count `Rows` resets) and is a no-op for the same list;
 - the canvas echo (`SelectedControl = primary`) does not rebuild; `SelectedControl = other` means `[other]`;
 - selector blank in multi and a pick requests one control;
-- the single-selection grid is unchanged (the existing `FormPropertyGrid*` suites green, named in the gate).
+- the single-selection grid is unchanged (the existing `FormPropertyGrid*` fixtures green, run by `--filter` in this task).
 - `FormPropertyGridDisplayTests` twins: `TheObjectSelector_IsBlank_ForAMultiSelection`,
   `PickingAnObject_InAMultiSelection_RequestsOnlyThatControl`.
+- **The one-store invariant** (new, real view, `FormPropertyGridMultiSelectRealViewTests`, `TwoZooms`): after EVERY
+  canvas gesture — a click, a Ctrl+click adding, a Ctrl+click REMOVING THE PRIMARY, a Shift+click, a marquee, a click
+  on an already-selected member (D-13's promotion; the old collapse-on-release is gone), Esc, a click on empty canvas,
+  a right-click on a member and on a non-member, a Delete — `grid.SelectedControls` equals `Selection.Controls`
+  element-wise IN ORDER and `grid.SelectedControl` equals `Selection.Primary` (and the canvas's `SelectedControl`).
+  One data-driven test over the gesture list, so a new gesture is one row. The promotion row and the Delete row are
+  added by Tasks 4b and 6 (they change those gestures); every other row lands here.
+  Mutation: the host's `Selection.Changed` handler passes `Selection.Primary` only (the Ctrl+click rows go red); the
+  grid keeps a stale list when the primary is removed (the removing-the-primary row).
 
 Mutations:
-- intersection by name only (the TextAlign pair; the catalog sweep);
-- `Mergeable` ignored (an Items row offered, if M1 found one);
-- blank-when-mixed removed (shows the primary's value);
+- ★ intersection by name only (the TextAlign pair; the catalog sweep);
+- ★ blank-when-mixed removed (shows the primary's value);
+- `Mergeable` ignored (TabIndex offered);
 - grey when mixed;
 - `SetSelection` rebuilds twice;
 - the host still writes `SelectedControl` directly (a source test: `CodeEditorDocumentViewModel.cs` contains no
@@ -383,11 +472,15 @@ Tests (`FormPropertyGridMultiSelectTests` + `FormCompositeRowTests`, fast):
 - the Bold part on two different fonts keeps each family/size;
 - a mixed Int row is a text box and `""`/unparseable writes nothing;
 - a mixed Bool/Enum combo push of `""`/null writes nothing (VM half of M4);
-- `RefreshValues` after an `Arrange` → the merged Location shows the new value.
+- `RefreshValues` after an `Arrange` → the merged Location shows the new value;
+- **re-entrancy (D-9), through the real document view model:** an accepted merged edit raises `Edited` once with
+  `RefreshValues` running inside the revision bump, undo depth +1, no second write; a refused merged value leaves
+  `_editorEcho` handling to its posted step (`RefreshValues` skips that row) — the real-view half is Task 4 (i);
+- Reset with one member absent is not offered and a cleared editor writes nothing (D-3/D-5).
 
 Mutations:
-- **Edited raised per member** (`onChanged: RaiseEdited` on members): the count tests and undo depth 2;
-- pre-judge skipped (partial apply: the {lbl, txt} test);
+- ★ **Edited raised per member** (`onChanged: RaiseEdited` on members): the count tests and undo depth 2;
+- ★ pre-judge skipped (partial apply: the {lbl, txt} test);
 - merged NoOp judged on the primary only (the per-member test);
 - parts compose from the primary's whole (the Bold-part test: btn2's family lost);
 - the mixed-Int text-box switch removed (the 0 push clamps Widths: the real-view test in Task 4 too);
@@ -412,7 +505,12 @@ Tests (new partial `FormPropertyGridMultiSelectRealViewTests.cs` of the `FormPro
   written (no dirty flag, undo depth unchanged). Type `90` → all three are 90;
 - (f) the merged Font: expand, real-click the Bold part's combo → each control keeps its own family;
 - (g) Arrange (align lefts) while selected → the merged Location shows the new X without reselecting (D-9);
-- (h) selecting a mixed Bool/Enum row and clicking away writes nothing (M4's real half).
+- (h) selecting a mixed Bool/Enum row and clicking away writes nothing (M4's real half);
+- (i) re-entrancy through the editor echo: type a refused value (`Bogus`) into the merged BackColor and click away → the
+  real TextBox snaps back to blank, the pane names the reason, nothing written — with `RefreshValues` wired (D-9);
+- (j) un-mixed under focus (D-4): focus the mixed Width text box, then make the members equal by another route (Arrange
+  "make same width" through the command), then click away → the dying text box's LostFocus writes nothing (undo depth
+  unchanged; the document holds the arranged widths).
 
 Plus:
 - `FormPropertyGridViewTests.EveryBindingInTheGridView_ResolvesAgainstTheTypeInScope` (automatic; any new binding);
@@ -420,13 +518,38 @@ Plus:
   fits between divider and edge at two sizes.
 
 Mutations:
-- the Task-3 "Edited per member" mutant must also turn (b) red (undo depth 2, one Ctrl+Z restores only one);
+- ★ the Task-3 "Edited per member" mutant must also turn (b) red (undo depth 2, one Ctrl+Z restores only one);
+- ★ the mixed-editor `""` guard keyed on today's mixedness instead of the editor that pushed it ((j), below);
 - the selector not blanked ((a));
 - the text-box switch removed ((e): 0 pushed);
 - the popup guard skipping merged rows (the second drop-down in (d)). If it does not reproduce headless, record it
-  EQUIVALENT with the measurement, as slice 5 did.
+  EQUIVALENT with the measurement, as slice 5 did;
+- `RefreshValues` does not skip a row with `_editorEcho` set ((i): the box keeps `Bogus`);
+- (the ★ guard mutant above, in detail: (j)'s stale `""` is judged against the now-equal value → Reset verdict →
+  attributes removed).
 
 RE-CHECK: `FormPropertyGridRealViewTests` (all), `FormPropertyGridEditorRealViewTests`, `TheDocumentView_NoLongerCarriesTheGridsOwnBindings`.
+
+### Task 4b — Primary promotion (D-13)
+
+Files: `ViewModels/Designer/FormSelection.cs` (`Promote`); `Controls/FormCanvasControl.cs` (`ApplyClickSelection`'s
+already-selected branch `:829-834` calls `Promote`; `_collapseTo` and its release arm `:1271-1279` deleted).
+
+Tests:
+- `FormSelectionTests` (fast): `Promote` moves a selected member to the end and raises `Changed` ONCE; a no-op (already
+  primary, or not selected) raises nothing; membership and the others' order unchanged.
+- `FormCanvasMultiSelectTests`: select A, B, C (Ctrl+click); a plain click on A → the selection is still {B, C, A}, A
+  primary; a drag that starts on A moves all three (the existing drag test, green); Arrange "align lefts" now aligns to
+  A's left.
+- The one-store invariant gains its promotion row (the grid's primary follows, the selector stays blank).
+- Real view: after the promotion click, the double-click route (Task 5) sees the group — covered there.
+
+Mutations: ★ the branch left as `_collapseTo` (the still-three-selected assert); ★ `Promote` via Toggle+Add (two
+`Changed`: the count test); candidate: `Promote` a no-op (Arrange aligns to C).
+
+RE-CHECK: `FormCanvasMultiSelectTests` (all nine), `FormCanvasPixelPageTests`, `FormStripCanvasTests` (the second-click
+rename on an item reads `Selection.Controls.Count <= 1`, `:989` — unchanged for a single selection; a rename never arms
+in a multi-selection, as today).
 
 ### Task 5 — The Events tab for a multi-selection (plan 6.4, D-8)
 
@@ -436,7 +559,9 @@ Files:
 - `FormPropertyGridViewModel.RebuildEventRows` (the intersection through `WiredOn` per member);
 - `CodeEditorDocumentViewModel.RunHandlerGestureAsync`/`ActivateHandlerAsync`: plan for the primary, bind every owner,
   ONE `WriteDesignerEditBack`, the de-dupe key over all owners, no selection collapse (`:910`);
-- `FormHandlers.DescribeUnusableHandler` asked per owner (a loop at the call sites, not a signature change).
+- `FormHandlers.DescribeUnusableHandler` asked per owner (a loop at the call sites, not a signature change);
+- `FormPropertyGridViewModel.RefuseHandler` finds the row by `Owners` containing the owner (D-8);
+- `ActivateControlAsync`: a control in a multi-selection → the owners sharing its default event (D-8 canvas route).
 
 Tests:
 - `FormEventGridTests` (fast):
@@ -450,7 +575,12 @@ Tests:
   - a typed new name raises one request carrying both owners.
 - `FormHandlerGestureTests`: double-click with {btn, btn2} → ONE stub `btn2_Click` (primary = last selected),
   `<Bind Event="Click" Handler="btn2_Click"/>` on BOTH, ONE undo step, the selection still holds both; a primary already
-  bound to `AnyClick` → navigate, and btn gets `AnyClick` too.
+  bound to `AnyClick` → navigate, and btn gets `AnyClick` too. A host refusal of a typed name with {btn, btn2} reaches
+  the merged row (`RefuseHandler` by `Owners`): its pane says why, the cell reverts, nothing in the Error List.
+- **The canvas double-click route** (`FormCanvasDoubleClickTests` + the real view, `TwoZooms`): Ctrl+select btn and btn2,
+  then a real double-click on `btn` (the first press promotes it, D-13) → ONE stub `btn_Click`, bound on BOTH, ONE undo
+  step, the selection still {btn2, btn}. With a TrackBar also selected → the TrackBar gets no bind (no Click on its row),
+  the two Buttons do. A double-click on an UNSELECTED control → it alone is selected and wired, as today.
 - Real view (`FormPropertyGridEventsRealViewTests`, `TwoZooms`):
   - Ctrl+select two Buttons, click the bolt, double-click the empty Click value → the disk `.bas` gains ONE
     `Private Sub btn2_Click(sender As Object, e As EventArgs)`, both binds, the cell shows it after a click on the canvas
@@ -459,28 +589,38 @@ Tests:
   - a web pair: `btn2_Click(e As DomEvent)` above the region, both bound `click`.
 
 Mutations:
+- ★ bind on the primary only (both-bound asserts, Events tab AND canvas route);
+- ★ the selection collapses after the gesture (`:910` left as is);
 - rows from the primary only (a {Button, TrackBar} selection offers Click);
-- bind on the primary only (both-bound asserts);
 - one `Edited` per owner (undo depth);
-- the selection collapses after the gesture;
-- the de-dupe key on the primary only (two different multi requests: one dropped).
+- the de-dupe key on the primary only (two different multi requests: one dropped);
+- the canvas route binds the clicked control only (the btn2 bind missing).
 
 RE-CHECK: `FormEventGrid*`, `FormHandlerGestureTests`, `FormHandlerPlanTests`, the slice-5 real-view rows (single selection unchanged).
 
 ### Task 6 — Canvas gestures over the whole selection (D-11)
 
 Files:
-- `CodeEditorDocumentViewModel.DeleteControl` (multi → every selected control, one write);
-- `Controls/FormCanvasControl.cs` arrow/Shift+arrow/cell nudge over `SelectedSet` (`:421-426`) with one
-  `CommitGeometry`.
+- `CodeEditorDocumentViewModel.DeleteControl` (multi → every TOP-LEVEL selected control, one write);
+- `Controls/FormCanvasControl.cs` arrow/Shift+arrow/cell nudge over the TOP-LEVEL members of `SelectedSet`
+  (`:421-426`) that have geometry and are not docked, with one `CommitGeometry`;
+- the one shared helper `FormSelectionTopLevel` (D-11), used by both.
 
 Tests:
 - `FormCanvasKeyboardTests` / `FormCanvasMultiSelectTests`: Delete with three selected removes three; ONE
   `UndoDesignerEdit` restores three; arrow moves both by 1 and Ctrl+arrow by the grid step, parent-relative, one undo
   step; Shift+arrow resizes both; a web Grid page moves both one cell;
-- `FormTrayViewTests` unchanged (tray Delete removes the one component).
+- **ancestor/descendant, Delete:** a Panel and its child Button both selected (Ctrl+click) → Delete removes the Panel
+  (the Button with it), the document has neither, ONE undo step restores both with the Button still inside the Panel;
+- **ancestor/descendant, nudge:** the same selection, one Right arrow → the Panel's X +1 and the Button's
+  container-relative X UNCHANGED (it moved once, with its container);
+- **docked member skipped:** a MenuStrip (Ctrl+clicked) + a Button, one Down arrow → the Button's Y +1, the strip has no
+  geometry change and its `Dock` attribute is untouched;
+- `FormTrayViewTests` unchanged (tray Delete removes the one component);
+- the one-store invariant gains its Delete row.
 
-Mutations: Delete primary-only; nudge primary-only; one commit per control (undo depth).
+Mutations: ★ nudge without the top-level filter (the child's relative X moves too); ★ Delete primary-only (two of three
+remain); candidates: one commit per control (undo depth), docked members nudged.
 
 RE-CHECK: `FormCanvasKeyboardTests`, `FormCanvasMultiSelectTests`, `FormTrayViewTests`, `FormStripCanvasTests` (Delete on an item).
 
@@ -507,58 +647,75 @@ New Integration `FormMultiSelectAcceptanceTests` (Compiler folder; model `FormEv
   exists on BOTH routes.
 
 Mutations:
-- members written with per-member `Edited` — the design step asserts the undo depth first, so the run is not the only
-  witness;
-- bind on the primary only (one click does nothing: count 1);
-- the IDE route alone passing no forms (`BuildService`: web/IDE "no page" while CLI is green — the both-entry-points kill).
+- ★ bind on the primary only (one click does nothing: count 1, on both targets);
+- ★ the IDE route alone passing no forms (`BuildService`: web/IDE "no page" while CLI is green — the both-entry-points kill);
+- candidate: members written with per-member `Edited` (the design step asserts the undo depth first).
+
+Run: this fixture alone (`--filter FullyQualifiedName~FormMultiSelectAcceptanceTests`), plus
+`JsExecutionTierRosterTests` if the roster changed. No other Integration fixture in this task (cadence rule).
 
 ⚠ `JsExecutionTierRosterTests.RosterIsPinned`: +1 if the fixture runs node in-fixture (roster it, and re-read the pin
 at merge: it collides SILENTLY, MEMORY). The roster guard also sweeps an `Integration` fixture named `*ExecutionTests`;
 this one is `*AcceptanceTests`.
 
-### Task 8 — Slice gate, records, mutation ledger
+### Task 8 — Records and mutation ledger (no test run)
 
-- Execution notes per task in §6. Each records: base SHA, deviations, red evidence, RE-CHECK results, the mutation table.
+- Execution notes per task in §6. Each records: base SHA, deviations, red evidence, the filtered fixtures run, the
+  mutation table.
 - `docs/form-designer-followups.md` §44: D-12's deferred list, plus anything found.
-- The slice gate: §5. `dotnet clean` (Shell) first.
+- No gate here. The slice's ONE gate runs in Task 9, on the merged tree (cadence rule; the slice gate and the
+  programme's Closing are the same run, so nothing big runs twice).
 
 ### Task 9 — Closing the property-grid programme (plan "## Closing (after slice 6)", made concrete)
 
-1. **Records.**
+⛔ **Order (coordinator ruling 1, slice-4 lesson).** A trial merge taken before the LAST commit does not count, and
+HANDOFF's NEWEST section conflicts on every merge. So: commit the records and the IDE drop FIRST, then do the real
+merge check, then run the gate ON THE MERGED TREE. ⛔ **No full suite** (owner instruction 2026-10-05: no full test suite
+after the fast subset has passed, not even here). The gate is step 3.
+
+1. **Records + IDE drop — commit these FIRST** (one commit, staged by name):
    - `docs/HANDOFF.md` NEWEST section: slice 6 plus "the property-grid programme is COMPLETE". It names where each
      slice's record lives (slice 2 `2026-09-26-…-slice2-preflight.md`, slice 3 `2026-09-29-…`, slice 4 `2026-10-04-…`,
-     slice 5 `2026-10-04-…-slice5-…`, slice 6 this file) and the gates.
+     slice 5 `2026-10-04-…-slice5-…`, slice 6 this file), and says the gate numbers are in THIS file's §6. ⛔ HANDOFF is
+     not touched again after this commit: the gate numbers (step 3) go into §6 of this pre-flight — a file only this
+     branch edits, so that later commit cannot conflict and the merge check of step 2 stays valid — and into the PR body.
    - The parent plan's slice-6 heading gets the "EXPANDED AND EXECUTED" banner, as slice 3's has (`:5985-5986`).
+   - **IDE drop** (Windows): `dotnet clean` (Shell), Release build, `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E`,
+     never `/MIR`. Confirm `IDE\lib\js\dom-core.bli` is present and byte-identical (LOAD-BEARING). The owner runs from
+     `VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`.
    - The auto-memory line for the programme is updated by the coordinator (memory does not travel; HANDOFF is the record).
-   - ⚠ HANDOFF NEWEST sections conflict on EVERY merge (slice-4 lesson): write this LAST, after the trial merge.
-2. **IDE drop** (Windows): `robocopy VisualGameStudio.Shell\bin\Release\net8.0 IDE /E`, never `/MIR`. Confirm
-   `IDE\lib\js\dom-core.bli` is present and byte-identical (LOAD-BEARING). Run from
-   `VisualGameStudio.Shell\bin\Release\net8.0\VisualGameStudio.exe`.
-3. **FULL suite** (`dotnet test VisualGameStudio.Tests/VisualGameStudio.Tests.csproj -c Release`, no filter, `--blame`,
-   both streams to a file, clean Release build; about 6 h on this machine):
+2. **Real merge check, after that commit:** `git fetch origin` (both directions), then
+   `git worktree add --detach <dir> <branch HEAD sha>`, `git merge origin/master` in it, and read the result (never
+   `git merge-tree`). Expect conflicts:
+   - `FormPropertyGridViewModel.cs`/`FormPropertyRow.cs` (piece 2 if it lands first);
+   - `winforms-metadata.json` (any regeneration);
+   - `JsExecutionTierRosterTests` (the pin — collides SILENTLY: read `RosterIsPinned`);
+   - HANDOFF NEWEST.
+
+   A conflict is resolved on the BRANCH (a merge commit of `origin/master`), never only in the scratch worktree, and
+   step 2 is repeated on the new HEAD.
+3. **The gate — ON THE MERGED TREE** (the detached worktree, clean Release build, both streams captured to a file):
+   - **Fast subset** (`--filter "TestCategory!=Integration"`) ONCE;
+   - **the property-grid Integration fixtures** ONCE: every `Form*` and `WinFormsCatalog*` Integration fixture
+     (`--filter "TestCategory=Integration&(FullyQualifiedName~.Form|FullyQualifiedName~WinFormsCatalog)"`, which includes
+     the new `FormMultiSelectAcceptanceTests` and §5's named set), plus `WebMainStartupTests`,
+     `JavaScriptProjectBuildTests`, `BuildServicePipelineTests`, `JsExecutionTierRosterTests`.
    - Compare **sorted failure NAMES**, never counts, against master's own. The known list at this base:
      - the machine rows `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`,
        `Emit_ReplacesAScriptThatAnotherHandleHasMapped`, `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`
        (intermittent), `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`, `SearchSnippets_EmptyQuery_ReturnsAll`,
        `SearchSnippets_WhitespaceQuery_ReturnsAll`, `ReadingAnMvidTakesNoLockOnTheFile`;
-     - the culture row `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` ("∞" vs "Infinity");
-     - the flaky `NonEx_variants_marshal_and_are_screen_size_dependent`;
-     - the inherited master-alone rows of the `758f1e0d` full run (HANDOFF "Failing on Windows on MASTER ALONE", 14
-       names, `:1104-1114`), as far as they still fail;
-     - **#134's C++ Release-pipeline rows that need MSVC** (HANDOFF `:98` "Windows still owes the MSVC leg":
-       `CppProjectOptimizerPipelineRouteTests` `Cli_*`/`Ide_*`, `CppReleaseProjectExecutionTests`). They are NOT
-       measured on Windows yet, so any of them failing is A/B'd, never assumed inherited.
-   - Any name not on that list: re-run alone (`--no-build --filter`), then A/B on a `git worktree add --detach` of
-     `origin/master` (never `git merge-tree`). Only a failure that fails identically on master is inherited.
-4. **Real merge check:** `git worktree add --detach <dir> <branch sha>`, `git merge origin/master` in it, read the result,
-   build + the fast subset on the merged tree, remove the worktree (`git worktree prune` after "Filename too long").
-   Expect conflicts:
-   - `FormPropertyGridViewModel.cs`/`FormPropertyRow.cs` (piece 2 if it lands first);
-   - `winforms-metadata.json` (any regeneration);
-   - `JsExecutionTierRosterTests` (the pin);
-   - HANDOFF NEWEST.
-5. **Merge only with the owner.** Never push from this task without the coordinator.
-6. **The owner's click-through for the WHOLE programme**, in the IDE above. Each step names its slice.
+     - the culture row `CppDoubleFormattingTests.Expected_IsWhatDotNetPrints` ("∞" vs "Infinity"; matched by "Form" in
+       "Formatting") and `ModuleScopeInitializerTests.AFoldedComparison_ReachesEveryBackend_ModuloBooleanFormatting` (same
+       reason);
+     - the inverse-gated skip `Build_CppLanguageProject_NoToolchain_…`.
+   - **Any name not on that list:** re-run it alone (`--no-build --filter`), then A/B it on a
+     `git worktree add --detach` of `origin/master`. Only a failure that fails identically on master is inherited; anything
+     else blocks the merge.
+   - Remove both worktrees afterwards (`git worktree prune` after "Filename too long").
+   - The gate numbers (base = the merged tree's sha) go into §6 of this file and the PR body (step 1), never HANDOFF.
+4. **Merge only with the owner.** Never push from this task without the coordinator.
+5. **The owner's click-through for the WHOLE programme**, in the IDE above. Each step names its slice.
 
    Slice 2 — the grid:
    1. Select a Button: categories with +/− headers, Categorized ⇄ A-Z, search "back" filters to BackColor; the
@@ -597,28 +754,40 @@ this one is `*AcceptanceTests`.
 
    Slice 6 — multi-select:
 
-   13. Click `button1`, Ctrl+click `button2`: the object selector goes blank; Name disappears; Location, Size, Text,
-       BackColor, Font… remain; a property that differs shows blank.
+   13. Click `button1`, Ctrl+click `button2`: the object selector goes blank; Name and TabIndex disappear; Location,
+       Size, Text, BackColor, Font… remain; a property that differs shows blank. Click `button1` again (no modifier):
+       both stay selected and `button1` becomes the primary (align-lefts now lines up on `button1`).
    14. Type `Go` into Text: both change; ONE Ctrl+Z restores both.
    15. Ctrl+click a Label too: BackColor → Web → Red colours all three; Font → Bold keeps each control's own family;
        Width `90` sizes all three; a blank Width box left without typing changes nothing.
    16. A Button + a TextBox: no TextAlign row (their alignments are different types).
    17. Set Location X to `96` on three controls: their left edges line up; align-lefts from the toolbar and the X row
        follows without reselecting.
-   18. Events with two Buttons selected: double-click Click → ONE `button2_Click` (the last one clicked), both wired;
+   18. Events with two Buttons selected: double-click Click → ONE handler named after the PRIMARY — the button you
+       Ctrl+clicked last, or the one you last clicked inside the selection (step 13) — e.g. `button2_Click`, both wired;
        F5, both buttons run it; clear the cell → both unwired, the Sub stays; Ctrl+Z restores both.
+   18a. On the canvas, with both Buttons selected, double-click `button1`: ONE `button1_Click`, wired on both, and both
+       stay selected. Add a TrackBar to the selection and repeat on a fresh form: the TrackBar is not wired (it has no
+       Click).
    19. Delete with three selected removes all three; Ctrl+Z brings all three back. Arrow keys move the group together.
+       Select a Panel AND a Button inside it: an arrow moves the Panel and the Button rides along once; Delete removes
+       both, one Ctrl+Z restores both, the Button still inside. A MenuStrip in the selection stays docked when the arrows
+       move the rest.
    20. A web form: steps 13–15 and 18 again; open the page, both elements styled, both clicks run the handler.
 
-## 5. Gate for the slice (Task 8)
+## 5. Gate for the slice (run ONCE, in Task 9 step 3, on the MERGED tree — cadence rule)
+
+There is no separate slice gate and no full suite: Task 9 step 3 is the one gate for both the slice and the programme
+(owner instructions 2026-10-05). What it must show:
 
 - **Fast subset** (`--filter "TestCategory!=Integration"`, Release, both streams captured): the **sorted failure NAMES**
-  equal Task 0's, base SHA stated. Known machine rows only: `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
+  are on the known list (slice 5's gate on master's code, `2813205d`), base SHA = the merged tree. Known machine rows only: `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`,
   `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`, `Emit_ReplacesAScriptThatAnotherHandleHasMapped`,
   `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind` (intermittent), `SearchSnippets_EmptyQuery_ReturnsAll`,
   `SearchSnippets_WhitespaceQuery_ReturnsAll`, `ReadingAnMvidTakesNoLockOnTheFile`. Re-run named rows with
   `--no-build --filter`, because a passing test prints nothing.
-- **Named Integration set**, 0 unexpected skips on Windows:
+- **The property-grid Integration fixtures** (every `Form*`/`WinFormsCatalog*` Integration fixture, Task 9 step 3's
+  filter), 0 unexpected skips on Windows; at least these must appear in the run:
   - new: `FormMultiSelectAcceptanceTests`;
   - slice 5's 14 classes: `WinFormsCatalogSweepTests`, `FormEventWebRunTests`, `FormEventAcceptanceTests`,
     `FormDesignerAcceptanceTests`, `FormMenuAcceptanceTests`, `FormComponentAcceptanceTests`, `FormBuildEmissionTests`,
@@ -628,7 +797,8 @@ this one is `*AcceptanceTests`.
   ⚠ The inverse-gated `Build_CppLanguageProject_NoToolchain_…` skip is expected. ⚠ JS web-build rows'
   `ERROR_USER_MAPPED_FILE`: compare by NAME. ⚠ A filter term matching "Form" also matches `…Formatting` (the culture
   row): name it, don't count it.
-- Then Task 9 (the programme's Closing): IDE drop, FULL suite, real merge check, records, click-through.
+- A name not on the known list: re-run alone, then A/B on a detached `origin/master` worktree. Only identical-on-master
+  is inherited.
 
 ## 6. Execution notes
 
@@ -648,7 +818,9 @@ table. A decision a measurement re-decided is recorded here with the measurement
 | `FormDesignerLayoutRealViewTests.EveryRowsEditor_Fits…` `:265` | the merged rows' editors | 4 |
 | `FormPropertyGridRealViewTests.SelectOnCanvas` `:273-278` (asserts `GridVm.SelectedControl`) | still the primary (D-1) | 2, 4 |
 | `FormEventGridTests`, `FormHandlerGestureTests`, `FormHandlerPlanTests`, `FormPropertyGridEventsRealViewTests` | `FormEventRow.Owners`, the host's owner list, no selection collapse | 5 |
-| `FormCanvasKeyboardTests`, `FormTrayViewTests`, `FormStripCanvasTests` | Delete/nudge over the set; tray Delete single | 6 |
+| `FormCanvasKeyboardTests`, `FormTrayViewTests`, `FormStripCanvasTests` | Delete/nudge over the TOP-LEVEL set, docked skipped; tray Delete single | 6 |
+| `FormCanvasMultiSelectTests` (all nine), `FormSelectionTests` | D-13: promotion replaces the collapse-on-release (no existing test pinned the collapse) | 4b |
+| `FormCanvasDoubleClickTests` | the canvas double-click on a member of a multi-selection (D-8) | 5 |
 | `JsExecutionTierRosterTests.RosterIsPinned` | +1 if Task 7 runs node in-fixture | 7 |
 
 ## 8. Plan-text errors found (each corrected above)
@@ -678,3 +850,26 @@ table. A decision a measurement re-decided is recorded here with the measurement
     also stale).
 12. Not in the plan: a mixed Int row cannot be shown by the NumericUpDown (`int IntValue`; `ITypedValueRow` is a Core
     interface), so it becomes a text box (D-4).
+13. Not in the plan: clicking an already-selected member only arms a collapse-on-release (`FormCanvasControl.cs:829-834`,
+    `:1271-1279`). VS promotes it to primary and keeps the group; the collapse would also break a double-click on a
+    member before the double-tap arrives (D-13). Nothing tested the collapse.
+14. Not in the plan: Ctrl+click can select a container AND its child; Delete/nudge over both would double-move the child
+    (D-11's top-level rule).
+
+## 9. Plan review of `086096a4` — dispositions (coordinator rulings + two owner instructions, 2026-10-05)
+
+| # | Item | Disposition |
+|---|---|---|
+| 1 | Task 9 order: records + IDE drop first, then merge check, then the gate on the merged tree | Task 9 rewritten in that order; HANDOFF written once (step 1), gate numbers go to §6/PR body so the post-gate commit cannot conflict |
+| 2 | Regenerate the oracle only at the same runtime; diff must be ONLY added `mergeable` keys; TabIndex `[MergableProperty(false)]` | Task 1 stop-rule added; M1 expects TabIndex false; D-2 rule 3 drops TabIndex; Task 1 and Task 2 tests expect it; the real spelling "Mergable" noted |
+| 3 | Canvas double-click on a member: one handler after the clicked/primary control, wire all sharing the event | D-8 canvas route (SelectForGesture keeps the group, ActivateControl passes the sharing owners, `:910` no collapse, a member without the event left unbound); tested in Task 5 + click-through 18a |
+| 4 | Primary promotion | D-13 + new Task 4b (`FormSelection.Promote`, ApplyClickSelection `:829-834`); collapse-on-release REMOVED (VS; needed by item 3); click-through 13/18 reworded |
+| 5 | D-11 ancestor/descendant + docked | D-11 extended (`FormSelectionTopLevel`, docked skipped via `FormDockLayout.EdgeOf`); Task 6 tests for each (Delete, nudge, docked) |
+| m1 | D-3 Reset/bold = VS | Adopted: bold ANY, Reset ALL (`CanResetValue` all); recorded with the consequence (bold, no Reset); Task 2/3 tests |
+| m2 | D-9 re-entrancy through the editor echo path | D-9 rules (notify only, skip a row with `_editorEcho`); Task 3 VM test + Task 4 (i) real view |
+| m3 | Mixed Int un-mixed while focused | D-4 rule; Task 4 (j) real view + its ★ mutation |
+| m4 | RefuseHandler by Owners | D-8 bullet; Task 5 file + test |
+| m5 | AddIntrinsicRows returns rows per member | Task 2 file list (one builder, two consumers) |
+| m6 | One-store invariant after every canvas gesture | Task 2 data-driven real-view test; promotion and Delete rows added in Tasks 4b and 6 (the collapse-on-release row is gone with D-13) |
+| O1 | Owner: test cadence | §4 preamble: per task only the touched fixtures + 1–2 ★ mutations; Task 0 baseline run dropped; ONE gate |
+| O2 | Owner: no full suite, not even in Task 9 | Full-suite step removed; Task 9 step 3 = fast subset + property-grid Integration fixtures on the merged tree, names vs master, A/B any new name |
