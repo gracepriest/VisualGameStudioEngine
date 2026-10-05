@@ -323,7 +323,8 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private void SelectInDesigner(BasicLang.Forms.FormControl? control)
     {
         Selection.Set(control);
-        PropertyGrid.SelectedControl = control;
+        // Slice 6 D-1: the grid takes the store's whole SET (primary last), never a control of its own.
+        PropertyGrid.SetSelection(Selection.Controls);
     }
 
     /// <summary>
@@ -1411,7 +1412,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // SelectInDesigner for the sequence that deleted the wrong component).
         Selection.Changed += (_, _) =>
         {
-            PropertyGrid.SelectedControl = Selection.Primary;
+            // ⛔ Slice 6 D-1: the WHOLE set (primary last). The grid's SelectedControl becomes the primary inside it; the
+            // canvas's TwoWay echo of that primary is then a no-op (measured, pre-flight M3: one rebuild per Ctrl+click).
+            PropertyGrid.SetSelection(Selection.Controls);
 
             // The Type Here leave-rule: selecting anything outside the editor's host — including
             // nothing, which is what every delete leaves — closes the editor. Selecting the host's

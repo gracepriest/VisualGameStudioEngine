@@ -1,5 +1,6 @@
 using BasicLang.Forms;
 using NUnit.Framework;
+using VisualGameStudio.Shell.ViewModels.Designer;
 
 namespace VisualGameStudio.Tests.Compiler;
 
@@ -105,7 +106,16 @@ public class FormMultiSelectCatalogTests
         Assert.That(seen, Is.Not.Empty, $"precondition: some positioned kind has {property}");
         Assert.That(seen.Where(x => x.Entry!.Mergeable != mergeable).Select(x => $"{x.Kind}.{property}={x.Entry!.Mergeable}"),
             Is.Empty, $"{property} must measure mergeable={mergeable} on every positioned kind (D-2 rule 3)");
+
+        // ⛔ …and the GRID's decision is that measurement (Task 2): if one moved without the other, this fails.
+        Assert.That(FormPropertyGridViewModel.OffersIntrinsicForMultiSelection(property), Is.EqualTo(mergeable),
+            $"the grid offers {property} for a multi-selection iff WinForms merges it");
     }
+
+    [Test]
+    public void TheGrid_NeverOffersName_ForAMultiSelection() =>
+        Assert.That(FormPropertyGridViewModel.OffersIntrinsicForMultiSelection("Name"), Is.False,
+            "VS hides (Name) for a multi-selection; a shared id is meaningless");
 
     // ==================================================================
     // Rule 1 — SharesShapeWith

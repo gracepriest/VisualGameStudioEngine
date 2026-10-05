@@ -50,8 +50,61 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     public event EventHandler<FormControl?>? SelectionRequested;
 
+    /// <summary>
+    /// The PRIMARY of the selection the grid shows (the control selected last), or null for the Form.
+    ///
+    /// <para>⛔⛔ Slice 6 D-1: it stays the primary in a multi-selection, never null. The canvas's <c>SelectedControl</c> is
+    /// TwoWay-bound to this (<c>CodeEditorDocumentView.axaml</c>) and reads it for its handles, the open drop-down, hit-testing
+    /// and rename arming — a null meaning "several" would drop all four. The whole set is <see cref="SelectedControls"/>.
+    /// Setting this to a control that is not the current primary (the canvas's echo of a single click, a test) means
+    /// "exactly that one control"; the host uses <see cref="SetSelection"/>.</para>
+    /// </summary>
     [ObservableProperty]
     private FormControl? _selectedControl;
+
+    /// <summary>The selection the rows were built for, in selection order (primary LAST) — a copy, never the store's list.</summary>
+    private IReadOnlyList<FormControl> _selectedControls = Array.Empty<FormControl>();
+
+    /// <summary>Set while <see cref="SetSelection"/> moves <see cref="SelectedControl"/>: the rebuild is its, once.</summary>
+    private bool _settingSelection;
+
+    /// <summary>
+    /// What the grid shows (slice 6 D-1): the selection in selection order, the primary LAST — as
+    /// <c>FormSelection.Controls</c>. Empty for the Form.
+    /// </summary>
+    public IReadOnlyList<FormControl> SelectedControls => _selectedControls;
+
+    /// <summary>Two or more controls: the rows are the MERGED rows (D-2/D-3).</summary>
+    public bool IsMultiSelection => _selectedControls.Count > 1;
+
+    /// <summary>
+    /// ⛔ THE host's one entry point (slice 6 D-1): shows <paramref name="controls"/> — copied, so a later change to the
+    /// store's own list is not silently seen — with <see cref="SelectedControl"/> = the last, and rebuilds EXACTLY ONCE.
+    /// A no-op when the list is element-wise reference-equal to the one the rows were built for. ⚠ The grid never
+    /// selects: the host calls this from its ONE selection store's <c>Changed</c> (and <c>SelectInDesigner</c>).
+    /// </summary>
+    public void SetSelection(IReadOnlyList<FormControl> controls)
+    {
+        ArgumentNullException.ThrowIfNull(controls);
+        if (controls.Count == _selectedControls.Count &&
+            controls.Zip(_selectedControls).All(pair => ReferenceEquals(pair.First, pair.Second)))
+        {
+            return;
+        }
+
+        _selectedControls = controls.ToList();
+        _settingSelection = true;
+        try
+        {
+            SelectedControl = _selectedControls.Count == 0 ? null : _selectedControls[^1];
+        }
+        finally
+        {
+            _settingSelection = false;
+        }
+
+        Rebuild();
+    }
 
     /// <summary>Every row for the current selection, in catalog order. Empty when there is no document.</summary>
     public ObservableCollection<FormPropertyRow> Rows { get; } = new();
@@ -239,7 +292,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
         EventRows.Clear();
         _refusedEventRow = null;
 
-        if (_file?.Model is not { } form)
+        // ⚠ Slice 6 Task 2: a multi-selection shows no event rows until Task 5 brings the intersection (D-8); the pane says
+        // so (DescriptionBody). Never the primary's rows alone — a bind there would wire one control of several.
+        if (_file?.Model is not { } form || IsMultiSelection)
         {
             return;
         }
@@ -287,15 +342,15 @@ public partial class FormPropertyGridViewModel : ObservableObject
 
     /// <summary>
     /// The selected control's id — or the FORM's name when nothing is selected, because that is
-    /// what the grid is then showing.
+    /// what the grid is then showing. Empty for a multi-selection (slice 6 D-6), as VS's header is.
     /// </summary>
-    public string Header => SelectedControl?.Id ?? _file?.Model.Name ?? "No selection";
+    public string Header => IsMultiSelection ? string.Empty : SelectedControl?.Id ?? _file?.Model.Name ?? "No selection";
 
     /// <summary>
     /// The control's KIND beside its id, the way VS's property window shows "button1  Button".
-    /// Empty with no selection, so the header does not read "No selection No selection".
+    /// Empty with no selection, so the header does not read "No selection No selection" — and for a multi-selection.
     /// </summary>
-    public string HeaderKind => SelectedControl?.Kind
+    public string HeaderKind => IsMultiSelection ? string.Empty : SelectedControl?.Kind
         ?? (_file != null ? _file.Model.RootElementName : string.Empty);
 
     /// <summary>True when there is nothing to show, so the view can say so rather than look broken.</summary>
@@ -361,6 +416,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
                        ?? SelectedEventRow?.Description
                        ?? (EventRows.Count > 0
                            ? "Select an event to see when it is raised. Double-click it to write its handler."
+                           // Slice 6 D-6: a multi-selection whose Events intersection is empty.
+                           : IsMultiSelection
+                               ? "The selected controls share no events on " +
+                                 $"{(_file?.Model.Target == FormTarget.Web ? "the web" : "WinForms")}."
                            : SelectedControl != null
                                ? $"'{SelectedControl.Id}' ({SelectedControl.Kind}) has no events on " +
                                  $"{(_file?.Model.Target == FormTarget.Web ? "the web" : "WinForms")}."
@@ -486,7 +545,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// </summary>
     partial void OnSelectedObjectChanged(FormObjectItem? value)
     {
-        if (_syncingObjects || value == null || ReferenceEquals(value.Control, SelectedControl))
+        // ⚠ Slice 6 D-6: in a multi-selection a pick of ANY object — the primary included — requests that one control
+        // (the store collapses the set, as VS does).
+        if (_syncingObjects || value == null || (!IsMultiSelection && ReferenceEquals(value.Control, SelectedControl)))
         {
             return;
         }
@@ -517,7 +578,20 @@ public partial class FormPropertyGridViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedControlChanged(FormControl? value) => Rebuild();
+    /// <summary>
+    /// A direct set (the canvas's TwoWay echo of a single click, <see cref="Load"/>, a test) means exactly that one control
+    /// — or nothing. <see cref="SetSelection"/>'s own move rebuilds once, after it.
+    /// </summary>
+    partial void OnSelectedControlChanged(FormControl? value)
+    {
+        if (_settingSelection)
+        {
+            return;
+        }
+
+        _selectedControls = value == null ? Array.Empty<FormControl>() : new[] { value };
+        Rebuild();
+    }
 
     /// <summary>
     /// The rows VS shows for EVERY control, which this grid had none of: its name, where it is, how
@@ -546,9 +620,23 @@ public partial class FormPropertyGridViewModel : ObservableObject
     private const string CellDescription = "The page grid cell the control occupies (0-based).";
     private const string TabIndexDescription = "Determines the index in the TAB order that this control will occupy.";
 
-    private void AddIntrinsicRows(FormControl control)
+    /// <summary>
+    /// Slice 6 D-2 rule 3: whether an intrinsic row is offered for a MULTI-selection. Name never (VS hides <c>(Name)</c>; a
+    /// shared id is meaningless) and TabIndex never (<c>Control.TabIndex</c> is <c>[MergableProperty(false)]</c>, measured —
+    /// <c>FormMultiSelectCatalogTests</c> pins this answer against the oracle). The geometry rows follow the members'
+    /// geometry, which the intersection already requires.
+    /// </summary>
+    public static bool OffersIntrinsicForMultiSelection(string name) => name is not ("Name" or "TabIndex");
+
+    /// <summary>
+    /// The intrinsic rows of <paramref name="control"/>, every one built with <paramref name="changed"/> as its change
+    /// callback — the grid's <c>RaiseEdited</c> for a single selection, a member tally's <c>Mark</c> for a multi-selection
+    /// (slice 6 D-5). ⛔ ONE builder, two consumers: the multi path never carries a second copy of the geometry switch.
+    /// </summary>
+    private List<FormPropertyRow> IntrinsicRows(FormControl control, Action changed)
     {
-        void Changed() => RaiseEdited();
+        var rows = new List<FormPropertyRow>();
+        void Changed() => changed();
 
         // ⛔ A structural integer the reader could not read (X="5&#9;", a U+2212 minus) is D9 Degraded (slice 3
         // backlog (1)): the row is FROZEN with the reader's reason and shows the document's own text — never the 0 the
@@ -565,7 +653,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 : FormPropertyGridViewModel.IntRow(name, read, write, changed, category, description);
         }
 
-        Rows.Add(new FormPropertyRow(
+        rows.Add(new FormPropertyRow(
             "Name", FormPropertyType.String,
             () => control.Id,
             write: null,
@@ -583,14 +671,14 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 // ⛔ Spec §3 / §2.4: Location and Size are COMPOSITE rows OVER the canvas's own geometry — never a second
                 // copy of it. The parent reads/writes "x, y" (VS's PointConverter/SizeConverter text); its parts are
                 // the X/Y and Width/Height rows the grid always had.
-                Rows.Add(GeometryComposite("Location", LocationDescription,
+                rows.Add(GeometryComposite("Location", LocationDescription,
                     IntRow("X", () => pixel.X, v => pixel.X = v, Changed, "Layout", LocationDescription),
                     IntRow("Y", () => pixel.Y, v => pixel.Y = v, Changed, "Layout", LocationDescription),
-                    (x, y) => { pixel.X = x; pixel.Y = y; }));
-                Rows.Add(GeometryComposite("Size", SizeDescription,
+                    (x, y) => { pixel.X = x; pixel.Y = y; }, Changed));
+                rows.Add(GeometryComposite("Size", SizeDescription,
                     IntRow("Width", () => pixel.Width, v => pixel.Width = Math.Max(1, v), Changed, "Layout", SizeDescription),
                     IntRow("Height", () => pixel.Height, v => pixel.Height = Math.Max(1, v), Changed, "Layout", SizeDescription),
-                    (w, h) => { pixel.Width = Math.Max(1, w); pixel.Height = Math.Max(1, h); }));
+                    (w, h) => { pixel.Width = Math.Max(1, w); pixel.Height = Math.Max(1, h); }, Changed));
 
                 // ⛔⛔ PIXEL GEOMETRY ONLY, and that is D3 rather than an oversight: Anchor and Dock
                 // are the PIXEL vocabulary — a .blform's, and a Canvas page's (spec 2026-09-27) — and
@@ -601,7 +689,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 //
                 // ⚠ Reached only through this arm, so the web grid cannot show them by accident:
                 // there is no `if (target == Web) hide` to forget.
-                Rows.Add(new FormPropertyRow(
+                rows.Add(new FormPropertyRow(
                     "Anchor", FormPropertyType.String,
                     () => pixel.Anchor ?? "",
                     Changing(() => pixel.Anchor, v => pixel.Anchor = string.IsNullOrWhiteSpace(v) ? null : v),
@@ -610,7 +698,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     category: "Layout",
                     description: AnchorDescription));
 
-                Rows.Add(new FormPropertyRow(
+                rows.Add(new FormPropertyRow(
                     "Dock", FormPropertyType.String,
                     () => pixel.Dock ?? "",
                     Changing(() => pixel.Dock, v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v),
@@ -621,8 +709,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 break;
 
             case GridGeometry grid:
-                Rows.Add(IntRow("Col", () => grid.Col, v => grid.Col = Math.Max(0, v), Changed, "Layout", CellDescription));
-                Rows.Add(IntRow("Row", () => grid.Row, v => grid.Row = Math.Max(0, v), Changed, "Layout", CellDescription));
+                rows.Add(IntRow("Col", () => grid.Col, v => grid.Col = Math.Max(0, v), Changed, "Layout", CellDescription));
+                rows.Add(IntRow("Row", () => grid.Row, v => grid.Row = Math.Max(0, v), Changed, "Layout", CellDescription));
                 break;
         }
 
@@ -639,10 +727,92 @@ public partial class FormPropertyGridViewModel : ObservableObject
         // needs one.
         if (control.Definition?.Place is null or FormPlace.Positioned)
         {
-            Rows.Add(IntRow(
+            rows.Add(IntRow(
                 "TabIndex", () => control.TabIndex, v => control.TabIndex = Math.Max(0, v), Changed,
                 "Behavior", TabIndexDescription));
         }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The catalog rows of <paramref name="control"/> on the document's target, in catalog order, each built with
+    /// <paramref name="changed"/> (see <see cref="IntrinsicRows"/>) and given its composite parts.
+    /// </summary>
+    private List<FormPropertyRow> CatalogRows(FormControl control, Action changed)
+    {
+        var rows = new List<FormPropertyRow>();
+        var target = _file?.Model.Target ?? FormTarget.Web;
+
+        foreach (var property in control.Definition?.Properties ?? Enumerable.Empty<FormPropertyDef>())
+        {
+            // ⛔ A property the target does not have is not offered. WinForms RadioButton has
+            // no GroupName and WinForms ListBox no MultiSelect — measured, by csc. Offering
+            // them would let the user set a value that silently never reaches the generated
+            // code, which is the designer/runtime divergence D9 exists to prevent.
+            if (!property.AppliesTo(target))
+            {
+                continue;
+            }
+
+            var row = new FormPropertyRow(
+                control,
+                property,
+                target,
+                _file?.DegradedReason(control.Id, property.Name),
+                changed);
+            // A part of an ambient row starts from what this control INHERITS (code review I1).
+            var model = _file?.Model;
+            var name = property.Name;
+            FormCompositeRows.Attach(row, model == null ? null : () => FormAmbient.Inherited(model, control, name));
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The rows a MULTI-selection offers (slice 6 D-2), merged (D-3), in the PRIMARY's order, intrinsic rows first.
+    ///
+    /// <para>A row is offered iff EVERY member has the same row: an intrinsic row by name (and
+    /// <see cref="OffersIntrinsicForMultiSelection"/> — never Name or TabIndex; the geometry rows exist only where the
+    /// member's geometry has them), a catalog row by <see cref="FormPropertyDef.SharesShapeWith"/>, mergeable on every
+    /// member (<see cref="FormPropertyDef.Mergeable"/>, VS's <c>[MergableProperty]</c>) and applying on the target. ⛔ No
+    /// hand list of hidden rows beside the catalog.</para>
+    ///
+    /// <para>⛔ Every member row is built with ONE tally's <see cref="FormEditTally.Mark"/> as its change callback, never
+    /// <see cref="RaiseEdited"/> — the merged row raises Edited ONCE per gesture (D-5).</para>
+    /// </summary>
+    private List<FormPropertyRow> MergedRows(IReadOnlyList<FormControl> controls)
+    {
+        var tally = new FormEditTally();
+        var perMember = controls
+            .Select(c => (Intrinsic: IntrinsicRows(c, tally.Mark), Catalog: CatalogRows(c, tally.Mark)))
+            .ToList();
+        var primary = perMember[^1];
+        var merged = new List<FormPropertyRow>();
+
+        foreach (var row in primary.Intrinsic.Where(r => OffersIntrinsicForMultiSelection(r.Name)))
+        {
+            var members = perMember.Select(m => m.Intrinsic.FirstOrDefault(r => r.Name == row.Name)).ToList();
+            if (members.All(m => m != null))
+            {
+                merged.Add(FormPropertyRow.Merged(members.Select(m => m!).ToList(), controls, tally, RaiseEdited));
+            }
+        }
+
+        foreach (var row in primary.Catalog.Where(r => r.Definition!.Mergeable))
+        {
+            var members = perMember
+                .Select(m => m.Catalog.FirstOrDefault(r => r.Definition!.Mergeable && r.Definition.SharesShapeWith(row.Definition!)))
+                .ToList();
+            if (members.All(m => m != null))
+            {
+                merged.Add(FormPropertyRow.Merged(members.Select(m => m!).ToList(), controls, tally, RaiseEdited));
+            }
+        }
+
+        return merged;
     }
 
     /// <summary>
@@ -650,8 +820,9 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// a part sets its own. ⚠ Frozen when either part is (a Degraded coordinate): the parent must not rewrite text the
     /// reader could not read.
     /// </summary>
-    private FormPropertyRow GeometryComposite(
-        string name, string description, FormPropertyRow first, FormPropertyRow second, Action<int, int> write)
+    private static FormPropertyRow GeometryComposite(
+        string name, string description, FormPropertyRow first, FormPropertyRow second, Action<int, int> write,
+        Action changed)
     {
         var frozen = first.FrozenReason ?? second.FrozenReason;
         var parent = new FormPropertyRow(
@@ -670,7 +841,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
                     write(a, b);
                     return !string.Equals(before, $"{first.DisplayValue}, {second.DisplayValue}", StringComparison.Ordinal);
                 },
-            RaiseEdited,
+            changed,
             frozen,
             category: "Layout",
             description: description);
@@ -849,38 +1020,21 @@ public partial class FormPropertyGridViewModel : ObservableObject
         Rows.Clear();
 
         var control = SelectedControl;
-        var definition = control?.Definition;
 
-        if (control != null)
+        if (IsMultiSelection)
         {
-            var target = _file?.Model.Target ?? FormTarget.Web;
-
+            // Slice 6: the rows the whole selection shares, merged (D-2/D-3).
+            foreach (var row in MergedRows(_selectedControls))
+            {
+                Rows.Add(row);
+            }
+        }
+        else if (control != null)
+        {
             // ⚠ A control whose kind the catalog does not know (null Definition) still has a name, a place
             // and a tab order: it shows those — never the FORM's rows, as though nothing were selected.
-            AddIntrinsicRows(control);
-
-            foreach (var property in definition?.Properties ?? Enumerable.Empty<FormPropertyDef>())
+            foreach (var row in IntrinsicRows(control, RaiseEdited).Concat(CatalogRows(control, RaiseEdited)))
             {
-
-                // ⛔ A property the target does not have is not offered. WinForms RadioButton has
-                // no GroupName and WinForms ListBox no MultiSelect — measured, by csc. Offering
-                // them would let the user set a value that silently never reaches the generated
-                // code, which is the designer/runtime divergence D9 exists to prevent.
-                if (!property.AppliesTo(target))
-                {
-                    continue;
-                }
-
-                var row = new FormPropertyRow(
-                    control,
-                    property,
-                    target,
-                    _file?.DegradedReason(control.Id, property.Name),
-                    RaiseEdited);
-                // A part of an ambient row starts from what this control INHERITS (code review I1).
-                var model = _file?.Model;
-                var name = property.Name;
-                FormCompositeRows.Attach(row, model == null ? null : () => FormAmbient.Inherited(model, control, name));
                 Rows.Add(row);
             }
         }
@@ -903,7 +1057,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         // carried, owner-titled text. Each new row reports its own.
         _refusedRow = null;
         _carriedRefusal = carry;
-        _shownOwner = Header;
+        // D-6: a carried refusal from a multi-selection is titled with every id ("btn, btn2.BackColor").
+        _shownOwner = IsMultiSelection ? string.Join(", ", _selectedControls.Select(c => c.Id)) : Header;
         foreach (var row in Rows)
         {
             row.PropertyChanged += OnRowPropertyChanged;
@@ -972,8 +1127,11 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 }
             }
 
-            // ⛔ The SAME item instance when nothing changed, so the store's own echo is a no-op here.
-            SelectedObject = Objects.FirstOrDefault(o => ReferenceEquals(o.Control, SelectedControl));
+            // ⛔ The SAME item instance when nothing changed, so the store's own echo is a no-op here. Blank for a
+            // multi-selection (slice 6 D-6, VS) — the null push is ignored by OnSelectedObjectChanged.
+            SelectedObject = IsMultiSelection
+                ? null
+                : Objects.FirstOrDefault(o => ReferenceEquals(o.Control, SelectedControl));
         }
         finally
         {

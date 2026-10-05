@@ -862,6 +862,45 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ `SharesShapeWith` ignores `WinFormsEnumType` | KILLED by `TwoEnumRows_WithTheSameMembers_ButDifferentEnumTypes_…`. ⚠ The catalog sweep alone does NOT kill it: every same-named enum pair in today's catalog also differs in members — so the synthetic case is the pin |
   | ★ Mergeable dropped from the comparer | KILLED by `TheInstrument_CatchesAMergeableDisagreement_AndAnExemptionCoversIt` |
 
+### Task 2 — the grid takes the set (base `a75b50f2`)
+
+- `FormPropertyGridViewModel`: `SelectedControls` (a COPY, primary last), `IsMultiSelection`, `SetSelection` (no-op for an
+  element-wise equal list; sets `SelectedControl` = primary under a guard; ONE rebuild). A direct `SelectedControl` set
+  means exactly that control (`[value]`/`[]`), so `Load` and the canvas echo keep their meaning. `AddIntrinsicRows` became
+  `IntrinsicRows(control, changed)` returning the list (one builder; `GeometryComposite` takes the callback); the catalog
+  loop became `CatalogRows(control, changed)`; the multi path `MergedRows` builds both PER MEMBER with one
+  `FormEditTally.Mark` and merges by D-2 (intrinsic by name + `OffersIntrinsicForMultiSelection` — never Name/TabIndex;
+  catalog by `SharesShapeWith` + `Mergeable` on every member), in the primary's order. Selector `null` in multi and a pick
+  of ANY object (the primary too) requests that one control; `Header`/`HeaderKind` `""`; a carried refusal is titled with
+  the comma-joined ids; the Events tab shows no rows in multi with "The selected controls share no events on WinForms."
+  (or "the web") until Task 5.
+- `FormPropertyRow`: the merged MODE (`Merged(members, owners, tally, onChanged)`; parts merged by index); `IsMixed`;
+  `DisplayValue`/`RawValue` shared-or-blank; `IsPresent` any; `IsDefaultShown` all-and-not-mixed; `IsBold` any;
+  `CanReset` all (VS's merged descriptor, D-3); a frozen member freezes the row and is named (`'btn2': …`).
+- Host: the `Selection.Changed` handler and `SelectInDesigner` call `PropertyGrid.SetSelection(Selection.Controls)`; the
+  class no longer assigns `PropertyGrid.SelectedControl` (pinned by a source test).
+- ⚠ **Deviations.** (1) `Merged` takes the members' `owners` as well as the plan's three parameters: a frozen member is
+  named here, and Task 3's all-or-nothing refusal names the refusing member (`'txt' (TextBox): …`) from the same list.
+  (2) Transitional until Task 3, as the plan asks: every merged row is frozen with `MultiEditNotYetReason` (no editor that
+  silently does nothing). Its `CanReset` already reads the members (so the D-3 rule is tested now), which means the Reset
+  menu item can be ENABLED on a merged row in this commit while `Reset()` does nothing for it — Task 3 makes it act.
+  (3) The plan's catalog-driven pair sweep is one test over a loop (Task 1's TestCaseSource lesson): 1,000+ pairs, both
+  targets, documents built with `FormCatalogShapes.Canonical`.
+- **Red** (API present, `Rebuild` still single-path): 15 of 54 — Name/TabIndex offered, TextAlign offered for
+  Button+TextBox, OK-vs-Hello showing `Hello`, selector `btn2`, header `btn2`, the primary's Events rows, the sweep
+  (`Label+Label: offered [Name,…,TabIndex,…]`), and both real-view tests (selector not blank; no merged rows). (One false
+  red on the way, a test bug: `Open(doc, …)` vs `Open(params ids)` overload resolution read `"btn"` as the document —
+  renamed `OpenDoc`.)
+- Green: `FormPropertyGridMultiSelectTests` (18), `FormPropertyGridDisplayTests` (incl. the two D-6 twins), the two
+  real-view tests (`AfterEveryCanvasGesture_…`, `ARealCtrlClick_…`, both zooms), `FormMultiSelectCatalogTests` — **66/66**.
+  RE-CHECK (`TestCategory!=Integration` and `FormPropertyGrid*`, `FormPropertyRowDefaultTests`, `FormEventGrid*`,
+  `FormSelectionTests`, `FormTrayViewTests`, `FormCompositeRowTests`) — **498/498**.
+- Mutations:
+  | Mutant | Result |
+  |---|---|
+  | ★ intersection by name only (`r.Name == row.Name` for `SharesShapeWith`) | KILLED: `AButtonAndATextBox_OfferNoTextAlign_…`, the pair sweep |
+  | ★ blank-when-mixed removed (`Shared` returns the primary's value) | KILLED: `AValueEveryMemberShows_…`, `TwoAbsentRows_…`, `AFrozenMember_…` |
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |
