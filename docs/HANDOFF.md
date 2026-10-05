@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #194 TESTED — a .NET class widens to its .NET base classes and interfaces (`SymbolTable.IsAssignableFrom` + `SemanticAnalyzer.WithNetWidening` + `NetTypeResolver.WidensByReference`; front end only)
+- **Tests (12):** `NetSubtypeWideningExecutionTests` (Integration, 7: 12 vbc-answered probes on C# x CLI / `-O` / `CompileProjectFiles`, a two-file build in both orders, the Exception base also on MSIL; in `NotJavaScriptExecution`, roster still 116) + `NetSubtypeWideningFrontEndTests` (fast, 5: the accepted widenings, vbc's refusals BC30512 / BC30311, a user type that shadows a .NET name). Mutants M1-M3 killed. ⚠ `TempExec.Emit`'s project leg does NOT arm .NET resolution (the CLI and the IDE's BuildService do), so widening is refused there; the fixture arms its own.
+- **Gates (Linux):** fast 0 failed / 12,680 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 12, `NetConversion` 36, `NetTypeResolver` 67, `NetStrictResolution` 24, `ModuleResolver` 8, `Coercion` 69, `LSP` 470, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): MSIL widening still fails at ilasm ("undefined class"; the `[mscorlib]` spelling is HELD, #283: it would turn refusals into silent wrong answers); `Console.Out` is typed Object (W08); user-type generic arguments and `IEnumerable(Of Object)` covariance stay refused; C++ `Dim ex As Exception` / `Dim e As IEnumerable(Of Integer)` fail in clang (already so).
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #192 TESTED — MSIL spells a Structure, an Enum and Date/DateTime as the value types they are (`MSILBackend.IsUserValueType`; `git log --grep '#192'`)
 - **Tests (11 new, 4 moved):** `MsilValueTypeExecutionTests` (Integration, 7: 17 vbc-answered probes in 6 groups on MSIL x CLI / `-O` / `CompileProjectFiles`; MSIL only, in the Msil namespace, so in neither the JS roster nor `NotJavaScriptExecution`) + `MsilValueTypeCodegenTests` (fast, 4: IL text, DateTime and Structure-write refusals). MOVED to the right answer: `MsilObjectBoxing` E05 (7) / E17 (Green), `DelegateMemberInvocation` G5 (inc 42), `InterfaceAccessorBatch` Q1 (7). Mutants m1-m3 killed.
 - **Gates (Linux):** fast 0 failed / 12,672 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 7 + 4, `MsilObjectBoxing` 99, `DelegateMemberInvocation` 52, `InterfaceAccessorBatch` 44, `MsilClassType` 33, `NothingIntoValueType` 11, `Enum` 102, `Structure` 37, `JsExecutionTierRoster` 5. Full suite NOT run; Windows owes the MSIL legs.
