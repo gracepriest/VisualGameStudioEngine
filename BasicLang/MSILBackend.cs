@@ -493,7 +493,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _typeMap["UShort"] = "uint16";
             _typeMap["UInteger"] = "uint32";
             _typeMap["ULong"] = "uint64";
-            _typeMap["Decimal"] = "valuetype [System.Runtime]System.Decimal";
+
+            // ⛔ The SAME constant MapTypeName answers with — see DecimalSpec. This entry is what
+            // MapType(TypeInfo) reads, so a Decimal local, parameter, field and return all spell
+            // it from here. It used to say `[System.Runtime]`, the only BCL reference in this file
+            // not spelled `[mscorlib]`, and it never reached ilasm intact anyway (task #129).
+            _typeMap["Decimal"] = DecimalSpec;
         }
 
         /// <summary>
@@ -706,7 +711,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var mapped = MapTypeName(trimmed);
 
             // MapTypeName passes an unknown name through SanitizeName, so anything that did not
-            // land on an IL keyword is a class reference and needs the `class` prefix.
+            // land on a complete IL spec (an IL keyword, or Decimal's `valuetype` spec) is a class
+            // reference and needs the `class` prefix.
             return IlPrimitives.Contains(mapped) ? mapped : "class " + mapped;
         }
 
@@ -1038,20 +1044,58 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 ["Dictionary"] = ("System.Collections.Generic.Dictionary", 2),
             };
 
-        /// <summary>The IL keywords <see cref="MapTypeName"/> can produce — anything else is a class.</summary>
+        /// <summary>
+        /// ⭐ <b>System.Decimal as an IL type SPEC (task #129)</b> — what a local, a parameter, a
+        /// field, a return and every method signature that mentions one must say.
+        ///
+        /// <para>Decimal is a BCL VALUE type with no IL keyword, so it is the one complete spec
+        /// <see cref="MapTypeName"/> produces that is not a keyword. <c>valuetype</c> is not
+        /// decoration: a signature is matched by its encoding, and <c>class [mscorlib]System.Decimal</c>
+        /// names a different signature than the one the BCL declares, so every call taking or
+        /// returning a Decimal would miss.</para>
+        ///
+        /// <para>⛔ What was wrong: the type map held <c>valuetype [System.Runtime]System.Decimal</c>,
+        /// and <see cref="MapTypeName"/> did not know it, so it took the unknown-name path through
+        /// <see cref="SanitizeName"/> and came out <c>class 'valuetypeSystemRuntimeSystemDecimal'</c>.
+        /// ilasm refused every program that declared a Decimal anywhere ("Reference to undefined
+        /// class"), at the CLI, the CLI with <c>--optimize</c> and a Release <c>.blproj</c>.</para>
+        ///
+        /// <para>⚠ <c>[mscorlib]</c>, like every other BCL reference in this file, not the
+        /// <c>[System.Runtime]</c> csc writes. Measured on .NET 8: <c>mscorlib</c> forwards
+        /// <c>System.Decimal</c> to the core library, and the program runs.</para>
+        /// </summary>
+        private const string DecimalSpec = "valuetype [mscorlib]System.Decimal";
+
+        /// <summary>System.Decimal as an IL type TOKEN — what <c>box</c>, <c>newarr</c>,
+        /// <c>unbox.any</c>, <c>ldobj</c>/<c>stobj</c> and a <c>::</c> member owner take.</summary>
+        private const string DecimalToken = "[mscorlib]System.Decimal";
+
+        /// <summary>
+        /// The complete IL type specs <see cref="MapTypeName"/> can produce — the IL keywords, plus
+        /// <see cref="DecimalSpec"/> — anything else is a class.
+        ///
+        /// <para>⚠ Decimal is listed in THIS table, and in <see cref="PrimitiveTokens"/> and
+        /// <see cref="BoxableSpecs"/>, rather than special-cased where a type is written. Those three
+        /// answer "is this spec complete", "what is its token" and "is it a value" for every site —
+        /// a local, a signature, <c>box</c>, <c>newarr</c>, <c>stelem</c>, a receiver — so one row in
+        /// each is what makes Decimal spell right everywhere at once.</para>
+        /// </summary>
         private static readonly HashSet<string> IlPrimitives = new(StringComparer.Ordinal)
         {
             "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
             "float32", "float64", "bool", "char", "string", "object", "void", "native int",
+            DecimalSpec,
         };
 
         /// <summary>
-        /// IL keyword → the BCL type it denotes, for token positions. <c>string</c> and
+        /// IL spec → the BCL type it denotes, for token positions. <c>string</c> and
         /// <c>object</c> are reference types and never need boxing, but they DO need a real
-        /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too.
+        /// token for <c>newarr</c>/<c>castclass</c>, so they are carried here too. Decimal's
+        /// spec maps to its token like the keywords do (see <see cref="IlPrimitives"/>).
         /// </summary>
         private static readonly Dictionary<string, string> PrimitiveTokens = new(StringComparer.Ordinal)
         {
+            [DecimalSpec] = DecimalToken,
             ["int8"] = "[mscorlib]System.SByte",
             ["uint8"] = "[mscorlib]System.Byte",
             ["int16"] = "[mscorlib]System.Int16",
@@ -1092,6 +1136,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "short": return "int16";
                 case "object": return "object";
                 case "void": return "void";
+                case "decimal": return DecimalSpec;
             }
 
             // A recognized .NET exception is a BCL type and must be spelled with its assembly, in
@@ -3273,7 +3318,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // name means dereferencing it — without this `n + 1` would add one to the ADDRESS.
                 if (_byRefParams.TryGetValue(name, out var pointee))
                 {
-                    WriteLine($"    ldind.{GetIndirectSuffix(pointee)}");
+                    WriteLine($"    {IndirectLoad(pointee)}");
                 }
                 return;
             }
@@ -4152,7 +4197,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         EmitStloc(byRefScratch);
                         EmitLdarg(paramIdx);
                         EmitLdloc(byRefScratch);
-                        WriteLine($"    stind.{GetIndirectSuffix(pointee)}");
+                        WriteLine($"    {IndirectStore(pointee)}");
                         _currentStack -= 2;
                         return;
                     }
@@ -4402,12 +4447,64 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case char c:
                     EmitLdcI4((int)c);
                     break;
+                case decimal m:
+                    EmitDecimalConstant(m);
+                    break;
                 default:
                     WriteLine($"    // WARNING: Unknown constant type: {constant.Value.GetType()}");
                     WriteLine("    ldc.i4.0");
                     break;
             }
             _currentStack++;
+        }
+
+        /// <summary>
+        /// Pushes a System.Decimal constant, rebuilt from its exact BITS — the spelling csc uses
+        /// for <c>1.5m</c> (task #129). The IR carries the literal as a <c>System.Decimal</c> made
+        /// from its SOURCE TEXT (<c>SemanticAnalyzer.TryConvertDecimalLiteral</c>), so the scale
+        /// travels with it and <c>1.50</c> prints <c>1.50</c>, as it does on C#.
+        ///
+        /// <para>⛔ What was wrong: no arm, so every Decimal constant became a WARNING comment
+        /// and <c>ldc.i4.0</c> — an int32 where a 16-byte value belongs.</para>
+        ///
+        /// <para>A whole value with scale 0 takes the one-argument constructor, as csc writes
+        /// <c>3m</c> and <c>100m</c> (int32) or <c>5000000000m</c> (int64). Everything else — a
+        /// fraction, a 96-bit magnitude — takes
+        /// <c>.ctor(int32 lo, int32 mid, int32 hi, bool isNegative, uint8 scale)</c>, which
+        /// reproduces any Decimal exactly, scale included. (A scale-0 negative zero comes out
+        /// positive through <c>.ctor(int32)</c>, as csc's own <c>-0m</c> does; measured, the sign
+        /// of a Decimal zero is invisible to ToString, <c>=</c> and Math.Sign.) Every arm is
+        /// <c>newobj</c>: the value goes on the stack like any other constant, where csc's
+        /// in-place <c>call .ctor</c> needs the destination's address.</para>
+        /// </summary>
+        private void EmitDecimalConstant(decimal value)
+        {
+            var bits = decimal.GetBits(value);
+            var scale = (bits[3] >> 16) & 0xFF;
+            var negative = bits[3] < 0;
+
+            if (scale == 0)
+            {
+                if (value >= int.MinValue && value <= int.MaxValue)
+                {
+                    EmitLdcI4((int)value);
+                    WriteLine($"    newobj instance void {DecimalToken}::.ctor(int32)");
+                    return;
+                }
+                if (value >= long.MinValue && value <= long.MaxValue)
+                {
+                    WriteLine($"    ldc.i8 {(long)value}");
+                    WriteLine($"    newobj instance void {DecimalToken}::.ctor(int64)");
+                    return;
+                }
+            }
+
+            EmitLdcI4(bits[0]);
+            EmitLdcI4(bits[1]);
+            EmitLdcI4(bits[2]);
+            WriteLine(negative ? "    ldc.i4.1" : "    ldc.i4.0");
+            EmitLdcI4(scale);
+            WriteLine($"    newobj instance void {DecimalToken}::.ctor(int32, int32, int32, bool, uint8)");
         }
 
         private void EmitLdcI4(int value)
@@ -4487,9 +4584,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitLoadValue(binaryOp.Right);
             EmitNumericCoercion(binaryOp.Right, operandKind);
 
-            // Emit operation
-            var op = _typeMapper.MapBinaryOperator(binaryOp.Operation);
-            WriteLine($"    {op}");
+            // Emit operation — an opcode, or a Decimal operator call (task #129)
+            EmitBinaryOperator(binaryOp.Operation, operandKind);
             _currentStack--; // Two pops, one push = net -1
 
             // Store result
@@ -4500,8 +4596,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             EmitLoadValue(unaryOp.Operand);
 
-            var op = _typeMapper.MapUnaryOperator(unaryOp.Operation);
-            WriteLine($"    {op}");
+            EmitUnaryOperator(unaryOp);
 
             // Store result
             EmitStoreResult(unaryOp, unaryOp.Type);
@@ -4556,7 +4651,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 EmitLoadValue(load.Address);
                 var elemType = MapType(load.Type);
-                WriteLine($"    ldind.{GetIndirectSuffix(load.Type)}");
+                WriteLine($"    {IndirectLoad(load.Type)}");
             }
 
             // Store to temp if needed
@@ -4566,6 +4661,29 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 EmitStloc(tempIdx);
             }
         }
+
+        /// <summary>
+        /// The instruction that reads a value of <paramref name="type"/> through a managed pointer
+        /// already on the stack — a ByRef parameter, an array element's address.
+        ///
+        /// <para>⛔ A <c>valuetype</c> spec (System.Decimal, task #129) has no <c>ldind</c> form:
+        /// <see cref="GetIndirectSuffix"/> answers <c>ref</c> for it, and <c>ldind.ref</c> reads the
+        /// first eight bytes of a 16-byte value as an object reference. It is <c>ldobj</c> with the
+        /// type's token. Every other type keeps its <c>ldind</c> exactly as before. Keyed on the
+        /// SPEC rather than on Decimal, so it is the shape of the type that decides — and today
+        /// only Decimal spells <c>valuetype</c> (a Structure or an enum still spells
+        /// <c>class</c>, #192).</para>
+        /// </summary>
+        private string IndirectLoad(TypeInfo type) =>
+            IsValueTypeSpec(type) ? $"ldobj {IlTypeToken(type)}" : $"ldind.{GetIndirectSuffix(type)}";
+
+        /// <summary>The write half of <see cref="IndirectLoad"/>: <c>stobj</c> for a <c>valuetype</c> spec.</summary>
+        private string IndirectStore(TypeInfo type) =>
+            IsValueTypeSpec(type) ? $"stobj {IlTypeToken(type)}" : $"stind.{GetIndirectSuffix(type)}";
+
+        /// <summary>True when <paramref name="type"/> is spelled as a <c>valuetype</c> spec.</summary>
+        private bool IsValueTypeSpec(TypeInfo type) =>
+            type?.Name != null && MapType(type).StartsWith("valuetype ", StringComparison.Ordinal);
 
         private string GetIndirectSuffix(TypeInfo type)
         {
@@ -4618,8 +4736,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // a reference store, so the suffix follows the ELEMENT, not the value.
                 var pointee = store.Address is IRGetElementPtr elementPtr ? elementPtr.BasePointer?.Type?.ElementType : null;
                 var boxed = pointee != null && EmitCoerceToSlot(store.Value?.Type, MapType(pointee));
-                var suffix = GetIndirectSuffix(boxed ? pointee : store.Value.Type);
-                WriteLine($"    stind.{suffix}");
+                WriteLine($"    {IndirectStore(boxed ? pointee : store.Value.Type)}");
                 _currentStack -= 2;
             }
         }
@@ -5004,27 +5121,242 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// ran — a disagreement there is exactly the stack underflow described above.
         /// </summary>
         /// <summary>
-        /// The IL evaluation-stack numeric kind of a BasicLang type — <c>i4</c>, <c>i8</c>, <c>r4</c>,
-        /// <c>r8</c> — or null for anything this coercion does not handle (Decimal, unsigned,
-        /// Char, String, Boolean, Object, a user type). Byte and Short live as int32 on the stack.
+        /// The IL evaluation-stack numeric kind of a BasicLang type — <c>i4</c>, <c>i8</c>,
+        /// <c>dec</c>, <c>r4</c>, <c>r8</c> — or null for anything this coercion does not handle
+        /// (unsigned, Char, String, Boolean, Object, a user type). Byte and Short live as int32 on
+        /// the stack. <c>dec</c> (<see cref="DecimalKind"/>, task #129) is a System.Decimal VALUE:
+        /// no IL opcode computes on one, so an operation in that kind is a call
+        /// (<see cref="EmitBinaryOperator"/>, <see cref="EmitCompareOperator"/>) and a conversion
+        /// into or out of it is a call too (<see cref="EmitDecimalConversion"/>).
         /// </summary>
         private static string NumericKind(TypeInfo type) => type?.Name switch
         {
             "Byte" or "Short" or "Integer" => "i4",
             "Long" => "i8",
+            "Decimal" => DecimalKind,
             "Single" => "r4",
             "Double" => "r8",
             _ => null,
         };
 
+        /// <summary>The <see cref="NumericKind"/> of a System.Decimal value.</summary>
+        private const string DecimalKind = "dec";
+
+        /// <summary>
+        /// VB's widening order: Integer &lt; Long &lt; Decimal &lt; Single &lt; Double. ⚠ Decimal sits
+        /// BELOW the floating kinds, as in VB, where Decimal with Double computes in Double. (The
+        /// analyzer refuses that mix today — spec 6.1 — so it is the integral half that is reached:
+        /// Decimal with Integer or Long computes in Decimal.)
+        /// </summary>
         private static int NumericRank(string kind) => kind switch
         {
             "i4" => 0,
             "i8" => 1,
-            "r4" => 2,
-            "r8" => 3,
+            DecimalKind => 2,
+            "r4" => 3,
+            "r8" => 4,
             _ => -1,
         };
+
+        /// <summary>The IL spec of a value of numeric kind <paramref name="kind"/> on the stack.</summary>
+        private static string NumericKindSpec(string kind) => kind switch
+        {
+            "i4" => "int32",
+            "i8" => "int64",
+            DecimalKind => DecimalSpec,
+            "r4" => "float32",
+            "r8" => "float64",
+            _ => null,
+        };
+
+        // ================================================================================
+        // ⭐ DECIMAL (task #129). System.Decimal is a 16-byte VALUE type with no IL opcodes: every
+        // operation on one is a call to its operator methods, and every conversion into or out
+        // of it is a call too — never `add`, `ceq` or `conv.*`, which on a Decimal operate on
+        // nothing meaningful. The C# backend's `a + b` compiles to exactly these calls (csc's
+        // op_Addition, op_LessThan, op_Implicit), so the two .NET backends run the same methods.
+        // ================================================================================
+
+        /// <summary>The <c>System.Decimal</c> operator method for each arithmetic operation.</summary>
+        private static readonly Dictionary<BinaryOpKind, string> DecimalArithmetic = new()
+        {
+            [BinaryOpKind.Add] = "op_Addition",
+            [BinaryOpKind.Sub] = "op_Subtraction",
+            [BinaryOpKind.Mul] = "op_Multiply",
+            [BinaryOpKind.Div] = "op_Division",
+            [BinaryOpKind.Mod] = "op_Modulus",
+        };
+
+        /// <summary>
+        /// The <c>System.Decimal</c> operator method for each comparison. Each returns a
+        /// <c>bool</c>, so a Decimal comparison leaves exactly what <see cref="EmitCompareOpcodes"/>
+        /// leaves: one int32 0/1.
+        /// <para>⛔ Never <c>ceq</c>/<c>clt</c>/<c>cgt</c>: on two Decimal values those compare
+        /// nothing the CLR defines. And equality is by VALUE across scales — <c>1.5 = 1.50</c> is
+        /// True — which is <c>op_Equality</c>'s answer and VB's.</para>
+        /// </summary>
+        private static readonly Dictionary<CompareKind, string> DecimalComparisons = new()
+        {
+            [CompareKind.Eq] = "op_Equality",
+            [CompareKind.Ne] = "op_Inequality",
+            [CompareKind.Lt] = "op_LessThan",
+            [CompareKind.Le] = "op_LessThanOrEqual",
+            [CompareKind.Gt] = "op_GreaterThan",
+            [CompareKind.Ge] = "op_GreaterThanOrEqual",
+        };
+
+        /// <summary>
+        /// ⭐ <b>The ONE table of Decimal conversions</b>, both directions, keyed on the IL spec of
+        /// the other side. Every route that converts a number — an operand brought to the kind an
+        /// operation computes in (<see cref="EmitNumericCoercion(IRValue, string)"/>), an
+        /// <see cref="IRCast"/> (<see cref="EmitCastConversion"/>), and the <c>CInt</c>/<c>CLng</c>/
+        /// <c>CDbl</c>/<c>CSng</c> intrinsics — reads its Decimal rows from here, so no two of them
+        /// can disagree about what converting a Decimal means.
+        ///
+        /// <para><b>INTO Decimal</b>: an integer widens exactly (<c>op_Implicit</c>, as csc writes
+        /// it); Single and Double take <c>op_Explicit</c>, which is <c>new Decimal(Double)</c> —
+        /// what VB's <c>CDec(Double)</c> calls.</para>
+        ///
+        /// <para><b>OUT OF Decimal</b>: <c>System.Convert.ToXxx(Decimal)</c>, the calls vbc itself
+        /// emits for <c>CInt</c>, <c>CLng</c>, <c>CShort</c>, <c>CByte</c>, <c>CDbl</c>, <c>CSng</c>
+        /// and <c>CBool</c> of a Decimal (measured, compiling the same program with vbc).
+        /// ⛔ To an integer it ROUNDS HALF-TO-EVEN — <c>CInt(2.5)</c> is 2, <c>CInt(3.5)</c> is 4,
+        /// <c>CInt(-2.5)</c> is -2 — which is VB's rule; C#'s <c>(int)d</c> cast truncates, and so
+        /// does the <c>op_Explicit</c> it compiles to. It throws OverflowException out of range,
+        /// as VB does.</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> DecimalConversionsIn = new(StringComparer.Ordinal)
+        {
+            ["int8"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(int8)",
+            ["uint8"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(uint8)",
+            ["int16"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(int16)",
+            ["uint16"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(uint16)",
+            ["int32"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(int32)",
+            ["uint32"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(uint32)",
+            ["int64"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(int64)",
+            ["uint64"] = $"call {DecimalSpec} {DecimalToken}::op_Implicit(uint64)",
+            ["float32"] = $"call {DecimalSpec} {DecimalToken}::op_Explicit(float32)",
+            ["float64"] = $"call {DecimalSpec} {DecimalToken}::op_Explicit(float64)",
+        };
+
+        /// <inheritdoc cref="DecimalConversionsIn"/>
+        private static readonly Dictionary<string, string> DecimalConversionsOut = new(StringComparer.Ordinal)
+        {
+            ["int8"] = $"call int8 [mscorlib]System.Convert::ToSByte({DecimalSpec})",
+            ["uint8"] = $"call uint8 [mscorlib]System.Convert::ToByte({DecimalSpec})",
+            ["int16"] = $"call int16 [mscorlib]System.Convert::ToInt16({DecimalSpec})",
+            ["uint16"] = $"call uint16 [mscorlib]System.Convert::ToUInt16({DecimalSpec})",
+            ["int32"] = $"call int32 [mscorlib]System.Convert::ToInt32({DecimalSpec})",
+            ["uint32"] = $"call uint32 [mscorlib]System.Convert::ToUInt32({DecimalSpec})",
+            ["int64"] = $"call int64 [mscorlib]System.Convert::ToInt64({DecimalSpec})",
+            ["uint64"] = $"call uint64 [mscorlib]System.Convert::ToUInt64({DecimalSpec})",
+            ["float32"] = $"call float32 [mscorlib]System.Convert::ToSingle({DecimalSpec})",
+            ["float64"] = $"call float64 [mscorlib]System.Convert::ToDouble({DecimalSpec})",
+            ["bool"] = $"call bool [mscorlib]System.Convert::ToBoolean({DecimalSpec})",
+        };
+
+        /// <summary>
+        /// Converts the value on top of the stack from IL spec <paramref name="fromSpec"/> to
+        /// <paramref name="toSpec"/>, where one side is <see cref="DecimalSpec"/> — through
+        /// <see cref="DecimalConversionsIn"/>/<see cref="DecimalConversionsOut"/>. Nothing when the
+        /// two already agree. Net stack effect zero.
+        ///
+        /// <para>⛔ A pair with no row is REFUSED, never passed through: a Decimal left where an
+        /// int32 belongs (or the reverse) assembles and reads garbage. <c>Char</c> is absent on
+        /// purpose — VB refuses <c>CChar</c> of a Decimal and <c>CDec</c> of a Char — and so is
+        /// <c>Boolean</c> → Decimal, where VB's True is -1 and <c>Convert.ToDecimal(True)</c> is 1.</para>
+        /// </summary>
+        private void EmitDecimalConversion(string fromSpec, string toSpec)
+        {
+            if (fromSpec == toSpec) return;
+
+            var call = toSpec == DecimalSpec && fromSpec != null && DecimalConversionsIn.TryGetValue(fromSpec, out var into)
+                ? into
+                : fromSpec == DecimalSpec && toSpec != null && DecimalConversionsOut.TryGetValue(toSpec, out var outOf)
+                    ? outOf
+                    : null;
+
+            if (call == null)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: no Decimal conversion from '{fromSpec ?? "an untyped value"}' to "
+                    + $"'{toSpec ?? "an untyped value"}'. System.Decimal is a value type with no IL "
+                    + "opcodes, so every conversion into or out of it is a call, and this pair has "
+                    + "none recorded. Emitting nothing would leave a value of the wrong type on the "
+                    + "stack, which assembles and reads garbage, so it is refused here instead.");
+            }
+
+            WriteLine($"    {call}");
+        }
+
+        /// <summary>
+        /// The operator of <paramref name="operation"/> on two operands already on the stack and
+        /// already brought to <paramref name="operandKind"/>: the IL opcode, or for a Decimal the
+        /// <see cref="DecimalArithmetic"/> call. Shared by <see cref="Visit(IRBinaryOp)"/> and the
+        /// <c>When</c>-guard rebuild so a statement and a guard cannot compute differently. Stack
+        /// accounting is the caller's.
+        /// </summary>
+        private void EmitBinaryOperator(BinaryOpKind operation, string operandKind)
+        {
+            if (operandKind != DecimalKind)
+            {
+                WriteLine($"    {_typeMapper.MapBinaryOperator(operation)}");
+                return;
+            }
+
+            if (!DecimalArithmetic.TryGetValue(operation, out var method))
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: the operator '{operation}' has no Decimal lowering. System.Decimal is a "
+                    + "value type with no IL opcodes: +, -, *, / and Mod are calls to its operator "
+                    + "methods, and \\ converts each operand to Long first, as VB does. An IL opcode "
+                    + "applied to two Decimal values computes nothing meaningful, so this is refused "
+                    + "here instead.");
+            }
+
+            WriteLine($"    call {DecimalSpec} {DecimalToken}::{method}({DecimalSpec}, {DecimalSpec})");
+        }
+
+        /// <summary>
+        /// The comparison <paramref name="kind"/> on two operands already on the stack and already
+        /// brought to <paramref name="operandKind"/>, leaving one int32 0/1: the IL compare opcodes
+        /// (<see cref="EmitCompareOpcodes"/>), or for a Decimal the <see cref="DecimalComparisons"/>
+        /// call.
+        /// </summary>
+        private void EmitCompareOperator(CompareKind kind, string operandKind)
+        {
+            if (operandKind != DecimalKind)
+            {
+                EmitCompareOpcodes(kind);
+                return;
+            }
+
+            WriteLine($"    call bool {DecimalToken}::{DecimalComparisons[kind]}({DecimalSpec}, {DecimalSpec})");
+        }
+
+        /// <summary>
+        /// The unary operator of <paramref name="unaryOp"/> on its operand, already on the stack.
+        /// A Decimal negation is <c>op_UnaryNegation</c>; <c>neg</c> on a Decimal value is not
+        /// defined. Shared by <see cref="Visit(IRUnaryOp)"/> and the <c>When</c>-guard rebuild.
+        /// </summary>
+        private void EmitUnaryOperator(IRUnaryOp unaryOp)
+        {
+            if (NumericKind(unaryOp.Operand?.Type) != DecimalKind)
+            {
+                WriteLine($"    {_typeMapper.MapUnaryOperator(unaryOp.Operation)}");
+                return;
+            }
+
+            if (unaryOp.Operation != UnaryOpKind.Neg)
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: the unary operator '{unaryOp.Operation}' has no Decimal lowering. A "
+                    + "Decimal negation is a call to op_UnaryNegation; 'not' applied to a Decimal "
+                    + "value computes nothing meaningful, so this is refused here instead.");
+            }
+
+            WriteLine($"    call {DecimalSpec} {DecimalToken}::op_UnaryNegation({DecimalSpec})");
+        }
 
         /// <summary>The wider of two operands' numeric kinds, or null unless BOTH are numeric.</summary>
         private static string WiderNumericKind(IRValue left, IRValue right)
@@ -5090,6 +5422,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             var sourceKind = NumericKind(operand?.Type);
             if (targetKind == null || sourceKind == null || sourceKind == targetKind) return;
+
+            // Into or out of Decimal: a call, from the one Decimal conversion table. This is how
+            // `d + i` widens its Integer and how `d \ e` takes each Decimal to Long — VB's rule,
+            // rounding half-to-even before the integer `div`, exactly as vbc emits it.
+            if (sourceKind == DecimalKind || targetKind == DecimalKind)
+            {
+                EmitDecimalConversion(NumericKindSpec(sourceKind), NumericKindSpec(targetKind));
+                return;
+            }
 
             var sourceIsFloating = sourceKind is "r4" or "r8";
             switch (targetKind)
@@ -5160,12 +5501,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <summary>
         /// The IL primitives that are VALUE types, so a reference-typed slot needs them boxed.
         /// <c>string</c> and <c>object</c> are deliberately absent — they are IL keywords but
-        /// reference types already, and boxing one is not a no-op to reason about.
+        /// reference types already, and boxing one is not a no-op to reason about. Decimal is a
+        /// value too (task #129): it boxes to <see cref="DecimalToken"/>.
         /// </summary>
         private static readonly HashSet<string> BoxableSpecs = new(StringComparer.Ordinal)
         {
             "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
-            "float32", "float64", "bool", "char",
+            "float32", "float64", "bool", "char", DecimalSpec,
         };
 
         /// <summary>
@@ -5242,6 +5584,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     new NetStaticOverload("int32", new[] { "int32" }),
                     new NetStaticOverload("int64", new[] { "int64" }),
                     new NetStaticOverload("float64", new[] { "float64" }),
+                    new NetStaticOverload(DecimalSpec, new[] { DecimalSpec }),
                 }),
                 ["Math.Min"] = ("[mscorlib]System.Math", new[]
                 {
@@ -5255,7 +5598,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     new NetStaticOverload("int64", new[] { "int64", "int64" }),
                     new NetStaticOverload("float64", new[] { "float64", "float64" }),
                 }),
-                ["Math.Round"] = ("[mscorlib]System.Math", new[] { new NetStaticOverload("float64", new[] { "float64" }) }),
+                // ⚠ The Decimal rows (task #129) come AFTER float64, and no widening reaches them —
+                // an Integer argument still binds Round(float64) exactly as before. Round(Decimal) is
+                // banker's rounding, like Round(Double): Math.Round(2.5D) is 2, Math.Round(2.345D, 2)
+                // is 2.34.
+                ["Math.Round"] = ("[mscorlib]System.Math", new[]
+                {
+                    new NetStaticOverload("float64", new[] { "float64" }),
+                    new NetStaticOverload(DecimalSpec, new[] { DecimalSpec }),
+                    new NetStaticOverload(DecimalSpec, new[] { DecimalSpec, "int32" }),
+                }),
+
+                ["Decimal.Parse"] = (DecimalToken, new[] { new NetStaticOverload(DecimalSpec, new[] { "string" }) }),
 
                 ["Convert.ToInt32"] = ("[mscorlib]System.Convert", new[]
                 {
@@ -5272,6 +5626,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // it at the start of an expression, so `String.IsNullOrEmpty(s)` never reaches
                 // this backend on ANY target. A row here would be untestable by the round-trip
                 // contract the refusal message promises.
+            };
+
+        /// <summary>
+        /// The .NET STATIC FIELDS this backend can read, keyed on the full dotted name as
+        /// <see cref="NetStaticMembers"/> is, with the field's IL spec, its owner's token and the
+        /// member's own spelling (VB is case-insensitive; IL is not).
+        ///
+        /// <para>Deliberately narrow, on the same principle as <see cref="NetStaticMembers"/>: a
+        /// guessed field reference assembles cleanly and fails at run time with
+        /// MissingFieldException. <c>Decimal.MaxValue</c>/<c>MinValue</c> (task #129) are
+        /// <c>static initonly</c> fields in the BCL (a Decimal constant is not a metadata literal),
+        /// so <c>ldsfld</c> reads them.</para>
+        /// </summary>
+        private static readonly Dictionary<string, (string Spec, string Owner, string Member, TypeInfo Type)> NetStaticFields =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Decimal.MaxValue"] = (DecimalSpec, DecimalToken, "MaxValue", new TypeInfo("Decimal", TypeKind.Primitive)),
+                ["Decimal.MinValue"] = (DecimalSpec, DecimalToken, "MinValue", new TypeInfo("Decimal", TypeKind.Primitive)),
             };
 
         /// <summary>
@@ -5764,6 +6136,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "cint":
                     EmitLoadValue(args[0]);
                     if (EmitConvertFromObject(args[0], "ToInt32", "int32")) return true;
+                    if (EmitConvertFromDecimal(args[0], "int32")) return true;
                     if (IsFloatingArgument(args[0]))
                     {
                         WriteLine("    conv.r8");
@@ -5778,6 +6151,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "clng":
                     EmitLoadValue(args[0]);
                     if (EmitConvertFromObject(args[0], "ToInt64", "int64")) return true;
+                    if (EmitConvertFromDecimal(args[0], "int64")) return true;
                     if (IsFloatingArgument(args[0]))
                     {
                         WriteLine("    conv.r8");
@@ -5792,12 +6166,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 case "cdbl":
                     EmitLoadValue(args[0]);
                     if (EmitConvertFromObject(args[0], "ToDouble", "float64")) return true;
+                    if (EmitConvertFromDecimal(args[0], "float64")) return true;
                     WriteLine("    conv.r8");
                     return true;
 
                 case "csng":
                     EmitLoadValue(args[0]);
                     if (EmitConvertFromObject(args[0], "ToSingle", "float32")) return true;
+                    if (EmitConvertFromDecimal(args[0], "float32")) return true;
                     WriteLine("    conv.r4");
                     return true;
 
@@ -6132,6 +6508,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            if (IsDecimalCaseTest(subject, value))
+            {
+                EmitDecimalCaseTest(subject, value, CompareKind.Eq, branchTo, branchWhenTrue: branchWhenEqual);
+                return;
+            }
+
             EmitLoadValue(subject);
             EmitLoadValue(value);
 
@@ -6195,6 +6577,24 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         + "silently match, so it is refused here instead."),
                 };
                 EmitLateBoundCaseTest(subject, value, kind, noMatch, branchWhenTrue: false);
+                return;
+            }
+
+            // A Decimal operand (task #129): its operator method, never clt/cgt on the value.
+            if (IsDecimalCaseTest(subject, value))
+            {
+                var decimalKind = op switch
+                {
+                    ">" => CompareKind.Gt,
+                    "<" => CompareKind.Lt,
+                    ">=" => CompareKind.Ge,
+                    "<=" => CompareKind.Le,
+                    _ => throw new ForeignFeatureException(
+                        $"MSIL: unknown Select Case comparison operator '{op}'. The parser emits "
+                        + "=, <>, >, <, >= and <=; anything else would fall through untested and "
+                        + "silently match, so it is refused here instead."),
+                };
+                EmitDecimalCaseTest(subject, value, decimalKind, noMatch, branchWhenTrue: false);
                 return;
             }
 
@@ -6267,18 +6667,65 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // A Decimal subject (task #129): `Case Nothing` is VB's `subject = Nothing`, and Nothing
+            // converts to Decimal's default, 0 — so it is the Decimal comparison with 0 (vbc prints
+            // "nothing" for a subject of 0). `brtrue` below would test a 16-byte value as if it were
+            // a reference. `Case Is Nothing` is reference identity, which a Decimal has none of: it
+            // falls through to the refusal below.
+            if (!pattern.WrittenWithIs && NumericKind(subject?.Type) == DecimalKind)
+            {
+                EmitDecimalCaseTest(subject, new IRConstant(0m, subject.Type), CompareKind.Eq, noMatch, branchWhenTrue: false);
+                return;
+            }
+
             var spec = subject?.Type != null ? IlTypeSpec(subject.Type) : "object";
-            if (spec == "float32" || spec == "float64")
+            if (spec == "float32" || spec == "float64" || spec == DecimalSpec)
             {
                 throw new ForeignFeatureException(
-                    "MSIL: 'Case Nothing' on a floating-point value has no IL lowering — brtrue "
-                    + "is undefined for an F operand and yields an unverifiable method, so it is "
-                    + "refused here rather than emitted. Compare against 0 explicitly "
-                    + "(Case 0 / Case Is = 0).");
+                    "MSIL: 'Case Nothing' on a floating-point value, or 'Case Is Nothing' on a Decimal, "
+                    + "has no IL lowering — brtrue is undefined for an F operand or a Decimal value and "
+                    + "yields an unverifiable method, so it is refused here rather than emitted. Compare "
+                    + "against 0 explicitly (Case 0 / Case Is = 0).");
             }
 
             EmitLoadValue(subject);
             WriteLine($"    brtrue {noMatch}");
+            _currentStack--;
+        }
+
+        /// <summary>
+        /// True when one link of a Select Case chain compares a DECIMAL (task #129). The
+        /// <c>beq</c>/<c>bne.un</c>/<c>clt</c>/<c>cgt</c> forms in the callers compare what is on the
+        /// stack, and two Decimal values on the stack are not something those opcodes define.
+        /// </summary>
+        private static bool IsDecimalCaseTest(IRValue subject, IRValue value) =>
+            NumericKind(subject?.Type) == DecimalKind || NumericKind(value?.Type) == DecimalKind;
+
+        /// <summary>
+        /// One link of a Select Case chain over a Decimal: <c>subject kind value</c> through
+        /// <see cref="EmitComparison"/> — the comparison an <c>If</c> gets, so the operator method
+        /// and the operand widening are the same ones — then a branch to <paramref name="branchTo"/>
+        /// when the result is <paramref name="branchWhenTrue"/>.
+        ///
+        /// <para>⚠ A Case value arrives as a constant with NO type (the analyzer never visits
+        /// <c>Case</c> patterns — see <see cref="EmitCoerceToSlot(IRValue, string)"/>), holding the
+        /// CLR value the literal was lexed as: a Double for <c>Case 1.5</c>, an Int32 for
+        /// <c>Case Is &gt; 2</c>. With a Decimal subject that constant is CONVERTED TO DECIMAL here,
+        /// at compile time — which is what vbc does (measured: it emits <c>1.5m</c> and
+        /// <c>Decimal.Compare</c> for <c>Case 1.5</c>). Untyped, it would have no numeric kind and
+        /// reach the operator method as a raw float64.</para>
+        /// </summary>
+        private void EmitDecimalCaseTest(IRValue subject, IRValue value, CompareKind kind, string branchTo, bool branchWhenTrue)
+        {
+            if (NumericKind(subject?.Type) == DecimalKind
+                && value is IRConstant { Type: null, Value: int or long or double or float or decimal } untyped)
+            {
+                value = new IRConstant(Convert.ToDecimal(untyped.Value, System.Globalization.CultureInfo.InvariantCulture), subject.Type);
+            }
+
+            EmitComparison(subject, value, kind, EmitLoadValue);
+            _currentStack--;
+            WriteLine($"    {(branchWhenTrue ? "brtrue" : "brfalse")} {branchTo}");
             _currentStack--;
         }
 
@@ -6358,9 +6805,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// InvalidProgramException, measured on <c>Console.WriteLine(sh)</c> for a Short.</para>
         ///
         /// <para>The IL primitives come from <see cref="PrimitiveTokens"/>; an enum or a Structure
-        /// by its kind, through <see cref="IlTypeToken(TypeInfo)"/>. ⚠ Decimal and Date do not reach
-        /// here as values: this backend cannot declare a local of either (ilasm refuses the
-        /// <c>.locals</c> line), which is a type-mapping gap of its own.</para>
+        /// by its kind, through <see cref="IlTypeToken(TypeInfo)"/>. Decimal reaches here as a value
+        /// since task #129 and boxes to <see cref="DecimalToken"/> through the same table (its spec
+        /// is a row of <see cref="BoxableSpecs"/> and <see cref="PrimitiveTokens"/>). ⚠ Date still
+        /// does not: <c>Date</c>/<c>DateTime</c> does not resolve as a type on this backend at all,
+        /// which is a type-mapping gap of its own (#192).</para>
         ///
         /// <para>The primitive test reads <c>MapType</c>, which names every primitive exactly as
         /// <see cref="IlTypeSpec(TypeInfo)"/> does but never throws — IlTypeSpec refuses a delegate
@@ -6423,9 +6872,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// narrower rule changes no emitted IL (measured by byte-compare over every corpus program),
         /// and it cannot box a Structure into a slot of its own type, which the wider rule would
         /// have done the day a Structure became a real value type here (#192).</para>
+        ///
+        /// <para>⭐ <b>And an integer into a Decimal slot WIDENS (task #129)</b> — the same gap one
+        /// step over. <c>IRBuilder</c>'s numeric coercion (<c>CoerceToDeclaredType</c>) covers
+        /// Integer, Long, Single and Double only, so <c>Dim d As Decimal = i</c>, <c>Show(i)</c> into
+        /// a Decimal parameter, <c>Return i</c> from <c>As Decimal</c> and an Integer Optional
+        /// default all reach this backend raw — C# widens them implicitly. Measured before: an
+        /// int32 stored into a 16-byte slot, InvalidProgramException. See
+        /// <see cref="EmitWidenIntoDecimalSlot"/>. Returns true then too: the stack now holds the
+        /// SLOT's type, which is what an indirect store's opcode must follow.</para>
         /// </summary>
         private bool EmitCoerceToSlot(TypeInfo valueType, string slotSpec) =>
-            EmitBoxIntoSlot(ValueTypeBoxToken(valueType), slotSpec);
+            EmitWidenIntoDecimalSlot(valueType?.Name != null ? MapType(valueType) : null, slotSpec)
+            || EmitBoxIntoSlot(ValueTypeBoxToken(valueType), slotSpec);
 
         /// <summary>
         /// <see cref="EmitCoerceToSlot(TypeInfo, string)"/> for an operand whose IR node is in
@@ -6457,6 +6916,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             double => "float64",
             bool => "bool",
             char => "char",
+            decimal => DecimalSpec,
             _ => null,
         };
 
@@ -6467,10 +6927,52 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// is not a value (<c>string</c>, <c>object</c>, a class) never boxes.
         /// </summary>
         private bool EmitCoerceSpecToSlot(string valueSpec, string slotSpec) =>
-            EmitBoxIntoSlot(
+            EmitWidenIntoDecimalSlot(valueSpec, slotSpec)
+            || EmitBoxIntoSlot(
                 valueSpec != null && BoxableSpecs.Contains(valueSpec) && PrimitiveTokens.TryGetValue(valueSpec, out var token)
                     ? token : null,
                 slotSpec);
+
+        /// <summary>The IL specs of the integers, every one of which widens to Decimal exactly.</summary>
+        private static readonly HashSet<string> IntegralSpecs = new(StringComparer.Ordinal)
+        {
+            "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64",
+        };
+
+        /// <summary>
+        /// The Decimal half of the one coercion (task #129): a value of IL spec
+        /// <paramref name="valueSpec"/> about to land in a <see cref="DecimalSpec"/> slot. An
+        /// INTEGER widens through the one Decimal conversion table (<c>op_Implicit</c>), as VB and C#
+        /// both widen it implicitly, and this returns true. Anything already a Decimal, anything
+        /// that is not a number, and any slot that is not Decimal is left alone (false).
+        ///
+        /// <para>⛔ A FLOATING value into a Decimal slot is REFUSED, not converted. VB does not widen
+        /// Double to Decimal (it is a narrowing, and the analyzer refuses it — spec 6.1), so no
+        /// correct program puts one there; the shape that does is <c>d /= i</c>, which IRBuilder types
+        /// Double (the C# backend's output fails csc with CS0019 for the same reason). Converting
+        /// would print a value computed in Double where VB computes in Decimal — right by luck for
+        /// 3 / 4, wrong for 1 / 3 — and storing it raw was an AccessViolationException.</para>
+        /// </summary>
+        private bool EmitWidenIntoDecimalSlot(string valueSpec, string slotSpec)
+        {
+            if (slotSpec != DecimalSpec || valueSpec == null || valueSpec == DecimalSpec) return false;
+
+            if (valueSpec is "float32" or "float64")
+            {
+                throw new ForeignFeatureException(
+                    $"MSIL: a {valueSpec} value reaches a Decimal slot. VB does not widen a floating "
+                    + "value to Decimal and the analyzer refuses the assignment, so this comes from an "
+                    + "expression the IR typed floating — `d /= i` is one (the C# backend's output for "
+                    + "it fails csc with CS0019). Converting through Double would lose the precision "
+                    + "Decimal division keeps, and storing the float64 raw corrupts the 16-byte slot, "
+                    + "so it is refused here instead. Write `d = d / i`.");
+            }
+
+            if (!IntegralSpecs.Contains(valueSpec)) return false;
+
+            EmitDecimalConversion(valueSpec, DecimalSpec);
+            return true;
+        }
 
         /// <summary>
         /// The decision itself, shared by both entry points above. <paramref name="boxToken"/> is
@@ -6528,6 +7030,25 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (!IsObjectOperand(argument?.Type)) return false;
 
             WriteLine($"    call {resultSpec} [mscorlib]System.Convert::{convertMethod}(object)");
+            return true;
+        }
+
+        /// <summary>
+        /// <see cref="EmitConvertFromObject"/>'s sibling for a DECIMAL argument (task #129), already
+        /// on the stack: converts it to <paramref name="resultSpec"/> through the one Decimal table
+        /// (<see cref="EmitDecimalConversion"/>) and returns true; otherwise emits nothing and
+        /// returns false.
+        ///
+        /// <para>⛔ Without it <c>CInt(d)</c> fell to the integral arm's <c>conv.i4</c>, which
+        /// reinterprets the 16-byte value. Through the table it is <c>Convert.ToInt32(Decimal)</c>
+        /// — what vbc emits and what the C# backend's <c>Convert.ToInt32(d)</c> calls: 2.5 → 2,
+        /// 3.5 → 4, -2.5 → -2.</para>
+        /// </summary>
+        private bool EmitConvertFromDecimal(IRValue argument, string resultSpec)
+        {
+            if (MapType(argument?.Type) != DecimalSpec) return false;
+
+            EmitDecimalConversion(DecimalSpec, resultSpec);
             return true;
         }
 
@@ -6616,7 +7137,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private static string ConsoleWriteOverload(string spec) => spec switch
         {
             "string" or "bool" or "char" or "int32" or "uint32" or "int64" or "uint64"
-                or "float32" or "float64" => spec,
+                or "float32" or "float64" or DecimalSpec => spec,
             "int8" or "int16" or "uint8" or "uint16" => "int32",
             _ => null,
         };
@@ -6713,7 +7234,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                     EmitNumericCoercion(binaryOp.Left, operandKind);
                     EmitInlineValue(binaryOp.Right);
                     EmitNumericCoercion(binaryOp.Right, operandKind);
-                    WriteLine($"    {_typeMapper.MapBinaryOperator(binaryOp.Operation)}");
+                    EmitBinaryOperator(binaryOp.Operation, operandKind);
                     _currentStack--;
                     return;
                 }
@@ -6729,7 +7250,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
                 case IRUnaryOp unaryOp:
                     EmitInlineValue(unaryOp.Operand);
-                    WriteLine($"    {_typeMapper.MapUnaryOperator(unaryOp.Operation)}");
+                    EmitUnaryOperator(unaryOp);
                     return;
 
                 // A numeric cast rebuilt in place: the operand, then the same conversion
@@ -6815,7 +7336,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         ///
         /// <para>With no Object operand this is exactly the text those two sites emitted
         /// before: both operands brought to the wider numeric kind, then
-        /// <see cref="EmitCompareOpcodes"/>.</para>
+        /// <see cref="EmitCompareOpcodes"/> — or, when that kind is Decimal (task #129), its
+        /// operator method (<see cref="EmitCompareOperator"/>).</para>
         /// </summary>
         private void EmitComparison(IRValue left, IRValue right, CompareKind kind, Action<IRValue> load)
         {
@@ -6832,7 +7354,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             EmitNumericCoercion(left, operandKind);
             load(right);
             EmitNumericCoercion(right, operandKind);
-            EmitCompareOpcodes(kind);
+            EmitCompareOperator(kind, operandKind);
         }
 
         /// <summary>
@@ -7048,6 +7570,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // to the switch exactly as it always did.
             if (MapType(cast.Type) == "object" && EmitCoerceToSlot(operandType, "object")) return;
 
+            // Into or out of Decimal (task #129): a call from the one Decimal conversion table —
+            // `CType(d, Integer)` rounds half-to-even like CInt, `CType(n, Decimal)` widens. The
+            // conv opcodes below would reinterpret the 16-byte value. MapType, not IlTypeSpec: it
+            // names every numeric exactly as IlTypeSpec does and never throws.
+            var castSourceSpec = MapType(operandType);
+            var castTargetSpec = MapType(cast.Type);
+            if (castSourceSpec == DecimalSpec || castTargetSpec == DecimalSpec)
+            {
+                EmitDecimalConversion(castSourceSpec, castTargetSpec);
+                return;
+            }
+
             // ⛔ A FLOATING -> INTEGRAL narrowing ROUNDS HALF-TO-EVEN before the conv, because
             // `conv.i4` alone TRUNCATES. `Dim i As Integer = 7.5` answered 7 on all four backends
             // while `CInt(7.5)` answers 8 — one language, two answers depending on which syntax
@@ -7241,6 +7775,22 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Load 'this' reference (the object on which the method is called)
             EmitLoadValue(methodCall.Object);
 
+            // ⛔ A `valuetype` receiver (System.Decimal, task #129) is not a reference: `this` for
+            // a method of a value type is a MANAGED POINTER to the value. `callvirt` on the raw
+            // 16-byte value — what `d.ToString()` emitted — crashed the process (SIGSEGV, measured).
+            // Box it and `unbox` back to a pointer into the box, then `call` (below) the method the
+            // value type declares. Keyed on the spec shape, as IndirectLoad is: only Decimal spells
+            // `valuetype` today, so every other receiver is emitted exactly as before. (An Integer
+            // or Double receiver has the same gap and is NOT changed here — its IL would move for
+            // programs that have nothing to do with Decimal.)
+            var valueTypeReceiver = IsValueTypeSpec(methodCall.Object?.Type);
+            if (valueTypeReceiver)
+            {
+                var receiverToken = IlTypeToken(methodCall.Object.Type);
+                WriteLine($"    box {receiverToken}");
+                WriteLine($"    unbox {receiverToken}");
+            }
+
             // The declaration that decides the signature, looked up BEFORE the arguments are
             // loaded, because it is also what each argument is fitted to (task #177): `l.Add(7)` on
             // a `List(Of Object)` passes into `!0`, which is `object` — the raw int32 it pushed was
@@ -7326,7 +7876,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             }
             // Use callvirt for virtual dispatch (polymorphic behavior)
             // For non-virtual calls, the backend should use 'call instance' instead, but callvirt is safer as default
-            var callInstruction = methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
+            var callInstruction = valueTypeReceiver ? "call" : methodCall.IsVirtual || !methodCall.IsVirtual ? "callvirt" : "call";
             WriteLine($"    {callInstruction} instance {returnType} {className}::{methodName}({paramTypes})");
             if (ifaceMethod != null && returnType != "void") EmitCoerceToSlot(ifaceMethod.ReturnType, MapType(methodCall.Type));
 
@@ -7410,6 +7960,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 WriteLine($"    ldsfld {IlTypeSpec(readField.Type)} {SanitizeName(readOwner.Name)}::{SanitizeName(readField.Name)}");
                 _currentStack++;
                 EmitFieldAccessResult(fieldAccess, readField.Type);
+                return;
+            }
+
+            // A .NET type's STATIC FIELD reached by its type name: `Decimal.MaxValue` (task #129).
+            // The receiver is a TYPE, so nothing is loaded for it — loading it emitted
+            // `// WARNING: Unknown local 'Decimal'` and the `ldfld` that followed read a field off an
+            // empty stack (InvalidProgramException). See NetStaticFields.
+            if (fieldAccess.Object is IRVariable { Name: { } netTypeName } && !ResolvesAsValue(netTypeName)
+                && NetStaticFields.TryGetValue(netTypeName + "." + fieldAccess.FieldName, out var netField))
+            {
+                WriteLine($"    ldsfld {netField.Spec} {netField.Owner}::{netField.Member}");
+                _currentStack++;
+                EmitFieldAccessResult(fieldAccess, netField.Type);
                 return;
             }
 
