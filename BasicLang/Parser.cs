@@ -303,6 +303,14 @@ namespace BasicLang.Compiler
             var node = new NamespaceNode(token.Line, token.Column);
 
             node.Name = Consume(TokenType.Identifier, "Expected namespace name").Lexeme;
+            // A DOTTED name — `Namespace System.Windows.Forms` (spec §4.9, M8; portable-controls Task 15) — was "Unexpected
+            // token at top level: '.'". It means the same as the nested spelling: the IR joins nested names with '.',
+            // so one node named "System.Windows.Forms" yields the same full name as three nested ones.
+            while (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier)
+            {
+                Advance();
+                node.Name += "." + Advance().Lexeme;
+            }
             _context.Push($"Namespace '{node.Name}'");
 
             try

@@ -6396,8 +6396,21 @@ namespace BasicLang.Compiler.IR
                 // Check if this is an instance method call vs static method call
                 // Instance: obj.Method() where obj is a variable
                 // Static: ClassName.Method() where ClassName is a type
-                memberExpr.Object.Accept(this);
-                var obj = _expressionResult;
+                IRValue obj;
+                if (QualifiedStaticTypeName(memberExpr.Object) is { } qualifiedType)
+                {
+                    // `System.Math.Abs(x)`: the receiver is a TYPE spelled qualified, not a member read off a value named
+                    // System. It was lowered as `const t = System.Math; t.Abs(x)` — a ReferenceError on JavaScript
+                    // (portable-controls Task 15, measured pre-existing). Routed as the static call `System.Math.Abs`,
+                    // the spelling the bare `Math.Abs` already takes (the JS stdlib reads both).
+                    obj = new IRVariable(qualifiedType, _semanticAnalyzer.GetNodeType(memberExpr.Object)
+                                                      ?? new TypeInfo(qualifiedType, TypeKind.Class));
+                }
+                else
+                {
+                    memberExpr.Object.Accept(this);
+                    obj = _expressionResult;
+                }
 
                 // `.Item(i)` READ on a collection is the explicit VB indexer — lower it to the
                 // same IRIndexerAccess as `l(i)` (List -> (*l)[i]; Dictionary -> l->Get(k)).
@@ -7296,6 +7309,20 @@ namespace BasicLang.Compiler.IR
         private bool IsBasePropertyAccess(MemberAccessExpressionNode node) =>
             node.Object is MyBaseExpressionNode
             && _semanticAnalyzer.GetNodeSymbol(node)?.Kind == SymbolKind.Property;
+
+        /// <summary>
+        /// <c>System.Math</c> — a dotted chain of plain identifiers, rooted at <c>System</c>, whose last segment is a known .NET
+        /// static type and whose head names no value — or null. Deliberately narrow: only the <c>System.</c>-qualified
+        /// spelling of a type the bare spelling already routes as static (<see cref="KnownNetStaticTypes"/>).
+        /// </summary>
+        private string QualifiedStaticTypeName(ExpressionNode receiver)
+        {
+            if (receiver is not MemberAccessExpressionNode { Object: IdentifierExpressionNode { IsForeignQualified: false } head } access)
+                return null;
+            if (!string.Equals(head.Name, "System", StringComparison.Ordinal)) return null;
+            if (IsValueSymbol(_semanticAnalyzer.GetNodeSymbol(head))) return null;
+            return KnownNetStaticTypes.Contains(access.MemberName) ? $"System.{access.MemberName}" : null;
+        }
 
         /// <summary><c>Me</c> / <c>MyClass</c> as a receiver — always the current instance, never a type (M7).</summary>
         private static bool IsSelfExpression(ExpressionNode expression) =>

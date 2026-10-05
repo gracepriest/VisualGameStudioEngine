@@ -770,6 +770,30 @@ namespace BasicLang.Compiler
             CompileUnit(unit, result, null);
         }
 
+        /// <summary>
+        /// The FULL dotted name of every <c>Namespace</c> any parsed unit declares — a nested <c>Namespace A / Namespace B</c>
+        /// and a dotted <c>Namespace A.B</c> both give "A.B" (and "A"); no other prefixes (spec §4.9, Task 15).
+        /// </summary>
+        private IEnumerable<string> ProgramNamespaceNames()
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Walk(IEnumerable<ASTNode> declarations, string outer)
+            {
+                foreach (var decl in declarations ?? Enumerable.Empty<ASTNode>())
+                {
+                    if (decl is NamespaceNode ns && !string.IsNullOrEmpty(ns.Name))
+                    {
+                        var full = outer == null ? ns.Name : outer + "." + ns.Name;
+                        names.Add(full);
+                        Walk(ns.Members, full);
+                    }
+                }
+            }
+            foreach (var module in _registry.Modules)
+                Walk(module?.AST?.Declarations, null);
+            return names;
+        }
+
         private void CompileUnit(CompilationUnit unit, CompilationResult result, IEnumerable<CompilationUnit> implicitImports)
         {
             if (unit.AST == null)
@@ -810,6 +834,10 @@ namespace BasicLang.Compiler
                     nativeBackend: string.Equals(_options.TargetBackend, "cpp",
                                                  StringComparison.OrdinalIgnoreCase));
                 analyzer.ConfigureWinFormsResolution(_options.NetResolutionIsWinForms);
+                // Spec §4.9 (Task 15): on a web build a namespace the PROGRAM declares wins a qualified type name. The
+                // names come from every parsed unit (the registry holds the project's and the imported ones alike).
+                analyzer.ConfigureTarget(_options.TargetBackend);
+                analyzer.ConfigureProgramNamespaces(ProgramNamespaceNames());
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);
@@ -939,6 +967,26 @@ namespace BasicLang.Compiler
                         unit.ExportedSymbols.Add(symbol);
                     }
                 }
+
+                // ⛔ A TYPE declared in a `Namespace` lives in that namespace's own scope (a child of the global one,
+                // nested namespaces nested), so the loop above never exported it: the library's `Button` in
+                // `Namespace System.Windows.Forms`, compiled FIRST, reached no other file — which then typed `Button`
+                // as a phantom .NET class (spec §4.9, portable-controls Task 15). Exported by bare name, as the in-file
+                // pass registers it.
+                void ExportNamespaceTypes(Scope parent)
+                {
+                    foreach (var nsScope in parent.Children.Where(c => c.Kind == ScopeKind.Namespace))
+                    {
+                        foreach (var symbol in nsScope.Symbols.Values)
+                        {
+                            if (symbol.IsSiblingSignature) continue;
+                            if (symbol.Kind is SymbolKind.Class or SymbolKind.Interface or SymbolKind.Structure or SymbolKind.Type)
+                                unit.ExportedSymbols.Add(symbol);
+                        }
+                        ExportNamespaceTypes(nsScope);
+                    }
+                }
+                ExportNamespaceTypes(scope);
             }
         }
 

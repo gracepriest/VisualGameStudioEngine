@@ -597,7 +597,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     _importedModules.Add(unit.ModuleName);
                 }
 
-                foreach (var decl in EnumerateSiblingTopLevelDeclarations(unit))
+                foreach (var decl in WithNamespaceMembers(EnumerateSiblingTopLevelDeclarations(unit)))
                 {
                     if (decl is ClassNode classNode)
                     {
@@ -660,6 +660,29 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// RegisterSiblingDeclarationSignature, mirroring the compiled path's
         /// pass-1 flattening.)
         /// </summary>
+        /// <summary>
+        /// The declarations, with every <c>Namespace</c> block's members (recursively) in place of the block. ⛔ Portable-
+        /// controls Task 15: a class declared inside a <c>Namespace</c> in a SIBLING file was never shelled — the sweep read
+        /// top-level declarations only — so a `Button` / `Control` from the library's <c>Namespace System.Windows.Forms</c>
+        /// fell to the PascalCase ".NET type" guess in every other file ("Cannot assign 'Button' to 'Control'"). Types are
+        /// registered by bare name, as the in-file pass 1 already does (RegisterClassTypes recurses namespaces).
+        /// </summary>
+        private static IEnumerable<ASTNode> WithNamespaceMembers(IEnumerable<ASTNode> declarations)
+        {
+            foreach (var decl in declarations)
+            {
+                if (decl is NamespaceNode ns)
+                {
+                    foreach (var member in WithNamespaceMembers(ns.Members))
+                        yield return member;
+                }
+                else
+                {
+                    yield return decl;
+                }
+            }
+        }
+
         private static IEnumerable<ASTNode> EnumerateSiblingTopLevelDeclarations(CompilationUnit unit)
         {
             foreach (var decl in unit.AST.Declarations)
@@ -3153,6 +3176,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return nested;
             }
 
+            // Spec §4.9 (Task 15): `System.Windows.Forms.Button` on a web build is the PROGRAM's type when the program
+            // declares that namespace — never a phantom .NET type.
+            if (ProgramNamespaceType(name) is { } programType)
+            {
+                return programType;
+            }
+
             // First, a type parameter or a class/struct/interface symbol in scope — including one
             // imported from a sibling project file, which carries the full type with its members.
             // Preferred over the permissive .NET fallback below, which would otherwise return a
@@ -3415,6 +3445,42 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <summary>Task 7d: the closure is a <c>UseWindowsForms</c> project's (<c>CompilerOptions.NetResolutionIsWinForms</c>)
         /// — read by <see cref="IsWinFormsArmed"/>, so the project's own setting decides, never whether a Form resolves.</summary>
         internal void ConfigureWinFormsResolution(bool winForms) => _netResolutionIsWinForms = winForms;
+
+        /// <summary>
+        /// Spec §4.9 (portable-controls Task 15): the build's target. On a WEB target (BuildSymbols.IsWebBackend) there is
+        /// no .NET, so a namespace the PROGRAM declares wins a qualified type name (<see cref="ProgramNamespaceType"/>).
+        /// </summary>
+        public void ConfigureTarget(string targetBackend) => _isJavaScriptTarget = BuildSymbols.IsWebBackend(targetBackend);
+
+        /// <summary>Every namespace the program declares, by its FULL dotted name (no prefixes) — across all its files.</summary>
+        public void ConfigureProgramNamespaces(IEnumerable<string> names)
+        {
+            _programNamespaces.Clear();
+            foreach (var name in names ?? Enumerable.Empty<string>())
+                if (!string.IsNullOrEmpty(name)) _programNamespaces.Add(name);
+        }
+
+        private bool _isJavaScriptTarget;
+        private readonly HashSet<string> _programNamespaces = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// <c>System.Windows.Forms.Button</c> on a web build, when <c>System.Windows.Forms</c> is a namespace the program
+        /// declares and <c>Button</c> a type it declares: that type. Null otherwise — every other dotted name (a qualified
+        /// <c>System.Math</c>, any name on a C# build) takes today's path unchanged. ⚠ Types are registered by BARE name,
+        /// so two program namespaces declaring the same simple name is a known limit.
+        /// </summary>
+        private TypeInfo ProgramNamespaceType(string dottedName)
+        {
+            if (!_isJavaScriptTarget || _programNamespaces.Count == 0 || string.IsNullOrEmpty(dottedName)) return null;
+            var dot = dottedName.LastIndexOf('.');
+            if (dot <= 0 || dot == dottedName.Length - 1) return null;
+            if (!_programNamespaces.Contains(dottedName.Substring(0, dot))) return null;
+            var simple = dottedName.Substring(dot + 1);
+            return (ResolveTypeSymbol(simple)?.Type ?? _typeManager.GetType(simple)) is
+                { Kind: TypeKind.Class or TypeKind.Structure or TypeKind.Interface or TypeKind.Enum } type
+                ? type
+                : null;
+        }
 
         private bool _netResolutionIsWinForms;
 

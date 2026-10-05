@@ -25,6 +25,18 @@ namespace VisualGameStudio.Tests.Compiler;
 /// </summary>
 internal static class JsTestSupport
 {
+    /// <summary>Every namespace the AST declares, by its full dotted name — the compiler's own rule (ProgramNamespaceNames).</summary>
+    private static IEnumerable<string> ProgramNamespaces(IEnumerable<BasicLang.Compiler.AST.ASTNode> declarations, string outer)
+    {
+        foreach (var decl in declarations ?? Enumerable.Empty<BasicLang.Compiler.AST.ASTNode>())
+        {
+            if (decl is not BasicLang.Compiler.AST.NamespaceNode ns || string.IsNullOrEmpty(ns.Name)) continue;
+            var full = outer == null ? ns.Name : outer + "." + ns.Name;
+            yield return full;
+            foreach (var inner in ProgramNamespaces(ns.Members, full)) yield return inner;
+        }
+    }
+
     /// <summary>Build an IRModule from BasicLang source, asserting a clean front end.</summary>
     /// <param name="sourceFilePath">
     /// Threaded onto every IRFunction as <c>SourceFilePath</c>. Omitting it leaves the path
@@ -69,6 +81,10 @@ internal static class JsTestSupport
             string.Join("; ", parser.Errors.Select(e => e.ToString())), source);
 
         var analyzer = new SemanticAnalyzer();
+        // Spec §4.9 (portable-controls Task 15) — as BasicCompiler.CompileUnit configures it: a web target, and the
+        // source's own namespaces (full dotted names).
+        analyzer.ConfigureTarget("javascript");
+        analyzer.ConfigureProgramNamespaces(ProgramNamespaces(ast.Declarations, null));
         Fail(!analyzer.Analyze(ast), "semantic analysis",
             string.Join("; ", analyzer.Errors.ConvertAll(e => e.Message)), source);
 

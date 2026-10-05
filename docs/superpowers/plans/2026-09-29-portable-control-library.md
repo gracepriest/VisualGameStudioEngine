@@ -1868,10 +1868,9 @@ public class HandlerSignatureRouteTests
   - `Public Shared Event` fails C# CS0120 and JS (`push` on an undefined static list, TypeError) — pre-existing. The
     library's controls raise INSTANCE events only (WinForms has no shared control events), so not needed by 2a.
   - `Dim d As Action(Of Integer) = AddressOf Me.A` is refused — pre-existing.
-  - ⛔ DECISION NEEDED by Task 28+: with no `<Flags>`, `Bold Or Italic` prints `3` on every backend, while WinForms'
-    `AnchorStyles.Top Or AnchorStyles.Left` prints `Top, Left`. Recommendation (owner-delegated default): the LIBRARY's
-    flags enums carry a `ToString` that matches WinForms, library-side (a shared helper the flags enums' text routes
-    through), rather than a BasicLang `<Flags>` attribute — no language change, and only the library's enums need it.
+  - ✅ DECIDED (owner-delegated, 2026-10-05): with no `<Flags>`, `Bold Or Italic` prints `3` on every backend, while
+    WinForms' `AnchorStyles.Top Or AnchorStyles.Left` prints `Top, Left`. The LIBRARY's flags enums get a WinForms-style
+    `ToString` (`Top, Left`) library-side — NO `<Flags>` language attribute. Implemented by Task 28 (see there).
     Record the choice when Task 28 lands.
   - JS `RemoveHandler` (Task 12) covers BasicLang events only; a DOM `addEventListener` wiring is not removable by a
     fresh `AddressOf` (the DOM compares identity). Library concern — Task 28+ keeps the bound handler it attaches.
@@ -2175,6 +2174,7 @@ O13, spec §4.10, M18.
 - ⚠ Seen in Task 14's neighbour run, PRE-EXISTING (identical at `cc6eceda`, measured in a detached worktree):
   `PrimitiveStaticSurfaceRunTests.CSharp_Runs` (`dbl(-Infinity)` → FormatException) and `Cpp_Runs` / `Cpp_Aggressive_Runs`
   (MSVC C2312 — a `catch (const std::runtime_error&)` caught twice). Not on the known-failure list: triage at Task 17.
+- ⏭ TO DO in a later commit if cheap, else keep noted (owner, 2026-10-05): make `Chr` return CHAR as VB's does.
 - ⚠ Recorded: `Chr` still answers a String (VB's is Char) — changing it moves every `Chr(n) & …`; `ChrW` is the Char
   spelling. The C++ `Asc` reads the code point unsigned but only for the first byte (no UTF-8 decoding).
 
@@ -2447,6 +2447,12 @@ public class JavaScriptLibraryIdiomTests
 - [ ] **Step 1: Clean build** of the Shell and the test project (Release).
 - [ ] **Step 2: Fast subset** into `$sp\gate20a-fast.txt` (both streams). Compare the SORTED failure NAMES with `baseline-fast.txt` (Task 0): zero new names. State the base with every number.
 - [ ] **Step 3: Integration by name:** every fixture Tasks 1–16 created or edited, plus `CrossFileBindingTests`, `ForwardDeclaredType*`, `JavaScriptEventTests`, `JavaScriptInteropTests`, `CppPassthroughTests`, `NetBuildPipelineTests`, `OverridablePropertyTests`, `InheritedMemberTests`, `JavaScriptProjectBuildTests`, `WinFormsTemplateBuildTests`, `WinFormsCatalogSweepTests`, `FormBuildEmissionTests`, `FormDesignerAcceptanceTests`, `WebMainStartupTests`, the LSP suite (`CrossFileAnalysisTests`, `LspMixedProjectTests`, `ModClsDocumentTests`, `CompletionServiceTests`), `JsExecutionTierRosterTests`. Compare names with `baseline-int.txt`.
+- **Triage list (known before the gate — compare against these, never baseline new ones):**
+  - `PrimitiveStaticSurfaceRunTests.CSharp_Runs` / `Cpp_Runs` / `Cpp_Aggressive_Runs` — INHERITED: failing at `9740b03c`
+    (Task 7c review) and identically at `cc6eceda` (measured in Task 14). C# `dbl(-Infinity)` → FormatException; C++ MSVC
+    C2312 (a `catch (const std::runtime_error&)` caught twice).
+  - `DelegateMemberInvocationExecutionTests.G8_…` and `UserDelegateConversionExecutionTests.E9e_…` — INHERITED (failing at
+    `9740b03c`): C++ pins on clang's error text / `bad_function_call`, which MSVC words differently.
 - [ ] **Step 4: The mutation table** of Tasks 1–16 in one place (commit message or `docs/HANDOFF.md`): each mutant, the test that went red.
 - [ ] **Step 5: Records.** `docs/HANDOFF.md` "NEWEST" (auto-memory does not travel): what 2.0a changed for users (`#If`, the symbols, the release note), the gate numbers with their base. `CLAUDE.md`: correct the MODULE-call matrix / JS-trap bullets that 2.0a makes stale (the unqualified self-call row, `Me.` inside a lambda, `RemoveHandler`), exactly as `40e9c172` corrected its rows.
 - [ ] **Step 6: Commit.** No IDE drop (nothing the owner needs to click).
@@ -3389,7 +3395,7 @@ D21, scope call S9.
 ### Task 28: The library skeleton, the inclusion hook, the DOM surface
 Spec §5.1, §5.2.
 **Files and responsibilities:**
-- `BasicLang/lib/js/forms/*.bas` (new): `Namespace System` (`EventArgs` + `Empty`), `Namespace System.Drawing` (`Color`, `Point`, `Size`, `Image`, `Font`, `FontStyle` — classes, copy-on-get/set, spec §5.7), `Namespace System.Windows.Forms` (`Control`, `Form`, `ControlCollection`, `ObjectCollection`, enums `Keys`, `MouseButtons`, `DockStyle`, `AnchorStyles`, `BorderStyle`, `ContentAlignment`, `PictureBoxSizeMode`, `DialogResult`, `MessageBoxButtons` (OK, OKCancel, YesNo)). Idioms of spec §5.1 (listeners declared ABOVE the attaching method, `AddressOf Me.VgsOnDom…`; `Me.`-qualified self-calls; `Optional` instead of overloads; `Vgs`-prefixed internals; constructors assign).
+- `BasicLang/lib/js/forms/*.bas` (new): `Namespace System` (`EventArgs` + `Empty`), `Namespace System.Drawing` (`Color`, `Point`, `Size`, `Image`, `Font`, `FontStyle` — classes, copy-on-get/set, spec §5.7), `Namespace System.Windows.Forms` (`Control`, `Form`, `ControlCollection`, `ObjectCollection`, enums `Keys`, `MouseButtons`, `DockStyle`, `AnchorStyles`, `BorderStyle`, `ContentAlignment`, `PictureBoxSizeMode`, `DialogResult`, `MessageBoxButtons` (OK, OKCancel, YesNo)). ⛔ DECIDED (owner-delegated, 2026-10-05): the FLAGS enums (`AnchorStyles`, and any other combined-value enum) print WinForms-style — `Top, Left` for `Top Or Left`, the declared names in ascending value, `None` for 0 — through a library-side helper their text routes through; NO `<Flags>` language attribute (the compiler prints a combined value as its number, `3`). Idioms of spec §5.1 (listeners declared ABOVE the attaching method, `AddressOf Me.VgsOnDom…`; `Me.`-qualified self-calls; `Optional` instead of overloads; `Vgs`-prefixed internals; constructors assign).
 - `BasicLang/BasicLang.csproj`: copy every library file to the output (as `lib\js\dom-core.bli`, `:43`).
 - `BasicLang/Compiler.cs`: `WithWebFormsLibrary(files)` beside `WithJavaScriptDeclarations` (`:550-559`), on the same route (`:354`): JavaScript target AND a TOKEN scan (comments and strings skipped — spec §11b note 3) finds `Using`/`Imports System.Windows.Forms`/`System.Drawing` or a qualified `System.Windows.Forms.`/`System.Drawing.` reference.
 - `BasicLang/lib/js/dom-core.bli` and `IDE/lib/js/dom-core.bli` (both, one commit): the members spec §5.1 lists (rects/client metrics, `closest`/`contains`, positional style, event fields `button`/`buttons`/`detail`/`relatedTarget`/`code`/modifiers, `getComputedStyle`, `alert`/`confirm`, `CSSStyleSheet.insertRule`/`deleteRule`, `CSSMediaRule`).
