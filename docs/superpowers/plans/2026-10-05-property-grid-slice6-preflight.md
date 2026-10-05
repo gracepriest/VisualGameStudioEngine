@@ -1097,6 +1097,17 @@ No decision changed, so no commit of its own; recorded here with Task 1.
   | ★ bind on the primary only (host) | KILLED on both targets — already at the design step (the merged Click row stays blank: only one member bound) |
   | ★ the IDE route passes no forms (`BuildService` `forms: null`) | KILLED: web/CLI green, web/IDE "no MultiForm.css" — the both-entry-points kill |
 
+### Task 8 — records (base `eafb5573`; no test run, per the cadence rule)
+
+- `docs/form-designer-followups.md` **§44**: D-12's deferred VS behaviours (selection across undo/redo, tray Ctrl+click,
+  Ctrl+A, Shift-adds vs Ctrl-toggles, the primary's white handles) plus what execution found (the wrong "nothing pins the
+  collapse" claim, the TestCaseSource-size/`--filter` trap, the unreachable store-backed merged row, the stricter
+  Events "same event" rule, a frozen merged row naming only its first frozen member).
+- Per-task notes (base SHA, deviations, red evidence, the fixtures run, the mutation tables) are the sections above.
+- Mutation ledger, slice 6 (★ each): Task 1 2/2, Task 2 2/2, Task 3 2/2, Task 4 2/2 (one real-view EQUIVALENT, killed at
+  the VM), Task 4b 2/2, review fixes 4 reds, Task 5 2/2, Task 6 2/2, Task 7 2/2 — every starred mutant killed.
+- No gate here: the slice's ONE gate is Task 9 step 3, on the merged tree.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

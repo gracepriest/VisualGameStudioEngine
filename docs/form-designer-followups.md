@@ -729,3 +729,32 @@ its other number errors throw. `FormCodeScan` now survives any non-fatal lexer e
 - `MainWindowViewModel.CleanupDocumentState` → `MarkClosed()` is not driven by a test (the closed behaviour is, through
   the view model).
 - An editable Avalonia ComboBox (11.3.13) opens only from its 12px glyph, not from a click on its right-hand padding.
+
+### 44. Multi-select (property-grid slice 6): deferred VS behaviour and things found
+
+Deferred by the slice-6 pre-flight (D-12), each a VS behaviour this designer does not have yet:
+
+- **The selection does not survive undo/redo.** An undo re-parses the document and `SyncDesignerPanels` clears the
+  store (the old parse's objects are ghosts); VS keeps the selection. Needs re-resolving the selection by id across a
+  re-parse — the grid's own rebuild would then follow.
+- **Tray Ctrl+click.** The tray only `Set`s, so components cannot join a multi-selection. The grid's rules are generic
+  (D-7), so this is a tray-only change.
+- **Ctrl+A** (select all) is not bound on the canvas.
+- **Shift adds, Ctrl toggles** in VS; here both toggle (`FormCanvasControl.ApplyClickSelection`).
+- **The primary's white handles.** VS marks the primary with white grab handles and the others with black; the canvas
+  draws all members alike, so the control align-lefts will use is not visible (promotion, D-13, made it easy to change).
+
+Found while executing slice 6, recorded rather than fixed:
+
+- **The pre-flight's "nothing pins the collapse-on-release" was wrong**: `FormCanvasMultiSelectTests.APlainClickOnAn…`
+  clicked a selected control and passed only through the collapse. Corrected in Task 4b; the lesson is to grep for the
+  BEHAVIOUR (a plain click on a member), not for the field name.
+- **A `TestCaseSource` of ~15k cases stops `--filter` selecting**: `--filter "FullyQualifiedName~X"` then ran the
+  unrelated MSVC/AOT conformance fixture for >10 minutes. Sweeps of that size are one test over a loop here.
+- **A store-backed merged row is not reachable today.** All-or-nothing now pre-judges a member's store
+  (`FormRootValues.RefusalOf`), but only FormRoot rows are store-backed and the Form never joins a multi-selection; the
+  path is pinned by a constructed test. If a control row ever gets a store, its refusal rule must be pure like these.
+- **The Events-tab "same event" rule includes the name on the target** (stricter than the pre-flight's D-8): two kinds
+  mapping one WinForms event to different DOM events do not share a row. No catalog pair does that today.
+- **Merged rows have no Reset menu state of their own while a member is frozen** — the row is frozen (D-3) and offers
+  nothing, which is correct, but the reason names only the FIRST frozen member.
