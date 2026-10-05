@@ -608,6 +608,9 @@ public class WinFormsCatalogSweepTests
         }
     }
 
+    /// <summary>The same sample values, for <c>WinFormsNetResolutionTests</c>' armed-compiler sweep — one source, not a copy.</summary>
+    internal static string SampleValueFor(FormPropertyDef property) => SampleValue(property);
+
     /// <summary>A value that is valid for the property's declared type — the Canon case.</summary>
     private static string SampleValue(FormPropertyDef property) => property.Type switch
     {

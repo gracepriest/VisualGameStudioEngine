@@ -216,6 +216,65 @@ namespace BasicLang.Net
         internal static IReadOnlyList<string> FrameworkAssemblies => FrameworkSet.Value;
 
         /// <summary>
+        /// The WindowsDesktop REFERENCE pack (<c>System.Windows.Forms</c>, <c>System.Drawing</c>, …) for the
+        /// running runtime, or EMPTY — off Windows, or where the SDK installed no such pack. Portable-
+        /// controls Task 7d: a WinForms project's closure is this plus <see cref="FrameworkAssemblies"/>
+        /// (<see cref="WithWindowsDesktop"/>), so <c>Inherits Form</c>'s members are knowable.
+        ///
+        /// <para>⚠ The REFERENCE pack (metadata), not the WindowsDesktop shared runtime: the resolver
+        /// only reads metadata, and the shared runtime directory also holds native DLLs that are not
+        /// assemblies at all. <c>packs\Microsoft.WindowsDesktop.App.Ref\&lt;version&gt;\ref\net&lt;M.m&gt;</c> under
+        /// the dotnet root the running runtime lives in; the runtime's own version when that pack is
+        /// installed, otherwise the highest of the same major.minor. The test suite's
+        /// <c>WinFormsCompile</c> binds exactly this pair (runtime assemblies + desktop ref pack).</para>
+        /// </summary>
+        internal static IReadOnlyList<string> WindowsDesktopAssemblies => WindowsDesktopSet.Value;
+
+        private static readonly Lazy<IReadOnlyList<string>> WindowsDesktopSet = new(() =>
+        {
+            var empty = (IReadOnlyList<string>)Array.Empty<string>();
+            if (!OperatingSystem.IsWindows()) return empty;
+
+            var runtimeDir = SharedFrameworkDirectory();           // ...\dotnet\shared\Microsoft.NETCore.App\8.0.23
+            if (runtimeDir == null) return empty;
+            var runtimeVersionText = Path.GetFileName(runtimeDir);
+            var dotnetRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(runtimeDir)));
+            if (string.IsNullOrEmpty(dotnetRoot) || !Version.TryParse(runtimeVersionText.Split('-')[0], out var runtimeVersion))
+                return empty;
+
+            var packRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.WindowsDesktop.App.Ref");
+            if (!Directory.Exists(packRoot)) return empty;
+
+            var tfm = $"net{runtimeVersion.Major}.{runtimeVersion.Minor}";
+            var candidates = Directory.GetDirectories(packRoot)
+                .Select(d => (Dir: d, Ok: Version.TryParse(Path.GetFileName(d).Split('-')[0], out var v), Version: v))
+                .Where(c => c.Ok && c.Version.Major == runtimeVersion.Major && c.Version.Minor == runtimeVersion.Minor)
+                .OrderByDescending(c => string.Equals(Path.GetFileName(c.Dir), runtimeVersionText, StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(c => c.Version);
+            foreach (var candidate in candidates)
+            {
+                var refDir = Path.Combine(candidate.Dir, "ref", tfm);
+                if (!Directory.Exists(refDir)) continue;
+                var dlls = Directory.GetFiles(refDir, "*.dll");
+                if (dlls.Length > 0) return dlls;
+            }
+            return empty;
+        });
+
+        /// <summary>
+        /// <paramref name="closure"/> with the WindowsDesktop pack added. ⛔ Three assemblies ship in BOTH
+        /// (<c>System.Drawing</c>, <c>WindowsBase</c>, <c>Microsoft.VisualBasic</c>) and the DESKTOP copy must win,
+        /// as under the real WindowsDesktop SDK: two references with one simple name leave Roslyn guessing.
+        /// </summary>
+        internal static IReadOnlyList<string> WithWindowsDesktop(IReadOnlyList<string> closure, IReadOnlyList<string> desktop)
+        {
+            var desktopNames = new HashSet<string>(desktop.Select(Path.GetFileNameWithoutExtension), StringComparer.OrdinalIgnoreCase);
+            return closure.Where(p => !desktopNames.Contains(Path.GetFileNameWithoutExtension(p)))
+                .Concat(desktop)
+                .ToList();
+        }
+
+        /// <summary>
         /// Resolves <paramref name="project"/>'s reference elements into an assembly closure.
         /// </summary>
         /// <param name="projectFilePath">

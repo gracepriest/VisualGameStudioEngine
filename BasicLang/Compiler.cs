@@ -148,10 +148,27 @@ namespace BasicLang.Compiler
             // structurally unresolvable and §6.3 forbids manufacturing warnings on valid
             // programs. Leave those projects un-armed until the closure can include the desktop
             // reference set.
-            if (project != null && (project.UseWindowsForms || project.UseWpf))
+            if (project != null && project.UseWpf)
                 return;
 
+            // Portable-controls Task 7d: a WinForms project IS armed where the WindowsDesktop reference
+            // pack is installed (Windows) — the closure then sees System.Windows.Forms, so `Inherits Form`'s
+            // members are knowable (a bare `Close()` is Form.Close, not a same-named Module procedure) and a
+            // misspelled WinForms member is a BasicLang error instead of a csc one. Without the pack (off
+            // Windows) it stays un-armed exactly as before: every Form/Button would be unresolvable.
             Net.NetTypeResolver resolver = null;
+            if (project != null && project.UseWindowsForms)
+            {
+                var desktop = Net.NetReferenceResolver.WindowsDesktopAssemblies;
+                if (desktop.Count == 0)
+                    return;
+                NetResolverFactory = () => resolver ??= Net.NetTypeResolver.Create(
+                    Net.NetReferenceResolver.WithWindowsDesktop(
+                        Net.NetReferenceResolver.Resolve(project, projectFilePath ?? project.FilePath, packageAssemblies).All,
+                        desktop));
+                return;
+            }
+
             NetResolverFactory = () => resolver ??= Net.NetTypeResolver.Create(
                 project != null
                     ? Net.NetReferenceResolver.Resolve(

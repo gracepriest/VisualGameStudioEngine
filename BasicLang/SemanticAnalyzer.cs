@@ -3593,10 +3593,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Portable-controls Task 7d: a WinForms receiver (the closure sees System.Windows.Forms only in
+            // an armed WinForms project). Absent from the CALL surface is not absent: an event (`btn.Click`)
+            // or an extension method is nameable, so the real question goes to DeclaresNameableMember — and a
+            // member that is not there at all is a BasicLang ERROR, not a late csc one.
+            if (IsWinFormsTypeName(fullName))
+            {
+                if (!NetResolver().DeclaresNameableMember(fullName, memberName, includeProtected: false))
+                    ReportMissingWinFormsMember(fullName, memberName, line, column);
+                return;
+            }
+
             NetWarning("BL6017",
                 $".NET type '{fullName}' has no accessible member named '{memberName}'.",
                 line, column);
         }
+
+        private static bool IsWinFormsTypeName(string fullName) =>
+            fullName != null && fullName.StartsWith("System.Windows.Forms.", StringComparison.Ordinal);
+
+        private void ReportMissingWinFormsMember(string fullName, string memberName, int line, int column) =>
+            Error($"BL6017: '{fullName}' has no member named '{memberName}'.", line, column);
+
+        /// <summary>
+        /// Portable-controls Task 7d: the WinForms class at the end of <paramref name="classType"/>'s chain of
+        /// BasicLang classes (<c>Class F1 Inherits Form</c> → <c>System.Windows.Forms.Form</c>), resolved through
+        /// the armed closure, or null — no .NET base, not a WinForms one, or the resolver not armed.
+        /// </summary>
+        private string WinFormsBaseOf(TypeInfo classType) =>
+            NetBaseOf(classType) is { } fullName && IsWinFormsTypeName(fullName) ? fullName : null;
 
         /// <summary>
         /// <see cref="object"/>'s callable members. See <see cref="ProbeNetMemberAccess"/>.
@@ -12086,22 +12111,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private bool NetBaseDeclaresMember(TypeInfo classType, string name)
         {
-            if (_netResolverFactory == null || classType == null || string.IsNullOrEmpty(name)) return false;
+            if (string.IsNullOrEmpty(name) || NetBaseOf(classType) is not { } fullName) return false;
+            // Task 7d: ANY nameable member — Form's protected and public members alike (a derived class may name
+            // both) — and no extension method: VB never reaches one without a receiver.
+            return NetResolver().DeclaresNameableMember(fullName, name, includeProtected: true, includeExtensions: false);
+        }
 
+        /// <summary>
+        /// The resolved full name of the .NET class at the end of <paramref name="classType"/>'s chain of BasicLang
+        /// classes, or null — the resolver not armed, no .NET base, or none that resolves. A link with no recorded
+        /// members is a .NET candidate; one that does not resolve says nothing about the chain above it, so the walk
+        /// goes on. A base the analyzer kept only as a NAME (an <c>Inherits Form</c> it could not type) is tried too.
+        /// </summary>
+        private string NetBaseOf(TypeInfo classType)
+        {
+            if (_netResolverFactory == null || classType == null) return null;
+
+            var seen = new HashSet<TypeInfo>(ReferenceEqualityComparer.Instance);
             var guard = 0;
-            for (var type = classType.BaseType; type != null && guard++ < 64; type = type.BaseType)
+            for (var current = classType; current != null && seen.Add(current) && guard++ < 64; current = current.BaseType)
             {
-                // A BasicLang class declares its members in source; only a type with none recorded can be .NET.
-                if (type.DeclaredMemberNames != null || (type.Members != null && type.Members.Count > 0)) continue;
-                // An unresolved (or member-less) link says nothing about the chain above it — go on.
-                if (ResolveNetType(type.Name, type.GenericArguments?.Count ?? 0, out var fullName)
-                    != NetTypeLookupOutcome.Resolved)
-                    continue;
-                if (NetResolver().GetMembers(fullName)
-                    .Any(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
-                    return true;
+                var isBasicLang = current.DeclaredMemberNames != null || (current.Members != null && current.Members.Count > 0);
+                if (!isBasicLang && !ReferenceEquals(current, classType)
+                    && ResolveNetType(current.Name, current.GenericArguments?.Count ?? 0, out var resolved) == NetTypeLookupOutcome.Resolved)
+                    return resolved;
+                if (current.BaseType == null && !string.IsNullOrEmpty(current.DeclaredBaseName)
+                    && ResolveNetType(current.DeclaredBaseName, 0, out var named) == NetTypeLookupOutcome.Resolved)
+                    return named;
             }
-            return false;
+            return null;
         }
 
         public void Visit(MemberAccessExpressionNode node)
@@ -12314,6 +12352,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else if (DeclaresMember(objectType, node.MemberName)
                      || (objectType.DeclaredMemberNames != null && HasExtensionMethod(objectType, node.MemberName)))
             {
+                SetNodeType(node, _typeManager.ObjectType);
+            }
+            // Portable-controls Task 7d: a member a user class over a WinForms base (`Class F1 Inherits Form`)
+            // neither declares nor inherits from that base is a BasicLang error — `Me.Textt = "x"` was accepted
+            // and left to csc. Protected members count through Me/MyBase (a derived class may name them).
+            else if (objectType.DeclaredMemberNames != null && WinFormsBaseOf(objectType) is { } winFormsBase
+                     && !NetResolver().DeclaresNameableMember(winFormsBase, node.MemberName,
+                         includeProtected: node.Object is MyBaseExpressionNode
+                             || node.Object is IdentifierExpressionNode { Name: var receiverName }
+                                && string.Equals(receiverName, "Me", StringComparison.OrdinalIgnoreCase)))
+            {
+                ReportMissingWinFormsMember(winFormsBase, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
             // A BasicLang class whose members are all known is never a .NET type, whatever its name.
