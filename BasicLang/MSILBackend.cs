@@ -3018,7 +3018,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             accessor = null;
 
             var name = receiver?.Name;
-            if (name == null || !CppExceptionTypes.TryGetNetFullName(name, out var fullName)) return false;
+            if (name == null) return false;
+
+            // #151: a USER class whose chain ends in a .NET exception (`Class MyErr : Inherits
+            // Exception`) inherits the same accessors — unless the chain itself declares the
+            // member. Before, `e.Message` on a MyErr went out as `ldfld MyErr::Message`: it
+            // assembled and died with MissingFieldException.
+            if (!CppExceptionTypes.TryGetNetFullName(name, out var fullName)
+                && !TryUserExceptionRoot(name, member, out fullName))
+                return false;
 
             token = "[mscorlib]" + fullName;
             if (ExceptionMembers.TryGetValue(member ?? "", out accessor)) return true;
@@ -3030,6 +3038,49 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 + "then fails with MissingFieldException or MissingMethodException at run time, so "
                 + "it is refused here instead. Add a row to MSILCodeGenerator.ExceptionMembers plus "
                 + "a round-trip test to widen the set.");
+        }
+
+        /// <summary>
+        /// #151: the fully-qualified .NET exception a USER class's base chain ends in, when no class
+        /// in that chain declares <paramref name="member"/> itself (a field, property, method or
+        /// event of that name is the user's and wins). False for a chain that ends anywhere else.
+        /// </summary>
+        private bool TryUserExceptionRoot(string className, string member, out string fullName)
+        {
+            fullName = null;
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var name = className;
+            while (TryFindClass(name, out var irClass))
+            {
+                if (!seen.Add(irClass.Name) || DeclaresMember(irClass, member)) return false;
+                name = irClass.BaseClass;
+                if (string.IsNullOrEmpty(name)) return false;
+            }
+
+            // Reached only when `name` is not a class of this module: the chain's .NET base.
+            return seen.Count > 0 && CppExceptionTypes.TryGetNetFullName(name, out fullName);
+        }
+
+        private static bool DeclaresMember(IRClass irClass, string member) =>
+            (irClass.Fields ?? new List<IRField>()).Any(f => string.Equals(f?.Name, member, StringComparison.OrdinalIgnoreCase))
+            || (irClass.Properties ?? new List<IRProperty>()).Any(p => string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase))
+            || (irClass.Methods ?? new List<IRMethod>()).Any(m => string.Equals(m?.Name, member, StringComparison.OrdinalIgnoreCase))
+            || (irClass.Events ?? new List<IREvent>()).Any(e => string.Equals(e?.Name, member, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// #151: a BARE inherited exception member inside a user exception class's own instance
+        /// body (<c>Return "E:" &amp; Message</c>) — the receiver is <c>Me</c>. Only the members of
+        /// <see cref="ExceptionMembers"/>; a bare name is never refused here, it falls through.
+        /// </summary>
+        private bool TryBareInheritedExceptionMember(string name, out string token, out string accessor)
+        {
+            token = null;
+            accessor = null;
+            if (!_currentMethodIsInstance || _currentClassOwner == null) return false;
+            if (!ExceptionMembers.TryGetValue(name ?? "", out accessor)) return false;
+            if (!TryUserExceptionRoot(_currentClassOwner.Name, name, out var fullName)) return false;
+            token = "[mscorlib]" + fullName;
+            return true;
         }
 
         /// <summary>
@@ -3362,6 +3413,19 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 WriteLine($"    ldsfld {IlTypeSpec(ownStatic.Type)} {SanitizeName(ownStaticOwner.Name)}::{SanitizeName(ownStatic.Name)}");
                 _currentStack++;
+                return;
+            }
+
+            // #151: an inherited .NET exception member (`Message` inside `Class MyErr : Inherits
+            // Exception`) — an accessor call on `Me`. It fell through to the WARNING below, pushed
+            // nothing, and the CLR rejected the method with InvalidProgramException.
+            if (TryBareInheritedExceptionMember(name, out var exToken, out var exAccessor))
+            {
+                EmitLdarg(0);
+                _currentStack++;
+                WriteLine($"    callvirt instance string {exToken}::{exAccessor}()");
+                _currentStack--;   // the receiver
+                _currentStack++;   // the value
                 return;
             }
 
