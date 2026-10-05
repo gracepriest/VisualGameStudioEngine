@@ -554,9 +554,10 @@ internal static class BarePropertyLoweringProbes
 
     /// <summary>P16 — the Overridable case: BaseBox.Work writes its OWN Overridable auto-property
     /// V bare; Box Overrides V with a Get/Set backed by K. MSIL was the one backend this ADR
-    /// measured wrong→right for this shape (3,3 -&gt; 12,3); JavaScript is wrong for BOTH the bare
-    /// and the Me.-qualified form, before and after (a SEPARATE, pre-existing defect: a class-field
-    /// initializer shadows the derived accessor). Tested on MSIL only, per the brief's scope.</summary>
+    /// measured wrong→right for this shape (3,3 -&gt; 12,3). JavaScript was wrong for BOTH the bare
+    /// and the Me.-qualified form (a SEPARATE defect: a class-field initializer shadowed the derived
+    /// accessor); #150 fixed it, and <c>OverridableAutoPropertyExecutionTests</c> runs P16 (and the
+    /// Me.-qualified P16q) on JavaScript. This fixture's own rows stay on MSIL, per this ADR's scope.</summary>
     internal const string P16 = """
         Function Seed(v As Integer) As Integer
             Console.WriteLine("seed")
