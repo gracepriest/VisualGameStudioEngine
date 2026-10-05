@@ -778,7 +778,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 }
             }
 
-            var header = $"class {SanitizeName(irClass.Name)}";
+            _currentClassName = SanitizeName(irClass.Name);
+            var header = $"class {_currentClassName}";
             if (!string.IsNullOrEmpty(irClass.BaseClass))
                 header += $" extends {ClassReference(irClass.BaseClass)}";
 
@@ -819,6 +820,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _indentLevel--;
             Line("}");
 
+            _currentClassName = null;
             _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
             _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             _staticMemberOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1041,6 +1043,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line(signature + " {");
             _indentLevel++;
 
+            // An Iterator member returns a re-iterable wrapper around its body, as a free Iterator
+            // Function does (see OpenIteratorBody) — before this it emitted a plain method holding
+            // `yield`, a SyntaxError that stopped the whole file loading (#145).
+            var reiterable = IsReiterableIterator(impl);
+            var iterParameters = string.Join(", ", (impl.Parameters ?? new List<IRVariable>()).ConvertAll(p => SanitizeName(p.Name)));
+            var savedBaseHome = _iteratorBaseHome;
+            if (reiterable)
+            {
+                OpenIteratorBody(iterParameters);
+                _iteratorBaseHome = _currentClassName == null ? null
+                    : isStatic ? _currentClassName : _currentClassName + ".prototype";
+            }
+
             // The parameters are declared BEFORE the prologue is written, so a `super(...)` argument
             // renders in this member's own scope (see SuperCall).
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
@@ -1063,6 +1078,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
             _superFirst = null;
+
+            if (reiterable) CloseIteratorBody(iterParameters);
+            _iteratorBaseHome = savedBaseHome;
 
             _indentLevel--;
             Line("}");
@@ -2379,12 +2397,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // Native async and native generators — the C++ backend emulates async
             // synchronously with no scheduler and hand-builds C++20 coroutines for iterators;
-            // here the runtime provides both. `function*` keeps iteration LAZY, which a
-            // materialise-an-array lowering would silently lose.
+            // here the runtime provides both. A generator keeps iteration LAZY, which a
+            // materialise-an-array lowering would silently lose. An Iterator Function is a plain
+            // function returning a RE-ITERABLE wrapper around one — see OpenIteratorBody.
             var modifiers = function.IsAsync ? "async " : "";
-            var star = function.IsIterator ? "*" : "";
+            var reiterable = IsReiterableIterator(function);
+            var star = function.IsIterator && !reiterable ? "*" : "";
             Line($"{modifiers}function{star} {SanitizeName(function.Name)}({parameters}) {{");
             _indentLevel++;
+            if (reiterable) OpenIteratorBody(parameters);
 
             // Declare user locals up front. `let`, not `const`: unlike SSA temps these are
             // reassigned by IRAssignment. Declaring them here rather than at first assignment
@@ -2412,10 +2433,64 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
             EmitStructured(function.EntryBlock ?? function.Blocks?.FirstOrDefault());
 
+            if (reiterable) CloseIteratorBody(parameters);
             _indentLevel--;
             Line("}");
             _currentFunction = null;
         }
+
+        /// <summary>
+        /// True for an <c>Iterator Function</c> lowered through <see cref="OpenIteratorBody"/>.
+        /// An Async one is left exactly as it was (#145 does not decide what it means): it is not
+        /// an <c>IEnumerable</c> a <c>For Each</c> can walk.
+        /// </summary>
+        private static bool IsReiterableIterator(IRFunction function) =>
+            function != null && function.IsIterator && !function.IsAsync;
+
+        /// <summary>
+        /// Opens an iterator's body: the function RETURNS an iterable whose every
+        /// <c>[Symbol.iterator]()</c> starts a FRESH generator over the body.
+        ///
+        /// <para>⛔ Not a bare <c>function*</c> returning its generator object. That object is
+        /// ONE-SHOT, where the <c>IEnumerable</c> an Iterator Function returns is re-enumerable:
+        /// each <c>For Each</c> runs the body again from the top. Measured (#145, probe I4): a
+        /// result held in a variable and walked twice ran its body once, and the second walk
+        /// printed nothing, from a build that reported success.</para>
+        ///
+        /// <para>The generator takes the parameters as its OWN, bound to the call's values, so
+        /// each enumeration starts from the arguments as passed even when the body assigns a
+        /// parameter (VB copies them per enumeration). <c>this</c> is bound too, which is what lets
+        /// a member iterator read its fields.</para>
+        ///
+        /// <para>⛔ A <c>function*</c> EXPRESSION has no <c>super</c> (a SyntaxError on load), so a
+        /// <c>MyBase.M()</c> inside the body renders through <see cref="_iteratorBaseHome"/>
+        /// instead — see <see cref="BaseCall"/>. And a generator METHOD cannot be used in its
+        /// place: a method on the class returns the one-shot object again.</para>
+        /// </summary>
+        private void OpenIteratorBody(string parameters)
+        {
+            Line($"return {{[Symbol.iterator]: function* ({parameters}) {{");
+            _indentLevel++;
+        }
+
+        private void CloseIteratorBody(string parameters)
+        {
+            _indentLevel--;
+            Line($"}}.bind({(parameters.Length == 0 ? "this" : "this, " + parameters)})}};");
+        }
+
+        /// <summary>
+        /// While a MEMBER iterator's body is emitted: the object whose prototype a
+        /// <c>MyBase.M()</c> resolves against — <c>Class.prototype</c> for an instance member,
+        /// the class itself for a <c>Shared</c> one. <c>super.M(...)</c> is exactly
+        /// <c>Object.getPrototypeOf(home).M.call(this, ...)</c>; that spelling is legal inside the
+        /// <c>function*</c> expression <see cref="OpenIteratorBody"/> emits, where <c>super</c>
+        /// is not. Null everywhere else, which keeps <c>super</c>.
+        /// </summary>
+        private string _iteratorBaseHome;
+
+        /// <summary>The JavaScript name of the class being emitted (its <c>class X</c> header); null outside one.</summary>
+        private string _currentClassName;
 
         // ------------------------------------------------------------------
         // Structured emission
@@ -3603,7 +3678,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (b.ByRefArguments != null && b.ByRefArguments.Contains(true))
                 throw JsCapabilityChecker.ByRefArgumentRejection("MyBase." + b.MethodName);
 
-            return $"super.{SanitizeName(b.MethodName)}({string.Join(", ", b.Arguments.ConvertAll(Expr))})";
+            var args = string.Join(", ", b.Arguments.ConvertAll(Expr));
+            if (_iteratorBaseHome == null)
+                return $"super.{SanitizeName(b.MethodName)}({args})";
+
+            // Inside an iterator body (see _iteratorBaseHome): `super` is a SyntaxError there.
+            return $"Object.getPrototypeOf({_iteratorBaseHome}).{SanitizeName(b.MethodName)}" +
+                   $".call(this{(args.Length == 0 ? "" : ", " + args)})";
         }
 
         private void EmitValueOrStatement(IRValue value, string expression)
