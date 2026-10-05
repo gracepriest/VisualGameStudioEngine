@@ -728,7 +728,7 @@ public class NothingStringTextExecutionTests
     /// DIVERGES from its OWN E4 answer: True, True, False, True — because C++ represents String by
     /// VALUE (<c>std::string</c>) with no null state, so at RUN TIME <c>Nothing</c> IS <c>""</c> on
     /// C++ (same root cause as <c>IsIsNotOperatorExecutionTests
-    /// .CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet</c>'s P12). E4 vs E4b together are
+    /// .CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet</c>'s P12). E4 vs E4b together are
     /// the "folded False vs run-time True" the test-writer brief names: C++'s own answer is
     /// INTERNALLY inconsistent depending on whether the comparison survives to run time, which is
     /// exactly what makes #206 worth a deliberate owner decision rather than a quick fix.

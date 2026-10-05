@@ -365,8 +365,9 @@ public class IsIsNotOperatorExecutionTests
 
     /// <summary>
     /// D3 (1)'s own text, directly: the SAME <c>EmitNullTest</c> helper answers both sites, keyed
-    /// on the mapped spelling — a String/array `Case Is Nothing` must emit <c>.empty()</c>, never
-    /// the bare <c>== nullptr</c> that failed to compile before #185.
+    /// on the mapped spelling — a String `Case Is Nothing` must emit <c>.empty()</c> and an array
+    /// one <c>.is_nothing()</c> (#196: a real null state), never the bare <c>== nullptr</c> that
+    /// failed to compile before #185.
     /// </summary>
     [Test]
     public void CaseIsNothing_Cpp_OnStringAndArray_EmitsEmptinessTest_NeverBareNullptr()
@@ -380,15 +381,17 @@ public class IsIsNotOperatorExecutionTests
         {
             Assert.That(cppString, Does.Contain("(x).empty()"), "String Case Is Nothing must test emptiness\n" + cppString);
             Assert.That(cppString, Does.Not.Contain("x == nullptr"), "\n" + cppString);
-            Assert.That(cppArray, Does.Contain("(x).empty()"), "array Case Is Nothing must test emptiness\n" + cppArray);
+            Assert.That(cppArray, Does.Contain("(x).is_nothing()"), "array Case Is Nothing must be the real null test (#196)\n" + cppArray);
+            Assert.That(cppArray, Does.Not.Contain("(x).empty()"), "an empty array is not Nothing: the array arm must not test emptiness any more\n" + cppArray);
             Assert.That(cppArray, Does.Not.Contain("x == nullptr"), "\n" + cppArray);
         });
     }
 
     // ============================================================================================
-    // 3. D3 (3) — the NAMED C++ divergence: "" Is Nothing / an empty array Is Nothing are True on
-    //    C++ ONLY (no null state for either there), False everywhere else. Flips for arrays when
-    //    #196 (Array<T> gets a real null state) lands — see ADR-0011's "Revisit if".
+    // 3. D3 (3) — the NAMED C++ divergence: `"" Is Nothing` is True on C++ ONLY (a String has no null
+    //    state there), False everywhere else. It had a second row, `{} Is Nothing`, until #196 gave
+    //    Array<T> a real null state — see ADR-0011's "Revisit if": the array row flipped to False
+    //    on C++ too, and CppArrayNothingExecutionTests runs the rest of the array answers.
     // ============================================================================================
 
     private const string P12_Divergence = """
@@ -400,18 +403,23 @@ public class IsIsNotOperatorExecutionTests
         End Sub
         """;
 
+    /// <summary>
+    /// ADR-0011 D3 (3)'s named divergence test, as #196 left it. Line 1 is the STRING row: still a
+    /// divergence — C++ answers True (emptiness, a String has no null state) where C#, JavaScript
+    /// and MSIL answer False. Line 2 is the ARRAY row, which flipped: an EMPTY array is not Nothing
+    /// on C++ either, so all four backends print False (it was True on C++ until #196).
+    /// </summary>
     [Test]
-    public void CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet()
+    public void CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet()
     {
-        // #196 note: when Array<T> gains a real null state, the C++ half of this pin (only) must
-        // flip from True to False — the array row, not the String row (String stays value-held).
         Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(P12_Divergence)), Is.EqualTo("False\nFalse"), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(P12_Divergence)), Is.EqualTo("False\nFalse"), "JavaScript");
             Assert.That(FourBackends.Norm(Msil.MsilHarness.RunExpectingSuccess(P12_Divergence)), Is.EqualTo("False\nFalse"), "MSIL");
-            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(P12_Divergence))), Is.EqualTo("True\nTrue"),
-                "C++ — the divergence: no null state for either String or array there");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(P12_Divergence))), Is.EqualTo("True\nFalse"),
+                "C++ — line 1, the String row, is still the divergence (no null state: \"\" Is Nothing is True); " +
+                "line 2, the array row, agrees with .NET since #196 (an empty array is not Nothing)");
         });
     }
 
