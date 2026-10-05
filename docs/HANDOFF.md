@@ -17,6 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #181 DONE, `AscW`/`Asc`, `ChrW`/`Chr` and `CByte`..`CULng` are typed and lowered as VB does (fix `1cd8618f`)
+
+- **Fixed:** `total + AscW(ch)` and `CByte(x) * 2` were refused on every backend (the ten names typed Object); `SemanticAnalyzer.RegisterStdLibFunctions` types them (Integer / Char / Byte..ULong) and each backend has an arm beside CInt's. `Chr(Asc("A"))` now prints vbc's `[A]` everywhere; #171's S6 prints 131 on all 12 cells.
+- **Tests (14, + 1 moved):** `VbConversionIntrinsicExecutionTests` (Integration, 8: 6 groups of 20 vbc-answered probes on every backend each runs on x CLI / `-O` / `CompileProjectFiles`, a table pin, the CLI + project refusals; roster now 111) and `VbConversionIntrinsicCompileTests` (fast, 6: C++ constant `Chr` > 127, JS `CULng`, p12 String-to-Char, the C# `Conversions.ToByte(s)` text). `MsilStringIntrinsicTests.ChrOfAnObject_IsRefused` MOVED to `ChrOfAsc_IsTyped_AndPrintsVbcsAnswer`. Mutants m1 (AscW unregistered), m2 (C++ truncates), m3 (JS CInt-only) all killed.
+- **Gates (Linux):** fast subset 0 failed / 12,647 passed / 94 skipped; Integration `VbConversionIntrinsic|MsilStringIntrinsic|Intrinsic|Conversion|CInt|NetConversion|BclBackendParity|JsExecutionTierRoster` 378 passed, 0 failed, 0 skipped. The full suite was NOT run; Windows owes the MSVC legs.
+- ⛔ **Gaps, NO test pins them** (fixture header): front end refuses `Char & Char`, `Char < Char` and Char-to-String assignment (`Dim s As String = Chr(65)`, same on master); JS bans Char locals (BL7004); `s.Chars(i)` fails on every backend; C# `Len("ab" & G())` prints "ab1" (#275); overflow is unchecked as CInt's (#272); the C# test harness cannot run a String argument (`Conversions.ToByte`, CS0234).
+
+---
+
 ## 🧪 NEWEST — 2026-10-05: #152 TESTED — a Private member declared below its bare use resolves inside its own class (fix `ba975e1f`, `SemanticAnalyzer` pass 1 only)
 - **Fixed:** `PopulateClassMemberSignatures` left Private members out of `TypeInfo.Members`, so a Private property/auto-property/field named bare ABOVE its declaration was "Undefined identifier" (ADR-0007 P17), a Private Const typed Object, and a Private Sub/Function call typed Object (C++ no compile, MSIL MissingMethodException). It records them now; `TypeInfo.ResolveMember` still refuses a derived class naming its base's Private member.
 - **Tests (12):** `PrivateMemberDeclaredBelowExecutionTests` (Integration, 9 rows P17/P17a+o/P17f+c/P17s/P17sh/derived above+below/derived own same-named P/lambda/two files, each on C#, C++, JS and MSIL through CLI, `-O` and `CompileProjectFiles` against vbc; in `JsExecutionTierRosterTests`, now pinned at 110) + `PrivateMemberDeclaredBelowRefusalTests` (fast, 3 front-end refusals R2/R2u/R2uf). Mutants M1 (Private property recorded Public) R2u, M2 (fields/consts skipped) P17f_P17c+P17sh+P17m, M3 (subs/functions skipped) P17s on C++/MSIL: all killed.
