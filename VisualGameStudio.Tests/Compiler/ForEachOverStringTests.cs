@@ -276,24 +276,52 @@ public class ForEachOverStringTests
     }
 
     /// <summary>
-    /// E9 — `As String` over a String: refused by the SAME rule as `As Integer`, matching the
-    /// existing refusal `Dim s As String = c` already gives a Char. This is NOT the same
-    /// question as widening Char TO String on assignment — task #184 is the owner's decision on
-    /// whether that should ever be allowed; until it lands, a String loop variable over a String
-    /// collection stays refused here, deliberately.
+    /// E9 — `As String` over a String. Task #184 landed: VB widens Char to String implicitly (legal under
+    /// Option Strict On), so this is ACCEPTED now and prints vbc's answer, `a` then `b`. Until then it was
+    /// pinned REFUSED ("Cannot assign String element type 'Char' to loop variable of type 'String'"), a pin
+    /// written to flip when the owner's #184 decision landed. The loop iterates a hidden Char and the body
+    /// begins with a synthesized `Dim s As String = __foreach_N` (`ForEachControlBinding.Declaration`).
+    ///
+    /// <para>Runs on every backend (JavaScript included: the shape holds no Char local), each through the
+    /// spawned CLI, `--optimize` and CompileProjectFiles; a backend whose tool is missing is skipped.
+    /// <c>CharWidensToStringExecutionTests</c> c05 is the same loop with a body that reads `s.Length`.</para>
     /// </summary>
     [Test]
-    public void ExplicitString_IsRefused_PerTask184()
+    [Category("Integration")] // spawns the CLI, g++/clang++, Node, ilasm and a C# child process
+    [NonParallelizable]
+    public void ExplicitString_IsAccepted_AndPrintsVbcsAnswer()
     {
-        var (hasErrors, messages) = Analyze(
+        const string source =
             "Sub Main()\n" +
             " For Each s As String In \"ab\"\n" +
             "  Console.WriteLine(s)\n" +
             " Next\n" +
-            "End Sub");
+            "End Sub";
 
-        Assert.That(hasErrors, Is.True);
-        Assert.That(messages, Has.One.EqualTo(
-            "Cannot assign String element type 'Char' to loop variable of type 'String'"));
+        var (hasErrors, messages) = Analyze(source);
+        Assert.That(hasErrors, Is.False, string.Join(" | ", messages));
+
+        var failures = new System.Collections.Generic.List<string>();
+        int ran = 0, skipped = 0;
+        foreach (var backend in TempExec.Backends(Bk.All))
+        {
+            try
+            {
+                TempExec.AssertMatchesInEveryEntryPoint(backend, source, "a\nb", "E9 (For Each s As String In \"ab\")", hangSafe: true);
+                ran++;
+            }
+            catch (IgnoreException)
+            {
+                skipped++;
+            }
+            catch (AssertionException ex)
+            {
+                ran++;
+                failures.Add(ex.Message);
+            }
+        }
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+        if (ran == 0) Assert.Ignore($"E9: no execution tool on this machine ({skipped} cells skipped).");
     }
 }
