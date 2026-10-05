@@ -519,7 +519,9 @@ public class ModuleProcedureCallTests
             End Sub
             """;
         FourBackends.RunsOnEveryBackend(program, "8\n10");
-        Assert.That(BclE2E.CompileToCppOptimized(program), Does.Match(@"=\s*Twice\(4\);"),
+        // `::Twice` since portable-controls Task 7c: a class-body call to a module procedure is spelled
+        // global-qualified so a same-named class member can never capture it.
+        Assert.That(BclE2E.CompileToCppOptimized(program), Does.Match(@"=\s*(::)?Twice\(4\);"),
             "the call lowers to the free function, which the prototype above the class declares");
     }
 
