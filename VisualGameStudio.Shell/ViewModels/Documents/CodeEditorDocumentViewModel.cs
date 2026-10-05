@@ -779,6 +779,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // ⛔ One gesture at a time (round 4 ruling 6): Enter and the LostFocus right behind it can both ask for the handler
+        // while the first write is still in flight — the second would read the OLD code-behind, plan the same stub again,
+        // write it and navigate twice. A request arriving while one runs is dropped; the first one's result stands.
+        if (_activatingHandler)
+        {
+            return;
+        }
+
+        _activatingHandler = true;
         var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
 
         try
@@ -799,11 +808,17 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
             // ⛔ A typed name is refused BEFORE anything is written (review round 3 ruling 3): the grid checked it too, but
             // the host is the one about to write the file, so it asks the same ONE rule again.
+            // Said where the name was typed — the row's description, the cell reverting (round 4 ruling 5) — never as BL8014
+            // "no code-behind" in the Error List, which is not what went wrong.
             if (handlerName != null && evt != null &&
                 BasicLang.Forms.FormHandlers.DescribeUnusableHandler(file.Model, owner, evt, handlerName,
                     BasicLang.Forms.FormCodeScan.Scan(before, file.Model.Name)) is { } unusable)
             {
-                ReportDesignerRefusal(codePath, BasicLang.Forms.DesignCodes.RegionAbsent, unusable);
+                if (!PropertyGrid.RefuseHandler(owner, evt, unusable))
+                {
+                    ReportDesignerRefusal(codePath, BasicLang.Forms.DesignCodes.RegionAbsent, unusable);
+                }
+
                 return;
             }
 
@@ -831,6 +846,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 WriteDesignerEditBack();
             }
 
+            // ⛔ CRITICAL (round 4 ruling 1): the bind was edited behind the Events tab's rows — they re-read it NOW, before
+            // focus can leave a cell still showing the old value (SelectInDesigner is a no-op for the control already shown).
+            PropertyGrid.RefreshHandlers();
             SelectInDesigner(owner.Control);
             await PushCodeBehindTextAsync();
             _eventAggregator.Publish(new NavigateToFileEvent(codePath, plan.CaretLine));
@@ -849,7 +867,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
                 codePath, BasicLang.Forms.DesignCodes.RegionAbsent,
                 $"the designer could not open a handler in '{Path.GetFileName(codePath)}': {ex.Message}");
         }
+        finally
+        {
+            _activatingHandler = false;
+        }
     }
+
+    /// <summary>A handler gesture is running (<see cref="ActivateHandlerAsync"/>); a second one is dropped.</summary>
+    private bool _activatingHandler;
+
+    /// <summary>
+    /// Bumped by every write of the grid's code-behind text: a read that started under an older number lands on nothing
+    /// (round 4 ruling 6 — a slow read begun before a designer write must not put the old text back).
+    /// </summary>
+    private int _codeBehindVersion;
 
     /// <summary>
     /// The IDE's OPEN document for a path, or null — set by the shell's file-open route
@@ -889,8 +920,9 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
     /// <summary>
     /// Slice 5 D-5 freshness: pushes the code-behind AS THE USER SEES IT (the open tab's unsaved text, else the disk) into
-    /// the grid, whose Events tab offers the Subs that fit. Called on every panel sync, after every designer write of the
-    /// <c>.bas</c>, and when a handler drop-down opens (the grid's <c>CodeBehindReader</c>). A missing file is empty.
+    /// the grid, whose Events tab offers the Subs that fit. Called on every panel sync, after every handler gesture, and
+    /// when a handler drop-down opens (the grid's <c>CodeBehindRefreshRequested</c>). A missing file is empty. ⚠ A read that
+    /// finishes after a NEWER write (<see cref="_codeBehindVersion"/>) is dropped.
     /// </summary>
     private async Task PushCodeBehindTextAsync()
     {
@@ -901,10 +933,15 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
 
         try
         {
+            var version = ++_codeBehindVersion;
             var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
-            PropertyGrid.CodeBehindText = await CodeBehindExistsAsync(codePath)
+            var text = await CodeBehindExistsAsync(codePath)
                 ? await ReadCodeBehindAsync(codePath, CancellationToken.None)
                 : "";
+            if (version == _codeBehindVersion)
+            {
+                PropertyGrid.CodeBehindText = text;
+            }
         }
         catch (Exception ex)
         {
@@ -939,11 +976,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         if (open is { IsDirty: true })
         {
             open.ApplyDesignerWrite(text, savedToDisk: false);
+            _codeBehindVersion++;
             PropertyGrid.CodeBehindText = text;
             return;
         }
 
         await _fileService.WriteFileAsync(codePath, text, cancellationToken);
+        _codeBehindVersion++;   // any read still in flight began before this write: it must not land after it
         PropertyGrid.CodeBehindText = text;
         open?.ApplyDesignerWrite(text, savedToDisk: true);
         _eventAggregator.Publish(new FileSavedEvent(codePath));

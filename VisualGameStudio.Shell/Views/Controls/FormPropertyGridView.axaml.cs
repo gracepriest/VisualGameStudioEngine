@@ -32,7 +32,53 @@ public partial class FormPropertyGridView : UserControl
         PropertyList.AddHandler(KeyDownEvent, OnListKeyDown, RoutingStrategies.Tunnel);
         PropertyList.AddHandler(KeyUpEvent, OnListKeyUp, RoutingStrategies.Tunnel);
         PropertyList.AddHandler(DoubleTappedEvent, OnListDoubleTapped);
+        // A pointer release on a drop-down ITEM routes out of the popup through its combo (the popup's logical parent) and
+        // so tunnels through the list first: that marks the NEXT selection change of that combo as the user's pick.
+        PropertyList.AddHandler(PointerReleasedEvent, OnListPointerReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
         PropertyList.ContainerPrepared += OnContainerPrepared;
+    }
+
+    private FormPropertyGridViewModel? _revertSource;
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_revertSource != null)
+        {
+            _revertSource.HandlerCellReverted -= OnHandlerCellReverted;
+        }
+
+        _revertSource = DataContext as FormPropertyGridViewModel;
+        if (_revertSource != null)
+        {
+            _revertSource.HandlerCellReverted += OnHandlerCellReverted;
+        }
+    }
+
+    /// <summary>A refused handler name (the row's or the host's): the cell shows the bound handler again.</summary>
+    private void OnHandlerCellReverted(object? sender, FormEventRow row) => RevertCell(row);
+
+    /// <summary>
+    /// Puts the row's bound handler back into its combo, discarding what was typed. ⚠ <c>SetCurrentValue</c>, so the
+    /// one-way binding stays in place for the next host bind.
+    /// </summary>
+    private void RevertCell(FormEventRow row)
+    {
+        if (PropertyList.ContainerFromItem(row) is { } container &&
+            container.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault() is { } combo)
+        {
+            combo.SetCurrentValue(ComboBox.TextProperty, row.Handler);
+        }
+    }
+
+    /// <summary>The handler combo whose drop-down ITEM the pointer was just released on — the only source of a pick.</summary>
+    private ComboBox? _pointerPick;
+
+    private void OnListPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _pointerPick = e.Source is Visual source && source.FindAncestorOfType<ComboBoxItem>(includeSelf: true) is { } item
+            ? ItemsControl.ItemsControlFromItemContainer(item) as ComboBox
+            : null;
     }
 
     /// <summary>
@@ -380,13 +426,17 @@ public partial class FormPropertyGridView : UserControl
     }
 
     /// <summary>
-    /// A handler was PICKED from the drop-down: bind it (the row's commit rules). ⚠ Only while the drop-down is open — the
-    /// combo also re-selects when its items or text change underneath it (a refresh), which is not a pick.
+    /// A handler was PICKED from the drop-down: bind it (the row's commit rules). ⛔ Only a pick the USER made — a pointer
+    /// released on one of THIS combo's items (<see cref="OnListPointerReleased"/>). The editable combo also selects by
+    /// itself: when the typed text MATCHES an item (round 4 ruling 7 — typing <c>Fits</c> on the way to <c>Fits2</c> bound
+    /// <c>Fits</c>), and when its items or text change underneath it (a refresh). Enter commits what was typed instead.
     /// </summary>
     private void OnHandlerPicked(object? sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox { DataContext: FormEventRow row, IsDropDownOpen: true, SelectedItem: string picked })
+        if (sender is ComboBox { DataContext: FormEventRow row, SelectedItem: string picked } combo &&
+            ReferenceEquals(_pointerPick, combo))
         {
+            _pointerPick = null;
             row.Commit(picked);
         }
     }
@@ -450,6 +500,17 @@ public partial class FormPropertyGridView : UserControl
         {
             eventRow.Commit(combo.Text);
             combo.IsDropDownOpen = false;
+            e.Handled = true;
+            return;
+        }
+
+        // Escape (VS, round 4 ruling 2): what was typed is thrown away — the cell re-reads its bound handler — and nothing
+        // is committed, so the LostFocus that follows finds the bound text and is a no-op.
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None && e.Source is Visual escapedIn &&
+            escapedIn.FindAncestorOfType<ComboBox>(includeSelf: true) is { DataContext: FormEventRow escapedRow } escapedCombo)
+        {
+            escapedCombo.IsDropDownOpen = false;
+            escapedCombo.SetCurrentValue(ComboBox.TextProperty, escapedRow.Handler);
             e.Handled = true;
             return;
         }

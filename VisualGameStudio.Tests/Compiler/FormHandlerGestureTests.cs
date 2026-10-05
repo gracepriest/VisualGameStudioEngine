@@ -3,6 +3,7 @@ using Moq;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Core.Events;
+using VisualGameStudio.Shell.ViewModels.Designer;
 using VisualGameStudio.Shell.ViewModels.Documents;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -29,6 +30,14 @@ public class FormHandlerGestureTests
         /// <summary>Every write throws (a read-only or locked file), as the disk can.</summary>
         public bool FailWrites;
 
+        /// <summary>When set, the NEXT read of <see cref="GatedPath"/> waits on it (then the gate clears) — a slow disk.</summary>
+        public TaskCompletionSource<string>? ReadGate;
+
+        /// <summary>When set, the NEXT write waits on it before landing (then the gate clears).</summary>
+        public TaskCompletionSource? WriteGate;
+
+        public string? GatedPath;
+
         public IFileService Service
         {
             get
@@ -36,7 +45,16 @@ public class FormHandlerGestureTests
                 var mock = new Mock<IFileService>();
 
                 mock.Setup(f => f.ReadFileAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                    .Returns((string p, CancellationToken _) => Task.FromResult(Contents[p]));
+                    .Returns((string p, CancellationToken _) =>
+                    {
+                        if (ReadGate is { } gate && p == GatedPath)
+                        {
+                            ReadGate = null;
+                            return gate.Task;
+                        }
+
+                        return Task.FromResult(Contents[p]);
+                    });
 
                 mock.Setup(f => f.FileExistsAsync(It.IsAny<string>()))
                     .Returns((string p) => Task.FromResult(Contents.ContainsKey(p)));
@@ -47,6 +65,18 @@ public class FormHandlerGestureTests
                         if (FailWrites)
                         {
                             return Task.FromException(new IOException($"'{p}' is read-only"));
+                        }
+
+                        if (WriteGate is { } writeGate)
+                        {
+                            WriteGate = null;
+                            // Synchronously on the thread that opens the gate (the test's): the view model's continuation
+                            // touches thread-affine state, as it does on the UI thread in the IDE.
+                            return writeGate.Task.ContinueWith(_ =>
+                            {
+                                Contents[p] = text;
+                                Writes.Add(p);
+                            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                         }
 
                         Contents[p] = text;
@@ -479,5 +509,177 @@ public class FormHandlerGestureTests
             Assert.That(h.Diagnostics, Is.Not.Empty);
             Assert.That(h.Navigations, Is.Empty);
         });
+    }
+
+    // ==================================================================
+    // Review round 4 (of a5c5955c / eec527f6) — the host and the Events tab
+    // ==================================================================
+
+    /// <summary>The harness in Events mode with the control selected — the grid's rows for it built.</summary>
+    private static FormEventRow ShowEvents(Harness h, string eventName = "Click")
+    {
+        h.Vm.Selection.Set(h.Control);
+        h.Vm.PropertyGrid.IsEventsMode = true;
+        Assert.That(h.Vm.PropertyGrid.SelectedControl, Is.SameAs(h.Control), "precondition: the grid shows the control");
+        return h.Vm.PropertyGrid.EventRows.Single(r => r.Name == eventName);
+    }
+
+    /// <summary>
+    /// ⛔ CRITICAL (round 4, ruling 1): a HOST bind — the double-click, the canvas gesture, a typed new name — edits the
+    /// FormBind directly, so the row must be TOLD its Handler changed. Without it the combo's one-way Text stays "" with
+    /// focus in it, and the next LostFocus commits "" — an Unbind that orphans the stub just written.
+    /// </summary>
+    [Test]
+    public async Task AHostBind_TellsTheRowItsHandlerChanged()
+    {
+        var h = Open(FormTarget.WinForms);
+        var row = ShowEvents(h);
+        var notified = new List<string?>();
+        row.PropertyChanged += (_, e) => notified.Add(e.PropertyName);
+
+        await ActivateAsync(h);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Handler, Is.EqualTo("btnLogin_Click"), "precondition: bound");
+            Assert.That(notified, Does.Contain(nameof(FormEventRow.Handler)), "the row heard about the host's bind");
+        });
+    }
+
+    /// <summary>
+    /// Ruling 5: a typed name the HOST refuses (the code changed since the grid's scan — here a Function of that name is in
+    /// the file the grid has not seen) is said in the ROW's description, never as BL8014 "no code-behind" in the Error List,
+    /// and the row is told to re-read its handler so the cell reverts.
+    /// </summary>
+    [Test]
+    public async Task AHostRefusalOfATypedName_IsTheRowsRefusal_NotAnErrorListEntry()
+    {
+        var h = Open(FormTarget.WinForms);
+        var row = ShowEvents(h);
+        h.Vm.PropertyGrid.CodeBehindText = h.Files.Contents[h.CodePath];   // the grid's scan: no Foo
+        var code = h.Files.Contents[h.CodePath];
+        var end = code.LastIndexOf("End Class", StringComparison.Ordinal);
+        h.Files.Contents[h.CodePath] = code[..end] + "    Private Function Foo() As Integer\n        Return 0\n    End Function\n" + code[end..];
+        var notified = new List<string?>();
+        row.PropertyChanged += (_, e) => notified.Add(e.PropertyName);
+        var asked = new TaskCompletionSource();
+        h.Vm.PropertyGrid.HandlerRequested += (_, _) => asked.TrySetResult();
+
+        row.Commit("Foo");
+        await asked.Task;
+        await Task.Delay(50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Does.Contain("member"), "the row says why");
+            Assert.That(h.Diagnostics.SelectMany(d => d.Diagnostics).Select(d => d.Id), Has.No.Member(DesignCodes.RegionAbsent));
+            Assert.That(h.Control.Binds, Is.Empty);
+            Assert.That(notified, Does.Contain(nameof(FormEventRow.Handler)), "the cell re-reads (reverts)");
+        });
+    }
+
+    /// <summary>Ruling 5b: a refusal the ROW makes also tells the cell to re-read, so the typed text reverts.</summary>
+    [Test]
+    public void ARowRefusal_RevertsTheCell()
+    {
+        var h = Open(FormTarget.WinForms);
+        var row = ShowEvents(h);
+        var notified = new List<string?>();
+        row.PropertyChanged += (_, e) => notified.Add(e.PropertyName);
+
+        row.Commit("Dim");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Refusal, Is.Not.Null);
+            Assert.That(notified, Does.Contain(nameof(FormEventRow.Handler)));
+        });
+    }
+
+    /// <summary>
+    /// Ruling 6a: a code-behind read that was started BEFORE a designer write must not land AFTER it and put the old
+    /// text back — the grid would stop offering the Sub just written.
+    /// </summary>
+    [Test]
+    public async Task AStaleCodeBehindRead_NeverOverwritesANewerWrite()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var old = h.Files.Contents[h.CodePath];
+        var slow = new TaskCompletionSource<string>();
+        h.Files.GatedPath = h.CodePath;
+        h.Files.ReadGate = slow;
+        h.Vm.PropertyGrid.RequestCodeBehindRefresh();   // a push, now waiting on the slow read
+
+        await ActivateAsync(h);                          // writes btnLogin_Click; the grid gets the new text
+        slow.SetResult(old);                             // the stale read lands last
+        await Task.Delay(50);
+
+        Assert.That(h.Vm.PropertyGrid.CodeBehindText, Does.Contain("btnLogin_Click"), "the newer text stands");
+    }
+
+    /// <summary>
+    /// Ruling 6b: Enter and the LostFocus that follows it can ask for the same handler twice while the first write is
+    /// still in flight. The second request is dropped: ONE write, ONE navigation.
+    /// </summary>
+    [Test]
+    public async Task ASecondHandlerRequestWhileOneIsInFlight_IsDropped()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var gate = new TaskCompletionSource();
+        h.Files.WriteGate = gate;
+
+        var first = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);
+        var second = h.Vm.ActivateControlCommand.ExecuteAsync(h.Control);
+        gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.Files.Writes.Count(p => p == h.CodePath), Is.EqualTo(1), "one write");
+            Assert.That(h.Navigations, Has.Count.EqualTo(1),
+                "one navigation; diagnostics: " + string.Join(" | ", h.Diagnostics.SelectMany(d => d.Diagnostics).Select(d => d.Message)));
+        });
+    }
+
+    /// <summary>
+    /// Ruling 8: a row for an event with no name on the target is a defect, thrown at CONSTRUCTION — a throw inside a
+    /// binding's getter is swallowed by the binding and the cell would just show nothing.
+    /// </summary>
+    [Test]
+    public void AnEventRow_ForAnEventWithNoNameOnTheTarget_ThrowsAtConstruction()
+    {
+        var form = new FormDocument { Target = FormTarget.Web, Name = "W" };
+        var pnl = new FormControl { Kind = "Panel", Id = "pnl", TabIndex = 0 };
+        form.Controls.Add(pnl);
+        var owner = new FormBindOwner(form, pnl);
+        var paint = owner.Definition!.Events!.Single(e => e.Name == "Paint");
+        Assert.That(FormEvents.NameOn(paint, FormTarget.Web), Is.Null, "precondition: Paint has no page name");
+
+        Assert.That(() => new FormEventRow(form, owner, paint, () => FormCodeScan.Scan(""), () => { }, _ => { }),
+            Throws.InstanceOf<InvalidOperationException>());
+    }
+
+    /// <summary>
+    /// Ruling 11: the one-scan-per-refresh pin counts through the GRID's scanner seam, not a static counter in a compiler
+    /// type (process-wide: a parallel test's scans would count too).
+    /// </summary>
+    [Test]
+    public void PushingTheCodeBehind_ScansItOnce_ThroughTheGridsScanner()
+    {
+        var h = Open(FormTarget.WinForms);
+        ShowEvents(h);
+        var scans = 0;
+        h.Vm.PropertyGrid.CodeScanner = (text, name) =>
+        {
+            scans++;
+            return FormCodeScan.Scan(text, name);
+        };
+        Assert.That(h.Vm.PropertyGrid.EventRows.Count, Is.GreaterThan(5));
+
+        h.Vm.PropertyGrid.CodeBehindText = h.Files.Contents[h.CodePath] + "\n";
+
+        Assert.That(scans, Is.EqualTo(1));
     }
 }

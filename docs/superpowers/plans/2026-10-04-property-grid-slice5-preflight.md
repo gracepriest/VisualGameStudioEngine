@@ -1098,6 +1098,52 @@ RE-CHECK green (224 in the run): `TheDocumentView_NoLongerCarriesTheGridsOwnBind
 `FormTrayViewTests`, `FormStripCanvasTests`, `FormTypeHereEditorTests`, `FormHandlerGestureTests`, `FormEventGrid*`, the
 binding walker (the new template's bindings included).
 
+### Review round 4 (of `a5c5955c`/`eec527f6`) — fixes (base `eec527f6`)
+Red first: 29 of 61 failed, each for its own reason (the CRITICAL real-view row: the cell showed "" after the bind).
+1. **CRITICAL.** A host bind now ends with `PropertyGrid.RefreshHandlers()` → every row's `HandlerChanged()`. The cell shows
+   `btn_Click`, and a real click on the canvas (focus leaves the cell) leaves the Bind in the document, at two zooms.
+2. **Escape** (list tunnel) closes the drop-down and puts the bound handler back with `SetCurrentValue` (the one-way binding
+   stays). The click away that follows is a no-op. **Measured:** re-raising an unchanged `Handler` ("" → "") does NOT
+   replace text the user typed (the binding's own value did not change). So a refusal raises `FormEventRow.Reverted` →
+   `HandlerCellReverted` → the view sets the text.
+3. **Member names, member level only.** Added: fields without `Dim` (`WithEvents`, several names, `x()`); nested type names
+   (via the block opener); Delegate/Declare/Custom Event. Skipped: Sub/Function/expanded-Property/Custom-Event/Operator
+   bodies, with multi-line lambdas counted so their `End Sub` doesn't close the member. An auto-property opens no body (the
+   next code line must be an accessor).
+4. **The computed name obeys `DescribeUnusableHandler`.** An existing Shared/ByRef/wrong-shape Sub or a Function of that name
+   → `_1` (a fitting instance Sub is still navigated). There is a 10 000 cap, then a refusal.
+5. A host refusal of a typed name goes to `PropertyGrid.RefuseHandler` (the row's pane, cell reverts). Only with no such row
+   does it go to the Error List. A row refusal also reverts the cell.
+6. `_codeBehindVersion`: every grid-text write bumps it, and a push whose read began earlier is dropped.
+   `_activatingHandler` drops a second gesture while one is in flight.
+7. A pick is only a pointer release on one of THIS combo's items (`OnListPointerReleased`, list tunnel, handled-too). The
+   editable combo's auto-select on a matching typed name bound `Fits` on the way to `Fits2`.
+8. `EventName` is fixed in the constructor (throws there). 9. The push summary now names `CodeBehindRefreshRequested`.
+   10. The radio comment is back above the Categorized panel. 11. `FormCodeScan.ScanCount` is gone; the grid's
+   `CodeScanner` seam counts. 12. Real-view rows (c)(f)(g)(h)(i) loop `TwoZooms`, and the clear row undoes with a REAL
+   Ctrl+Z on the canvas.
+
+| Mutation | Killed by |
+|---|---|
+| Host refresh removed | `AHostBind_TellsTheRowItsHandlerChanged` + the CRITICAL real-view row |
+| Escape handling removed | `EscapeInTheHandlerCell_…` |
+| Bodies never skipped | locals row + `TypingAFieldsName_…` |
+| Lambda depth not tracked (paired with the next) | locals row |
+| Computed guard removed | 4 `AComputedNameThatIsUnusable_…` rows |
+| Property always gets a body (paired) | locals row |
+| Version guard removed | `AStaleCodeBehindRead_…` |
+| Field regex off (paired) | 5 field rows + locals + typed-field |
+| Re-entry guard removed | `ASecondHandlerRequest…` |
+| Nested type names dropped (paired) | Enum/Structure/Class rows |
+| Pick = "drop-down open" again | `TypingAnOfferedName_…` |
+| `Reverted` not raised (one build with the next two) | the typed-name real-view row (cell reverts) |
+| Host refusal to Error List | `AHostRefusalOfATypedName_…` |
+| `EventName` falls back | `AnEventRow_…_ThrowsAtConstruction` |
+
+"Paired" = two mutants in one build. Their killing tests cannot overlap (scanner vs host/view), and each listed test failed.
+`dotnet clean` was run on the Shell after the AXAML change. The non-Integration Form set: 4353 total, 1 failure — the known
+`EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`.
+
 ## 7. Tests to re-check (consolidated)
 
 | Test | Why | Task |

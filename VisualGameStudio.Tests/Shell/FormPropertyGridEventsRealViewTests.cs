@@ -187,38 +187,168 @@ public partial class FormPropertyGridRealViewTests
         }
     }
 
-    /// <summary>The stub's signature is the EVENT's: MouseDown gets <c>MouseEventArgs</c>, never the default's EventArgs.</summary>
+    /// <summary>
+    /// ⛔ CRITICAL (round 4, ruling 1): after a double-click binds through the HOST, the cell must SHOW the handler — and
+    /// moving focus away (a real click on the canvas, which takes focus) must leave the Bind in the document. Before the fix
+    /// the combo's one-way Text stayed "" with focus in it, and that LostFocus committed "" — an Unbind that orphaned the
+    /// stub. At two zooms.
+    /// </summary>
     [AvaloniaTest]
-    public void DoubleClickingMouseDown_WritesAMouseEventArgsStub()
+    public void AfterADoubleClickBinds_TheCellShowsTheHandler_AndClickingAwayKeepsTheBind_AtTwoZooms()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            ShowEvents(rig);
+            var row = EventRow(rig, "Click");
+
+            DoubleClick(rig, HandlerCombo(rig, row));
+            var combo = HandlerCombo(rig, row);
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Control("btn").Binds.Any(b => b is { Event: "Click", Handler: "btn_Click" }), Is.True,
+                    $"{w}x{h}: precondition: the double-click bound it");
+                Assert.That(combo.IsKeyboardFocusWithin, Is.True, $"{w}x{h}: precondition: focus is in the cell");
+                Assert.That(combo.Text, Is.EqualTo("btn_Click"), $"{w}x{h}: the cell shows the handler the host bound");
+            });
+
+            SelectOnCanvas(rig, "btn");   // a real click on the canvas: focus leaves the cell
+            Assert.Multiple(() =>
+            {
+                Assert.That(HandlerCombo(rig, row).IsKeyboardFocusWithin, Is.False, $"{w}x{h}: precondition: focus left the cell");
+                Assert.That(rig.Control("btn").Binds.Any(b => b is { Event: "Click", Handler: "btn_Click" }), Is.True,
+                    $"{w}x{h}: the Bind survives the focus change");
+                Assert.That(rig.Vm.Text, Does.Match("<Bind Event=\"Click\" Handler=\"btn_Click\"\\s?/>"), $"{w}x{h}: in the text");
+            });
+        }
+    }
+
+    /// <summary>
+    /// Ruling 2 (VS): Escape in the handler cell reverts what was typed and commits nothing — and the click away that
+    /// follows writes nothing either. Both for an empty cell and a bound one.
+    /// </summary>
+    [AvaloniaTest]
+    public void EscapeInTheHandlerCell_RevertsTheText_AndTheClickAwayWritesNothing()
     {
         using var rig = Open();
         SelectOnCanvas(rig, "btn");
         ShowEvents(rig);
+        var row = EventRow(rig, "Click");
+        var code = rig.Code;
+        var text = rig.Vm.Text;
 
-        DoubleClick(rig, EventNameCell(rig, EventRow(rig, "MouseDown")));
+        rig.Click(HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible));
+        rig.Window.KeyTextInput("Foo");
+        rig.Window.KeyPress(Key.Escape, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(HandlerCombo(rig, row).Text ?? "", Is.Empty, "Escape reverts the empty cell");
 
+        SelectOnCanvas(rig, "btn");
         Assert.Multiple(() =>
         {
-            Assert.That(rig.Code, Does.Contain("Private Sub btn_MouseDown(sender As Object, e As MouseEventArgs)"));
-            Assert.That(rig.Vm.Text, Does.Match("<Bind Event=\"MouseDown\" Handler=\"btn_MouseDown\"\\s?/>"));
+            Assert.That(rig.Code, Is.EqualTo(code), "no stub");
+            Assert.That(rig.Vm.Text, Is.EqualTo(text), "no Bind");
         });
+
+        // A bound cell reverts to its handler.
+        AddSubs(rig, "    Private Sub Fits(sender As Object, e As EventArgs)\n    End Sub\n");
+        rig.GridVm.CodeBehindText = rig.Code;
+        row.Commit("Fits");
+        var bound = rig.Vm.Text;
+        rig.Click(HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible), dx: 3);
+        rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+        rig.Window.KeyTextInput("Other");
+        rig.Window.KeyPress(Key.Escape, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        Assert.That(HandlerCombo(rig, row).Text, Is.EqualTo("Fits"), "Escape reverts to the bound handler");
+
+        SelectOnCanvas(rig, "btn");
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Handler, Is.EqualTo("Fits"));
+            Assert.That(rig.Vm.Text, Is.EqualTo(bound), "the click away wrote nothing");
+            Assert.That(rig.Code, Does.Not.Contain("Sub Other("));
+        });
+    }
+
+    /// <summary>
+    /// Ruling 7: typing a name that happens to MATCH an offered Sub while the drop-down is open is not a pick — the editable
+    /// combo auto-selects the item, and treating that as a pick bound it before the user finished typing. Only Enter (or a
+    /// real click on an item) commits.
+    /// </summary>
+    [AvaloniaTest]
+    public void TypingAnOfferedName_WithTheDropDownOpen_IsNotAPick_UntilEnter()
+    {
+        using var rig = Open();
+        AddSubs(rig, "    Private Sub Fits(sender As Object, e As EventArgs)\n    End Sub\n");
+        SelectOnCanvas(rig, "btn");
+        ShowEvents(rig);
+        var row = EventRow(rig, "Click");
+
+        var combo = OpenHandlerDropDown(rig, row);
+        rig.Click(combo.GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible));
+        if (!HandlerCombo(rig, row).IsDropDownOpen)
+        {
+            combo = OpenHandlerDropDown(rig, row);
+        }
+
+        rig.Window.KeyTextInput("Fits");
+        Dispatcher.UIThread.RunJobs();
+        Assert.Multiple(() =>
+        {
+            Assert.That(HandlerCombo(rig, row).Text, Is.EqualTo("Fits"), "precondition: typed");
+            Assert.That(row.Handler, Is.Empty, "typing a match is not a pick");
+        });
+
+        rig.Window.KeyTextInput("2");
+        rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+        Dispatcher.UIThread.RunJobs();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Handler, Is.EqualTo("Fits2"), "Enter commits what was typed");
+            Assert.That(rig.Code, Does.Contain("Private Sub Fits2(sender As Object, e As EventArgs)"));
+        });
+    }
+
+    /// <summary>The stub's signature is the EVENT's: MouseDown gets <c>MouseEventArgs</c>, never the default's EventArgs.</summary>
+    [AvaloniaTest]
+    public void DoubleClickingMouseDown_WritesAMouseEventArgsStub_AtTwoZooms()
+    {
+        foreach (var (w, h) in TwoZooms)
+        {
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            ShowEvents(rig);
+
+            DoubleClick(rig, EventNameCell(rig, EventRow(rig, "MouseDown")));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Code, Does.Contain("Private Sub btn_MouseDown(sender As Object, e As MouseEventArgs)"), $"{w}x{h}");
+                Assert.That(rig.Vm.Text, Does.Match("<Bind Event=\"MouseDown\" Handler=\"btn_MouseDown\"\\s?/>"), $"{w}x{h}");
+            });
+        }
     }
 
     /// <summary>With nothing selected the rows are the FORM's: double-clicking Load writes <c>GridForm_Load</c>.</summary>
     [AvaloniaTest]
-    public void WithNothingSelected_DoubleClickingLoad_WritesTheFormsLoad()
+    public void WithNothingSelected_DoubleClickingLoad_WritesTheFormsLoad_AtTwoZooms()
     {
-        using var rig = Open();
-        ShowEvents(rig);
-
-        DoubleClick(rig, EventNameCell(rig, EventRow(rig, "Load")));
-
-        Assert.Multiple(() =>
+        foreach (var (w, h) in TwoZooms)
         {
-            Assert.That(rig.Code, Does.Contain("Private Sub GridForm_Load(sender As Object, e As EventArgs)"));
-            Assert.That(rig.Doc.Binds.Any(b => b is { Event: "Load", Handler: "GridForm_Load" }), Is.True,
-                "the form's own Bind");
-        });
+            using var rig = Open(w, h);
+            ShowEvents(rig);
+
+            DoubleClick(rig, EventNameCell(rig, EventRow(rig, "Load")));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Code, Does.Contain("Private Sub GridForm_Load(sender As Object, e As EventArgs)"), $"{w}x{h}");
+                Assert.That(rig.Doc.Binds.Any(b => b is { Event: "Load", Handler: "GridForm_Load" }), Is.True,
+                    $"{w}x{h}: the form's own Bind");
+            });
+        }
     }
 
     /// <summary>
@@ -327,10 +457,13 @@ public partial class FormPropertyGridRealViewTests
                 Assert.That(rig.Code, Is.EqualTo(before), $"{w}x{h}: the Sub is never deleted");
             });
 
-            // ONE undo restores the Bind, byte-identical.
-            rig.Vm.UndoDesignerEditCommand.Execute(null);
+            // ONE undo restores the Bind, byte-identical — a REAL Ctrl+Z, with focus on the canvas (a real click there), where
+            // the design surface's own key binding takes it (in the cell it would be the text box's undo).
+            SelectOnCanvas(rig, "btn");
+            rig.Window.KeyPress(Key.Z, RawInputModifiers.Control);
+            rig.Window.KeyRelease(Key.Z, RawInputModifiers.Control);
             Dispatcher.UIThread.RunJobs();
-            Assert.That(rig.Vm.Text, Is.EqualTo(boundText), $"{w}x{h}: one undo brings the Bind back");
+            Assert.That(rig.Vm.Text, Is.EqualTo(boundText), $"{w}x{h}: one Ctrl+Z brings the Bind back");
         }
     }
 
@@ -383,41 +516,45 @@ public partial class FormPropertyGridRealViewTests
     /// and it is bound. A refused name (a keyword) writes nothing and says why in the description pane.
     /// </summary>
     [AvaloniaTest]
-    public void TypingANewName_AndEnter_CreatesTheStub_AndBindsIt_AKeywordIsRefused()
+    public void TypingANewName_AndEnter_CreatesTheStub_AndBindsIt_AKeywordIsRefused_AtTwoZooms()
     {
-        using var rig = Open();
-        SelectOnCanvas(rig, "btn");
-        ShowEvents(rig);
-        var row = EventRow(rig, "Click");
-
-        var box = HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
-        rig.Click(box);
-        var before = rig.Code;
-        rig.Window.KeyTextInput("Dim");
-        Assert.That(HandlerCombo(rig, row).Text, Is.EqualTo("Dim"), "precondition: the typing reached the cell");
-        rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
-        Dispatcher.UIThread.RunJobs();
-        Assert.That(row.Refusal, Is.Not.Null, $"a keyword is refused (handler now '{row.Handler}')");
-        Assert.Multiple(() =>
+        foreach (var (w, h) in TwoZooms)
         {
-            Assert.That(rig.GridVm.DescriptionBody, Does.Contain(row.Refusal!), "and the pane says why");
-            Assert.That(row.Handler, Is.Empty, "nothing bound");
-            Assert.That(rig.Code, Is.EqualTo(before), "nothing written");
-        });
+            using var rig = Open(w, h);
+            SelectOnCanvas(rig, "btn");
+            ShowEvents(rig);
+            var row = EventRow(rig, "Click");
 
-        box = HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
-        rig.Click(box);
-        rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
-        rig.Window.KeyTextInput("DoIt");
-        rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
-        Dispatcher.UIThread.RunJobs();
+            var box = HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
+            rig.Click(box);
+            var before = rig.Code;
+            rig.Window.KeyTextInput("Dim");
+            Assert.That(HandlerCombo(rig, row).Text, Is.EqualTo("Dim"), $"{w}x{h}: precondition: the typing reached the cell");
+            rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            Assert.That(row.Refusal, Is.Not.Null, $"{w}x{h}: a keyword is refused (handler now '{row.Handler}')");
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.GridVm.DescriptionBody, Does.Contain(row.Refusal!), $"{w}x{h}: and the pane says why");
+                Assert.That(row.Handler, Is.Empty, $"{w}x{h}: nothing bound");
+                Assert.That(rig.Code, Is.EqualTo(before), $"{w}x{h}: nothing written");
+                Assert.That(HandlerCombo(rig, row).Text ?? "", Is.Empty, $"{w}x{h}: the cell reverts after the refusal");
+            });
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(rig.Code, Does.Contain("Private Sub DoIt(sender As Object, e As EventArgs)"), "the typed stub");
-            Assert.That(row.Handler, Is.EqualTo("DoIt"), "bound");
-            Assert.That(rig.Vm.Text, Does.Match("<Bind Event=\"Click\" Handler=\"DoIt\"\\s?/>"));
-        });
+            box = HandlerCombo(rig, row).GetVisualDescendants().OfType<TextBox>().First(t => t.IsEffectivelyVisible);
+            rig.Click(box, dx: 3);
+            rig.Window.KeyPress(Key.A, RawInputModifiers.Control);
+            rig.Window.KeyTextInput("DoIt");
+            rig.Window.KeyPress(Key.Enter, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rig.Code, Does.Contain("Private Sub DoIt(sender As Object, e As EventArgs)"), $"{w}x{h}: the typed stub");
+                Assert.That(row.Handler, Is.EqualTo("DoIt"), $"{w}x{h}: bound");
+                Assert.That(rig.Vm.Text, Does.Match("<Bind Event=\"Click\" Handler=\"DoIt\"\\s?/>"), $"{w}x{h}");
+            });
+        }
     }
 
     /// <summary>
@@ -425,9 +562,17 @@ public partial class FormPropertyGridRealViewTests
     /// view asks the host on open, and the host reads the tab, never only the disk.
     /// </summary>
     [AvaloniaTest]
-    public void ASubTypedIntoTheOpenUnsavedTab_IsOfferedWhenTheDropDownOpens()
+    public void ASubTypedIntoTheOpenUnsavedTab_IsOfferedWhenTheDropDownOpens_AtTwoZooms()
     {
-        using var rig = Open();
+        foreach (var (w, h) in TwoZooms)
+        {
+            OneUnsavedTabRun(w, h);
+        }
+    }
+
+    private static void OneUnsavedTabRun(double w, double h)
+    {
+        using var rig = Open(w, h);
         var codePath = Dir + "GridForm.bas";
         var bas = new CodeEditorDocumentViewModel(rig.Files.Service, new Mock<IEventAggregator>().Object) { FilePath = codePath };
         bas.SetContent(rig.Files.Contents[codePath]);
@@ -450,9 +595,9 @@ public partial class FormPropertyGridRealViewTests
         PickFromOpen(rig, combo, "Typed");
         Assert.Multiple(() =>
         {
-            Assert.That(row.Handler, Is.EqualTo("Typed"), "picking it binds it");
-            Assert.That(rig.Files.Contents[codePath], Is.EqualTo(diskBefore), "the disk .bas is untouched");
-            Assert.That(bas.IsDirty, Is.True, "the tab keeps its unsaved edit");
+            Assert.That(row.Handler, Is.EqualTo("Typed"), $"{w}x{h}: picking it binds it");
+            Assert.That(rig.Files.Contents[codePath], Is.EqualTo(diskBefore), $"{w}x{h}: the disk .bas is untouched");
+            Assert.That(bas.IsDirty, Is.True, $"{w}x{h}: the tab keeps its unsaved edit");
         });
     }
 
@@ -465,23 +610,26 @@ public partial class FormPropertyGridRealViewTests
     /// <c>pnl_Click(e As DomEvent)</c> ABOVE the region that wires it, and binds the DOM name <c>click</c>.
     /// </summary>
     [AvaloniaTest]
-    public void OnAWebPanel_ThereIsNoPaint_AndClickWritesADomEventStubAboveTheRegion()
+    public void OnAWebPanel_ThereIsNoPaint_AndClickWritesADomEventStubAboveTheRegion_AtTwoZooms()
     {
-        using var rig = Open(doc: WebPanelDoc, target: FormTarget.Web);
-        SelectOnCanvas(rig, "pnl");
-        ShowEvents(rig);
-
-        Assert.That(rig.GridVm.EventRows.Select(r => r.Name), Does.Not.Contain("Paint"), "no Paint on a page");
-
-        DoubleClick(rig, EventNameCell(rig, EventRow(rig, "Click")));
-
-        var stub = rig.Code.IndexOf("Private Sub pnl_Click(e As DomEvent)", StringComparison.Ordinal);
-        Assert.Multiple(() =>
+        foreach (var (w, h) in TwoZooms)
         {
-            Assert.That(stub, Is.GreaterThanOrEqualTo(0), "the DomEvent stub");
-            Assert.That(stub, Is.LessThan(RegionClose(rig.Code)), "the web puts a handler above the region that wires it");
-            Assert.That(rig.Control("pnl").Binds.Any(b => b is { Event: "click", Handler: "pnl_Click" }), Is.True,
-                "the DOM name is what a web Bind stores");
-        });
+            using var rig = Open(w, h, doc: WebPanelDoc, target: FormTarget.Web);
+            SelectOnCanvas(rig, "pnl");
+            ShowEvents(rig);
+
+            Assert.That(rig.GridVm.EventRows.Select(r => r.Name), Does.Not.Contain("Paint"), $"{w}x{h}: no Paint on a page");
+
+            DoubleClick(rig, EventNameCell(rig, EventRow(rig, "Click")));
+
+            var stub = rig.Code.IndexOf("Private Sub pnl_Click(e As DomEvent)", StringComparison.Ordinal);
+            Assert.Multiple(() =>
+            {
+                Assert.That(stub, Is.GreaterThanOrEqualTo(0), $"{w}x{h}: the DomEvent stub");
+                Assert.That(stub, Is.LessThan(RegionClose(rig.Code)), $"{w}x{h}: the web puts a handler above the region that wires it");
+                Assert.That(rig.Control("pnl").Binds.Any(b => b is { Event: "click", Handler: "pnl_Click" }), Is.True,
+                    $"{w}x{h}: the DOM name is what a web Bind stores");
+            });
+        }
     }
 }

@@ -454,17 +454,25 @@ public static class FormHandlers
         // to the form's Click. VS appends `_1`, `_2`, … until the name is free (no Sub or other member of that name in any
         // case, and no bind naming it). ⛔ A name that came from a BIND or was TYPED is never renamed: renaming it would write
         // an orphan stub, put the caret in it, and leave the bind naming the old member.
+        //
+        // ⛔ Round 4 ruling 4: the computed name obeys the SAME guards a typed name does (DescribeUnusableHandler). An existing
+        // Shared Sub of that name (AddressOf it is a runtime ReferenceError on the page), a Sub of the wrong shape or with a
+        // ByRef parameter (it does not compile as the handler), a Function/field of that name — each is TAKEN, never
+        // navigated to and bound: the name moves on to `_1`. A fitting instance Sub of that name is still navigated.
         if (computed)
         {
             var others = OtherOwnersHandlers(form, owner);
-            if (others.Contains(handler))
+            if (others.Contains(handler) || DescribeUnusableHandler(form, owner, evt, handler, scan) != null)
             {
                 var taken = others.Concat(owner.Binds.Select(b => b.Handler)).Concat(scan.Subs.Select(s => s.Name))
                     .Concat(scan.OtherMembers).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var n = 1;
-                while (taken.Contains($"{handler}_{n}"))
+                while (taken.Contains($"{handler}_{n}") || DescribeUnusableHandler(form, owner, evt, $"{handler}_{n}", scan) != null)
                 {
-                    n++;
+                    if (++n > 10_000)
+                    {
+                        return Refuse(codeText, $"no free handler name was found for {owner.Label}'s {evt.Name} event.");
+                    }
                 }
 
                 handler = $"{handler}_{n}";

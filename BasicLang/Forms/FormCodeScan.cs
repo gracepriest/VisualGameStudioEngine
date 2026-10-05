@@ -44,6 +44,10 @@ public sealed record FormCodeScanResult(IReadOnlyList<FormDeclaredSub> Subs, IRe
 /// <item><c>End Sub</c>, <c>Exit Sub</c>, <c>Dim f = Sub(x) …</c> and a <c>Function</c> are not Sub declarations; a Sub
 /// inside a designer region (<c>InitializeComponent</c>, the <c>VgsOn_</c> wrappers) is not the user's.</item>
 /// <item>A <c>ByRef</c> parameter is kept (<see cref="FormCodeParameter.IsByRef"/>): it never fits an event (CS0123).</item>
+/// <item>Member names (<see cref="FormCodeScanResult.OtherMembers"/>) come from MEMBER-LEVEL lines only (review round 4):
+/// Functions, Properties, Events, Delegates, Declares, Consts, fields with or without <c>Dim</c> (<c>WithEvents</c>, several
+/// names), and nested type names. A member's body — a Sub, a Function, an expanded Property, a Custom Event, an Operator, a
+/// multi-line lambda — is skipped, so a local is never a member.</item>
 /// </list>
 /// </summary>
 public static class FormCodeScan
@@ -74,9 +78,47 @@ public static class FormCodeScan
     private static readonly Regex DirectiveElse = new(@"^\s*#\s*Else(?:If)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex DirectiveEnd = new(@"^\s*#\s*(?:EndIf|End\s+If)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    private const string MemberModifiers =
+        "(?:(?:Public|Private|Protected|Friend|Shared|Overrides|Overridable|NotOverridable|MustOverride|Overloads|Shadows|Async|Partial|Iterator|ReadOnly|WriteOnly|Default|Static|Custom|Widening|Narrowing)\\s+)*";
+
+    /// <summary>
+    /// A NAMED member that is not a Sub: Function, Property, Event (Custom too), Delegate Sub/Function, Declare Sub/Function
+    /// (with an optional Ansi/Unicode/Auto), Const, Dim. <c>kind</c> says whether a body follows.
+    /// </summary>
     private static readonly Regex OtherMember = new(
-        @"^\s*" + "(?:(?:Public|Private|Protected|Friend|Shared|Overrides|Overridable|NotOverridable|MustOverride|Overloads|Shadows|Async|Partial|Iterator|ReadOnly|WriteOnly|Default|Static)\\s+)*" +
-        @"(?:Function|Property|Event|Dim|Const)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        @"^\s*" + MemberModifiers +
+        @"(?<kind>Function|Property|Event|Delegate\s+(?:Sub|Function)|Declare\s+(?:(?:Ansi|Unicode|Auto)\s+)?(?:Sub|Function)|Const|Dim)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A FIELD with no <c>Dim</c> (round 4 ruling 3): modifiers (at least one) — <c>WithEvents</c> among them — then one or
+    /// more names (<c>Public a, b As Integer</c>, <c>items() As String</c>). ⚠ Tried AFTER every keyword form, so
+    /// <c>Private Sub</c> never reads as a field named <c>Sub</c>.
+    /// </summary>
+    private static readonly Regex Field = new(
+        @"^\s*(?:(?:Public|Private|Protected|Friend|Shared|Shadows|ReadOnly|Static|WithEvents)\s+)+(?<names>[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\))?)*)\s*(?:As\b|=|$)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>The end of a member body: <c>End Sub</c>, <c>End Function</c>, <c>End Property</c>, <c>End Event</c>, <c>End Operator</c>.</summary>
+    private static readonly Regex BodyEnd = new(@"^\s*End\s+(?<kind>Sub|Function|Property|Event|Operator)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>An <c>Operator</c> declaration (a body; no name to collide with).</summary>
+    private static readonly Regex OperatorDeclaration = new(@"^\s*" + MemberModifiers + @"Operator\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A MULTI-LINE lambda opening inside a body — <c>Sub(…)</c>/<c>Function(…)</c> with nothing after its parameter list
+    /// (and an optional <c>As T</c>) — whose own <c>End Sub</c>/<c>End Function</c> must not end the enclosing member.
+    /// </summary>
+    private static readonly Regex LambdaStart = new(
+        @"(?<![A-Za-z0-9_])(?<kind>Sub|Function)\s*\((?:[^()]|\([^()]*\))*\)\s*(?:As\s+[\w.]+(?:\([^)]*\))?\s*)?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex MustOverride = new(@"\bMustOverride\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex AccessorStart = new(
+        @"^\s*(?:(?:Public|Private|Protected|Friend)\s+)*(?:Get|Set|AddHandler|RemoveHandler|RaiseEvent)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly Regex SharedModifier = new(@"^\s*(?:\w+\s+)*?Shared\s", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -88,14 +130,6 @@ public static class FormCodeScan
 
     private sealed record Block(string Kind, string Name);
 
-    private static int _scanCount;
-
-    /// <summary>
-    /// How many times <see cref="DeclaredSubs"/> has scanned a file in this process — a diagnostic counter, so a test can
-    /// pin that a refresh of N rows scans ONCE, not N times (review ruling 5).
-    /// </summary>
-    public static int ScanCount => Volatile.Read(ref _scanCount);
-
     /// <summary>Every Sub the FORM class declares, in document order. <paramref name="formName"/>: the form's class name.</summary>
     public static IReadOnlyList<FormDeclaredSub> DeclaredSubs(string codeText, string? formName = null) =>
         Scan(codeText, formName).Subs;
@@ -103,7 +137,6 @@ public static class FormCodeScan
     /// <summary>ONE scan of the form class: its Subs and its other members' names (see <see cref="FormCodeScanResult"/>).</summary>
     public static FormCodeScanResult Scan(string codeText, string? formName = null)
     {
-        Interlocked.Increment(ref _scanCount);
         var others = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var index = new Recognizer.SourceIndex(codeText);
         var regions = RegionMarkers.Scan(codeText)
@@ -126,9 +159,13 @@ public static class FormCodeScan
             formClass = classes.FirstOrDefault();
         }
 
-        // Pass 2 — the Subs whose innermost non-namespace block is the form class, at the top level.
+        // Pass 2 — the form class's MEMBER-LEVEL lines (round 4 ruling 3): its Subs, and every other member's name. ⛔ The
+        // lines inside a member's BODY (a Sub, Function, Property with accessors, Custom Event, Operator, a multi-line lambda)
+        // are skipped — a `Dim total` there is a local, never a member, and refusing its name was over-strict.
         var subs = new List<FormDeclaredSub>();
         var classOrdinal = -1;
+        string? body = null;      // the End keyword that closes the member body we are in (Sub/Function/Property/Event/Operator)
+        var lambdaDepth = 0;      // multi-line lambdas open inside that body
         Walk(index, regions, (line, code, blocks) =>
         {
             var owners = blocks.Where(b => !b.Kind.Equals("Namespace", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -138,31 +175,134 @@ public static class FormCodeScan
                 return;
             }
 
-            var declaration = WithoutAttributes(code);
-            var match = Declaration.Match(declaration);
-            if (!match.Success)
+            if (body != null)
             {
-                if (OtherMember.Match(declaration) is { Success: true } other)
+                if (BodyEnd.Match(code) is { Success: true } end)
                 {
-                    others.Add(other.Groups["name"].Value);
+                    var kind = end.Groups["kind"].Value;
+                    if (lambdaDepth > 0 && (kind.Equals("Sub", StringComparison.OrdinalIgnoreCase) ||
+                                            kind.Equals("Function", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        lambdaDepth--;
+                    }
+                    else if (kind.Equals(body, StringComparison.OrdinalIgnoreCase))
+                    {
+                        body = null;
+                    }
+                }
+                else if (LambdaStart.IsMatch(code))
+                {
+                    lambdaDepth++;
                 }
 
                 return;
             }
 
-            var rest = match.Groups["rest"].Value;
-            var parameters = ParameterList(index, line, rest);
-            var isShared = SharedModifier.IsMatch(declaration[..match.Groups["name"].Index]);
-            subs.Add(new FormDeclaredSub(match.Groups["name"].Value, line, parameters, isShared));
+            var declaration = WithoutAttributes(code);
+            var match = Declaration.Match(declaration);
+            if (match.Success)
+            {
+                var rest = match.Groups["rest"].Value;
+                var parameters = ParameterList(index, line, rest);
+                var prefix = declaration[..match.Groups["name"].Index];
+                subs.Add(new FormDeclaredSub(match.Groups["name"].Value, line, parameters, SharedModifier.IsMatch(prefix)));
+                if (!MustOverride.IsMatch(prefix))
+                {
+                    Enter("Sub");
+                }
+
+                return;
+            }
+
+            if (OperatorDeclaration.IsMatch(declaration))
+            {
+                Enter("Operator");
+                return;
+            }
+
+            if (OtherMember.Match(declaration) is { Success: true } other)
+            {
+                others.Add(other.Groups["name"].Value);
+                var kind = other.Groups["kind"].Value;
+                var prefix = declaration[..other.Groups["kind"].Index];
+                if (kind.Equals("Function", StringComparison.OrdinalIgnoreCase) && !MustOverride.IsMatch(prefix))
+                {
+                    Enter("Function");
+                }
+                else if (kind.Equals("Property", StringComparison.OrdinalIgnoreCase) && !MustOverride.IsMatch(prefix) &&
+                         NextCodeLine(index, regions, line) is { } next && AccessorStart.IsMatch(WithoutAttributes(next)))
+                {
+                    Enter("Property");   // an expanded property; an auto-property (`Property X As T`) has no body
+                }
+                else if (kind.Equals("Event", StringComparison.OrdinalIgnoreCase) &&
+                         Regex.IsMatch(prefix, @"\bCustom\b", RegexOptions.IgnoreCase))
+                {
+                    Enter("Event");
+                }
+                else if (LambdaStart.Match(declaration) is { Success: true } initializer)
+                {
+                    Enter(initializer.Groups["kind"].Value);   // `Dim f = Sub(x)` … `End Sub` at member level
+                }
+
+                return;
+            }
+
+            if (Field.Match(declaration) is { Success: true } field)
+            {
+                foreach (var name in field.Groups["names"].Value.Split(','))
+                {
+                    var bare = Regex.Replace(name, @"\(.*$", "").Trim();
+                    if (bare.Length > 0 && !BasicLang.Compiler.Lexer.IsKeyword(bare))
+                    {
+                        others.Add(bare);
+                    }
+                }
+
+                if (LambdaStart.Match(declaration) is { Success: true } initializer)
+                {
+                    Enter(initializer.Groups["kind"].Value);
+                }
+            }
         }, (block, depthOutsideNamespaces) =>
         {
             if (depthOutsideNamespaces == 0 && block.Kind.Equals("Class", StringComparison.OrdinalIgnoreCase))
             {
                 classOrdinal++;
             }
+            else if (depthOutsideNamespaces == 1 && body == null && classOrdinal == formClass.Ordinal && formClass.Name != null &&
+                     !block.Kind.Equals("Namespace", StringComparison.OrdinalIgnoreCase))
+            {
+                others.Add(block.Name);   // a nested Class/Structure/Enum/Interface/Module is a member name of the form
+            }
         });
 
         return new FormCodeScanResult(subs, others);
+
+        void Enter(string kind)
+        {
+            body = kind;
+            lambdaDepth = 0;
+        }
+    }
+
+    /// <summary>The next physical code line after <paramref name="line"/> (comments stripped, blanks and region lines skipped), or null.</summary>
+    private static string? NextCodeLine(Recognizer.SourceIndex index, List<(int Start, int End)> regions, int line)
+    {
+        for (var next = line + 1; next <= index.LineCount; next++)
+        {
+            if (regions.Any(r => next >= r.Start && next <= r.End))
+            {
+                continue;
+            }
+
+            var code = Code(index.LineText(next));
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                return code;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The form class's Sub named <paramref name="name"/>, matched IGNORING CASE as BasicLang binds names, or null.</summary>

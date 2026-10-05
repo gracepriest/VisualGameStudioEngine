@@ -40,6 +40,11 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         _form = form;
         Owner = owner;
         Event = evt;
+        // ⛔ Decided HERE, not in a getter (round 4 ruling 8): a row exists only for an event FormEvents.WiredOn wires on
+        // this target, so a missing name is a defect — and a throw inside a binding's getter is swallowed by the binding,
+        // leaving a cell that silently shows nothing. Storing `Click` on a page would register a listener that never fires.
+        EventName = FormEvents.NameOn(evt, form.Target)
+            ?? throw new InvalidOperationException($"'{evt.Name}' has no name on {form.Target}, so it cannot be an Events-tab row");
         _scan = scan;
         _edited = edited;
         _requested = requested;
@@ -60,12 +65,10 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     public string Description => Event.Description ?? "";
 
     /// <summary>
-    /// The name a bind stores on this target: <c>Click</c> on WinForms, <c>click</c> on the web. ⛔ Never falls back to the
-    /// WinForms name: a row exists only for an event <see cref="FormEvents.WiredOn"/> wires here, so a missing name is a
-    /// defect, and storing <c>Click</c> on a page would register a listener that never fires.
+    /// The name a bind stores on this target: <c>Click</c> on WinForms, <c>click</c> on the web — fixed at construction,
+    /// which refuses an event with no name here (never a fallback to the WinForms name).
     /// </summary>
-    public string EventName => FormEvents.NameOn(Event, _form.Target)
-        ?? throw new InvalidOperationException($"'{Event.Name}' has no name on {_form.Target}, so it cannot be an Events-tab row");
+    public string EventName { get; }
 
     /// <summary>The handler bound to this event, or empty.</summary>
     public string Handler => Bind?.Handler ?? "";
@@ -121,7 +124,7 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
         var scan = _scan();
         if (FormHandlers.DescribeUnusableHandler(_form, Owner, Event, typed, scan) is { } refusal)
         {
-            Refusal = refusal;
+            Refuse(refusal);
             return;
         }
 
@@ -147,9 +150,34 @@ public sealed partial class FormEventRow : ObservableObject, IFormDisplayRow
     /// <summary>A double-click on the row: create-or-navigate its handler (the host decides which).</summary>
     public void RequestHandler() => _requested(new FormHandlerRequest(Owner, Event, null));
 
+    /// <summary>
+    /// Refuses the value just committed: says why (the description pane), and makes the cell re-read its handler, so the
+    /// refused text reverts to what is bound (round 4 ruling 5). Also the host's route, for a name it refuses.
+    /// </summary>
+    public void Refuse(string why)
+    {
+        Refusal = why;
+        HandlerChanged();
+        Reverted?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// The cell must show the bound handler again, throwing away what was typed (a refusal; Escape). ⚠ An EVENT, not only
+    /// <see cref="HandlerChanged"/>: measured, re-raising an unchanged <c>Handler</c> ("" → "") does not replace text the
+    /// user typed into the editable combo — the one-way binding's value did not change — so the view sets the text itself.
+    /// </summary>
+    public event EventHandler? Reverted;
+
+    /// <summary>
+    /// ⛔ The bind changed under the row (round 4 ruling 1, CRITICAL) — the host's double-click/typed-name bind edits the
+    /// FormBind directly — or the cell must re-read it (Escape, a refusal). Without it the combo's one-way Text keeps the
+    /// stale value WITH FOCUS IN IT, and the next LostFocus commits that: an empty cell's "" unbinds the stub just written.
+    /// </summary>
+    public void HandlerChanged() => OnPropertyChanged(nameof(Handler));
+
     private void Changed()
     {
-        OnPropertyChanged(nameof(Handler));
+        HandlerChanged();
         _edited();
     }
 }

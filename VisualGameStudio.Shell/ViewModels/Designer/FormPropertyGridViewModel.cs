@@ -148,6 +148,13 @@ public partial class FormPropertyGridViewModel : ObservableObject
         RaiseDescription();
     }
 
+    /// <summary>
+    /// How the grid scans the code-behind — <see cref="FormCodeScan.Scan"/>; a SEAM, so a test can count the scans of one
+    /// refresh (round 4 ruling 11: never a static counter in a compiler type). Public: the Shell grants the tests no
+    /// internals.
+    /// </summary>
+    public Func<string, string?, FormCodeScanResult> CodeScanner { get; set; } = FormCodeScan.Scan;
+
     /// <summary>The ONE scan of <see cref="CodeBehindText"/> every Events-tab row reads (review ruling 5), and what it was of.</summary>
     private (string Text, string? FormName, FormCodeScanResult Result)? _codeScan;
 
@@ -157,10 +164,33 @@ public partial class FormPropertyGridViewModel : ObservableObject
         var formName = _file?.Model.Name;
         if (_codeScan is not { } cached || !ReferenceEquals(cached.Text, CodeBehindText) || cached.FormName != formName)
         {
-            _codeScan = (CodeBehindText, formName, FormCodeScan.Scan(CodeBehindText, formName));
+            _codeScan = (CodeBehindText, formName, CodeScanner(CodeBehindText, formName));
         }
 
         return _codeScan.Value.Result;
+    }
+
+    /// <summary>
+    /// ⛔ The host bound or unbound a handler BEHIND the rows (round 4 ruling 1, CRITICAL): every row re-reads its Handler,
+    /// so no cell keeps a stale value with focus in it for the next LostFocus to commit.
+    /// </summary>
+    public void RefreshHandlers()
+    {
+        foreach (var row in EventRows)
+        {
+            row.HandlerChanged();
+        }
+    }
+
+    /// <summary>
+    /// The host refused a name typed into <paramref name="owner"/>'s <paramref name="evt"/> row (round 4 ruling 5): said in
+    /// that row's description, and the cell reverts. Returns false when no such row is showing (the caller reports it).
+    /// </summary>
+    public bool RefuseHandler(FormBindOwner owner, FormEventDef evt, string why)
+    {
+        var row = EventRows.FirstOrDefault(r => ReferenceEquals(r.Owner.Control, owner.Control) && ReferenceEquals(r.Event, evt));
+        row?.Refuse(why);
+        return row != null;
     }
 
     partial void OnCodeBehindTextChanged(string value)
@@ -183,12 +213,27 @@ public partial class FormPropertyGridViewModel : ObservableObject
         RaiseDescription();
     }
 
+    /// <summary>
+    /// An Events-tab row's cell must show its bound handler again (a refusal — the row's own or the host's): the view puts
+    /// the text back (see <see cref="FormEventRow.Reverted"/> for why a property notification is not enough).
+    /// </summary>
+    public event EventHandler<FormEventRow>? HandlerCellReverted;
+
+    private void OnEventRowReverted(object? sender, EventArgs e)
+    {
+        if (sender is FormEventRow row)
+        {
+            HandlerCellReverted?.Invoke(this, row);
+        }
+    }
+
     /// <summary>Rebuilds the Events-tab rows for the selection: the control's row, or the Form's with nothing selected.</summary>
     private void RebuildEventRows()
     {
         foreach (var old in EventRows)
         {
             old.PropertyChanged -= OnEventRowPropertyChanged;
+            old.Reverted -= OnEventRowReverted;
         }
 
         EventRows.Clear();
@@ -210,6 +255,7 @@ public partial class FormPropertyGridViewModel : ObservableObject
             var row = new FormEventRow(form, owner, evt, CodeScan, RaiseEdited,
                 request => HandlerRequested?.Invoke(this, request));
             row.PropertyChanged += OnEventRowPropertyChanged;
+            row.Reverted += OnEventRowReverted;
             EventRows.Add(row);
         }
     }

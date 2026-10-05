@@ -281,19 +281,6 @@ public class FormHandlerReview3Tests
         });
     }
 
-    // ==================================================================
-    // 5 — one scan per refresh
-    // ==================================================================
-
-    [Test]
-    public void PushingTheCodeBehind_ScansItOnce_ForAllRows()
-    {
-        var (_, grid) = Grid(FormTarget.WinForms, Code(FormTarget.WinForms));
-        Assert.That(grid.EventRows.Count, Is.GreaterThan(5));
-
-        var before = FormCodeScan.ScanCount;
-        grid.CodeBehindText = Code(FormTarget.WinForms, "Private Sub X(sender As Object, e As EventArgs)\n    End Sub");
-
-        Assert.That(FormCodeScan.ScanCount - before, Is.EqualTo(1));
-    }
+    // 5 — one scan per refresh: moved to FormHandlerGestureTests.PushingTheCodeBehind_ScansItOnce_ThroughTheGridsScanner
+    // (round 4 ruling 11 — the static counter in FormCodeScan is gone).
 }
