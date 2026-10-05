@@ -106,6 +106,18 @@ public class VbQualifiedIntrinsicTests
         Assert.That(BuiltIns().Where(s => s.Name is "Shell" or "Print" or "PrintLine").Select(VbIntrinsicQualifiers.ModuleOf),
             Is.All.Null);
 
+    /// <summary>VB is case-insensitive: every spelling binds in any case (an Ordinal qualifier comparison survived all
+    /// eleven earlier tests — Task 7d review).</summary>
+    [TestCase("STRINGS.InStr(s, \"l\")", "Integer")]
+    [TestCase("microsoft.visualbasic.strings.Trim(s)", "String")]
+    [TestCase("MICROSOFT.VISUALBASIC.Left(s, 2)", "String")]
+    [TestCase("strings.LEN(s)", "Integer")]
+    public void AQualifiedBuiltIn_BindsInAnyCase(string call, string type) =>
+        // TYPED, so an unbound call (typed Object by the permissive .NET arm) is refused rather than accepted.
+        Assert.That(Messages("Public Class C\n Public Left As Integer\n Public Len As Integer\n Public Sub Go()\n" +
+                             "  Dim s As String = \"hello\"\n  Dim r As " + type + " = " + call + "\n End Sub\nEnd Class\n" +
+                             "Sub Main()\nEnd Sub\n"), Is.Empty);
+
     /// <summary>A user declaration named like the qualifier keeps its meaning — no built-in is claimed.</summary>
     [Test]
     public void AUserModuleNamedStrings_KeepsItsMeaning() =>

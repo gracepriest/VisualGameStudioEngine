@@ -3592,8 +3592,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})";
             }
 
-            // Check if this is an extern function call
-            if (_module != null && _module.IsExtern(functionName))
+            // Check if this is an extern function call (never for a VB-qualified built-in)
+            if (!call.IsIntrinsic && _module != null && _module.IsExtern(functionName))
             {
                 var externDecl = _module.GetExtern(functionName);
                 if (externDecl != null && externDecl.HasImplementation("Cpp"))
@@ -3612,6 +3612,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 isVoidStdLib = IsVoidStdLibCall(functionName);
                 return stdlibCall;
             }
+
+            // ⛔ A VB-qualified built-in (IRCall.IsIntrinsic) with no arm is REFUSED — never called by name,
+            // which C++ would bind to a class member or a user function of that name.
+            if (call.IsIntrinsic)
+                throw new NotSupportedException($"C++ backend: no lowering for the built-in '{functionName}'.");
 
             // Regular function call
             var staticTarget = StaticCallTarget(functionName);
@@ -4014,7 +4019,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // NOTE this is deliberately checked against the call name AS WRITTEN: a dotted
             // `DateTime.Parse(s)` never matches a user `Function Parse(...)` (the set holds
             // "M.Parse"/"Parse", not "DateTime.Parse"), so static dispatch is unaffected.
-            if (IsUserDefinedFunctionName(functionName)) return null;
+            // ...except a VB-qualified built-in (IRCall.IsIntrinsic), which always means VB's function.
+            if (call?.IsIntrinsic != true && IsUserDefinedFunctionName(functionName)) return null;
 
             // Check game framework functions first (case-insensitive match).
             // Framework exports are extern "C" — none take std::string — so
@@ -4163,6 +4169,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "ucase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::toupper); return s; }})({args[0]})",
                 "lcase" => $"([](string s){{ transform(s.begin(), s.end(), s.begin(), ::tolower); return s; }})({args[0]})",
                 "instr" => $"static_cast<int32_t>({args[0]}.find({args[1]}) + 1)",
+                // VB's Val / Str (Task 7d review) — BasicLang::VbVal / VbStr in the BCL runtime. Str's
+                // number text is the ONE shared stringifier's, so it cannot drift from CStr / Concat.
+                "val" => $"BasicLang::VbVal({args[0]})",
+                "str" => $"BasicLang::VbStr({StringifyForText(call != null && call.Arguments.Count > 0 ? call.Arguments[0] : null, args[0]) ?? $"to_string({args[0]})"})",
                 "replace" => $"([](string s, const string& from, const string& to){{ size_t pos = 0; while ((pos = s.find(from, pos)) != string::npos) {{ s.replace(pos, from.length(), to); pos += to.length(); }} return s; }})({args[0]}, {args[1]}, {args[2]})",
                 "abs" => $"abs({args[0]})",
                 "sqrt" => $"sqrt({args[0]})",

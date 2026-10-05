@@ -811,6 +811,21 @@ namespace BasicLang.Compiler.IR
         public string CalleeModule { get; set; }
 
         /// <summary>
+        /// The call is a BUILT-IN by construction — written VB-qualified (<c>Strings.Left(…)</c>,
+        /// <c>Microsoft.VisualBasic.Len(…)</c>) — so every backend lowers it from its built-in table
+        /// FIRST, before any class-member or user-function lookup, and refuses it rather than call
+        /// anything else when the table has no row.
+        ///
+        /// <para>⛔ Without it the call reached each backend as the bare name and was RE-BOUND there:
+        /// with a class METHOD <c>Function Len()</c>, JavaScript emitted <c>this.Len(this.Text)</c>
+        /// (printed 99, silently) and C# <c>Len(Text)</c> (CS1501); and any user procedure named
+        /// <c>Left</c> anywhere in the program took over <c>Strings.Left(…)</c>. VB: the qualified
+        /// spelling ALWAYS means VB's function (Task 7d review). The bare <c>Left(…)</c> still binds
+        /// to a user's own <c>Left</c> — that is VB too — and never carries this flag.</para>
+        /// </summary>
+        public bool IsIntrinsic { get; set; }
+
+        /// <summary>
         /// P2a-2 Task 9 (Task-8 quality review I5) — HOW each by-ref argument is passed, for a
         /// call whose target is a resolved .NET member. Parallel to
         /// <see cref="ByRefArguments"/>, and consulted only where an entry exists.

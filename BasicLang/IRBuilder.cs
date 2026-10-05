@@ -6126,6 +6126,8 @@ namespace BasicLang.Compiler.IR
             if (_semanticAnalyzer.QualifiedIntrinsicFor(node) is Symbol qualifiedIntrinsic)
             {
                 EmitProcedureCall(node, qualifiedIntrinsic, qualifiedIntrinsic.Name, tempName, returnType);
+                // ⛔ Marked, so no backend re-binds the bare name to a class member or a user procedure.
+                if (_expressionResult is IRCall intrinsicCall) intrinsicCall.IsIntrinsic = true;
                 return;
             }
 

@@ -220,11 +220,22 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
-        // Helper methods to check both stdlib providers (Framework first, then CSharp)
-        private bool StdLibCanHandle(string functionName)
+        /// <summary>A VB-qualified built-in (<see cref="IRCall.IsIntrinsic"/>) the stdlib table has no row for is
+        /// refused — never emitted as a call by name, which C# would bind to a class member or a user
+        /// procedure of that name.</summary>
+        private static void RefuseUnloweredIntrinsic(IRCall call)
         {
-            // A user-defined function of the same name shadows the builtin.
-            if (functionName != null && _userFunctionNames.Contains(functionName))
+            if (call?.IsIntrinsic == true)
+                throw new NotSupportedException(
+                    $"C# backend: no lowering for the built-in '{call.FunctionName}'.");
+        }
+
+        // Helper methods to check both stdlib providers (Framework first, then CSharp)
+        private bool StdLibCanHandle(string functionName, IRCall call = null)
+        {
+            // A user-defined function of the same name shadows the builtin — but never a VB-qualified
+            // built-in (IRCall.IsIntrinsic): `Strings.Left(…)` always means VB's function.
+            if (functionName != null && call?.IsIntrinsic != true && _userFunctionNames.Contains(functionName))
                 return false;
             return _frameworkStdLib.CanHandle(functionName) || _stdLib.CanHandle(functionName);
         }
@@ -756,7 +767,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void CollectStdLibImportsFromInstruction(IRInstruction instr)
         {
-            if (instr is IRCall call && StdLibCanHandle(call.FunctionName))
+            if (instr is IRCall call && StdLibCanHandle(call.FunctionName, call))
             {
                 foreach (var import in StdLibGetRequiredImports(call.FunctionName))
                 {
@@ -779,7 +790,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         private void CollectStdLibImportsFromExpression(IRValue expr)
         {
-            if (expr is IRCall call && StdLibCanHandle(call.FunctionName))
+            if (expr is IRCall call && StdLibCanHandle(call.FunctionName, call))
             {
                 foreach (var import in StdLibGetRequiredImports(call.FunctionName))
                 {
@@ -3676,7 +3687,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             return vbConversion;
 
                         // Check if this is a standard library function
-                        if (StdLibCanHandle(call.FunctionName))
+                        if (StdLibCanHandle(call.FunctionName, call))
                         {
                             // Add required imports
                             foreach (var import in StdLibGetRequiredImports(call.FunctionName))
@@ -3685,6 +3696,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             }
                             return StdLibEmitCall(call.FunctionName, argExprs);
                         }
+                        RefuseUnloweredIntrinsic(call);
 
                         // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
                         var fn = UserCallTarget(call);
@@ -3724,7 +3736,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                             var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
 
                             // Check if this is a standard library function
-                            if (StdLibCanHandle(call.FunctionName))
+                            if (StdLibCanHandle(call.FunctionName, call))
                             {
                                 foreach (var import in StdLibGetRequiredImports(call.FunctionName))
                                 {
@@ -4256,7 +4268,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             // Check if this is a standard library function
-            if (StdLibCanHandle(functionName))
+            if (StdLibCanHandle(functionName, call))
             {
                 var stdLibCall = VbConversionText(call, argExprs) ?? StdLibEmitCall(functionName, argExprs);
 
@@ -4279,6 +4291,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             // Regular function call
+            RefuseUnloweredIntrinsic(call);
             var args = string.Join(", ", argExprs);
             // Handle qualified names (e.g., "ClassName.MethodName") by sanitizing each part
             var sanitizedName = UserCallTarget(call);

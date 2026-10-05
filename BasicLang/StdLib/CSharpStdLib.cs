@@ -62,6 +62,9 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["Join"] = new StdLibFunction { Name = "Join", Category = StdLibCategory.String, ParameterTypes = new[] { "String[]", "String" }, ReturnType = "String" },
             ["Chr"] = new StdLibFunction { Name = "Chr", Category = StdLibCategory.String, ParameterTypes = new[] { "Integer" }, ReturnType = "String" },
             ["Asc"] = new StdLibFunction { Name = "Asc", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Integer" },
+            // VB's Val/Str (Task 7d review): the call was emitted as a bare `Val(x)` nothing defines.
+            ["Val"] = new StdLibFunction { Name = "Val", Category = StdLibCategory.String, ParameterTypes = new[] { "String" }, ReturnType = "Double" },
+            ["Str"] = new StdLibFunction { Name = "Str", Category = StdLibCategory.String, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
 
             // Math
             ["Abs"] = new StdLibFunction { Name = "Abs", Category = StdLibCategory.Math, ParameterTypes = new[] { "Double" }, ReturnType = "Double" },
@@ -345,6 +348,11 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "join" => EmitJoin(args[0], args[1]),
                 "chr" => EmitChr(args[0]),
                 "asc" => EmitAsc(args[0]),
+                // VB's own runtime, in the shared framework every generated project targets: Val's
+                // leading-number parse (blanks stripped, &H/&O, stops at the first invalid character)
+                // and Str's leading space for a non-negative number are its rules, not a re-implementation.
+                "val" => $"Microsoft.VisualBasic.Conversion.Val({args[0]})",
+                "str" => $"Microsoft.VisualBasic.Conversion.Str({args[0]})",
                 _ => null
             };
         }

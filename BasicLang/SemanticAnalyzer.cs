@@ -6361,7 +6361,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RefuseHiddenProcedure(resolved, resolved.OwningModule ?? resolved.SourceModule, line, column);
                 return resolved;
             }
-            if (string.IsNullOrEmpty(resolved.OwningModule)) return resolved;
+            // ⛔ A BUILT-IN found in the global scope does not end the search: VB puts a project Module's
+            // procedure NEARER than an imported namespace's (Microsoft.VisualBasic.Strings.Left), so a bare
+            // `Left(h, 2)` beside `Module Helpers / Function Left` is the user's. It was bound to the
+            // built-in, lost its owner, and C# emitted a bare `Left(h, 2)` in another class — CS0103
+            // (measured, Task 7d review). The QUALIFIED spelling is never routed here.
+            var resolvedIsBuiltIn = _stdLibSymbols.TryGetValue(name, out var builtIn) && ReferenceEquals(builtIn, resolved);
+            if (string.IsNullOrEmpty(resolved.OwningModule) && !resolvedIsBuiltIn) return resolved;
 
             var others = _moduleMembers
                 .Where(kv => !string.Equals(kv.Key, current, StringComparison.OrdinalIgnoreCase)
@@ -6382,6 +6388,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 RefuseHiddenProcedure(others[0], others[0].OwningModule, line, column);
                 return others[0];
             }
+            // ⚠ A SIBLING FILE's Module procedure named like a built-in is not found here: its signature is
+            // first-wins flattened into the global scope, where the built-in already is, so it is never
+            // registered (RegisterSiblingFunctionSignature). Recorded in the plan (Task 7d notes).
             return resolved;
         }
 

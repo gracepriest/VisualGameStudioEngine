@@ -250,6 +250,56 @@ inline bool VbParseBool(const std::string& s) {
     return VbParseDouble(t) != 0;
 }
 
+/* VB's Val(s): blanks, tabs and line breaks are stripped; &H / &O are hexadecimal / octal (a value
+   that fits 16 bits is a Short, 32 bits an Integer, so Val(""&HFFFF"") is -1); otherwise the longest
+   leading number (a sign, digits, one '.', an E/D exponent), and 0 when there is none. Never throws. */
+inline double VbVal(const std::string& in) {
+    std::string s;
+    for (char c : in) if (c != ' ' && c != '\t' && c != '\n' && c != '\r') s += c;
+    if (s.size() >= 2 && s[0] == '&' && (s[1] == 'H' || s[1] == 'h' || s[1] == 'O' || s[1] == 'o')) {
+        const int radix = (s[1] == 'H' || s[1] == 'h') ? 16 : 8;
+        uint64_t v = 0; bool any = false;
+        for (size_t i = 2; i < s.size(); ++i) {
+            const char c = s[i];
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (radix == 16 && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (radix == 16 && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            if (d >= radix) break;
+            v = v * (uint64_t)radix + (uint64_t)d; any = true;
+        }
+        if (!any) return 0;
+        if (v <= 0xFFFFull) return (double)(int16_t)(uint16_t)v;
+        if (v <= 0xFFFFFFFFull) return (double)(int32_t)(uint32_t)v;
+        return (double)(int64_t)v;
+    }
+    size_t i = 0;
+    std::string num;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) num += s[i++];
+    bool digits = false, dot = false;
+    for (; i < s.size(); ++i) {
+        if (s[i] >= '0' && s[i] <= '9') { num += s[i]; digits = true; }
+        else if (s[i] == '.' && !dot) { num += s[i]; dot = true; }
+        else break;
+    }
+    if (!digits) return 0;
+    if (i < s.size() && (s[i] == 'E' || s[i] == 'e' || s[i] == 'D' || s[i] == 'd')) {
+        size_t j = i + 1;
+        std::string exponent = ""e"";
+        if (j < s.size() && (s[j] == '+' || s[j] == '-')) exponent += s[j++];
+        const size_t start = j;
+        while (j < s.size() && s[j] >= '0' && s[j] <= '9') exponent += s[j++];
+        if (j > start) num += exponent;
+    }
+    return std::strtod(num.c_str(), nullptr);
+}
+
+/* VB's Str(n): the number's text, with a leading space where a non-negative number has no sign. */
+inline std::string VbStr(const std::string& text) {
+    return (!text.empty() && text[0] == '-') ? text : "" "" + text;
+}
+
 /* ReDim a[n] / ReDim a(upperBound): the array resized to n elements (the generator has already
    turned an upper bound into a count). Plain ReDim is n fresh default elements; Preserve keeps the
    first min(old, n) and value-initialises the rest. A negative count throws, as .NET's does. */

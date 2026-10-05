@@ -875,6 +875,60 @@ public class CrossFileBindingTests
         ("Ctl.bas", CtlWithLeftLenText),
         ("Main.bas", "Sub Main()\n Dim c As New Ctl()\n c.Show()\nEnd Sub\n"));
 
+    /// <summary>
+    /// ⛔ Task 7d review (CRITICAL): with class METHODS named <c>Len</c>/<c>Trim</c>/<c>Left</c>, the qualified call
+    /// reached each backend as the bare name and was re-bound there — JavaScript emitted <c>this.Len(this.Text)</c>
+    /// (printed 99, silently), C# <c>Len(Text)</c> (CS1501). <c>IRCall.IsIntrinsic</c> makes every backend take its
+    /// built-in table first. Spelled in other cases too (<c>STRINGS.InStr</c>,
+    /// <c>microsoft.visualbasic.strings.Trim</c>): VB is case-insensitive.
+    /// </summary>
+    [Test]
+    public void QualifiedBuiltIns_RunInsideAClassWhoseMETHODSHaveTheirNames() => RunsOnEveryBackend("hello\n11\nx\n7\n99\n1",
+        ("Ctl.bas",
+            "Public Class Ctl\n" +
+            " Public Function Len() As Integer\n  Return 99\n End Function\n" +
+            " Public Function Trim() As String\n  Return \"member\"\n End Function\n" +
+            " Public Function Left() As Integer\n  Return 1\n End Function\n" +
+            " Public Sub Show()\n  Dim t As String = \"hello world\"\n  Dim p As String = \"  x  \"\n" +
+            "  PrintLine(Strings.Left(t, 5))\n  PrintLine(Microsoft.VisualBasic.Len(t))\n" +
+            "  PrintLine(microsoft.visualbasic.strings.Trim(p))\n  PrintLine(STRINGS.InStr(t, \"world\"))\n" +
+            "  PrintLine(Len())\n  PrintLine(Left())\n End Sub\nEnd Class\n"),
+        ("Main.bas", "Sub Main()\n Dim c As New Ctl()\n c.Show()\nEnd Sub\n"));
+
+    /// <summary>
+    /// ⛔ Task 7d review (Important): a user procedure named like a built-in took over the QUALIFIED spelling program-
+    /// wide. VB: <c>Strings.Left</c> always means VB's function; the BARE <c>Left(…)</c> still calls the user's.
+    /// </summary>
+    [Test]
+    public void AUserProcedureNamedLikeABuiltIn_NeverCapturesTheQualifiedSpelling() => RunsOnEveryBackend("he\nhe",
+        ("Helpers.bas", "Module Helpers\n Function Left(s As String, n As Integer) As String\n  Return \"USER\"\n End Function\nEnd Module\n"),
+        ("Main.bas", "Sub Main()\n Dim h As String = \"hello\"\n PrintLine(Strings.Left(h, 2))\n" +
+                     " PrintLine(Microsoft.VisualBasic.Strings.Left(h, 2))\nEnd Sub\n"));
+
+    /// <summary>
+    /// In ONE file, beside the qualified spelling, the BARE <c>Left(h, 2)</c> is the user's Module procedure — VB puts a
+    /// project Module nearer than an imported namespace. ⛔ It was bound to the built-in, lost its owner, and C# emitted a
+    /// bare <c>Left(h, 2)</c> inside another class (CS0103); JavaScript ran USER. ⚠ The same across FILES is still
+    /// broken (the sibling's signature never reaches the global scope) — recorded in the plan.
+    /// </summary>
+    [Test]
+    public void ABareCall_ToAUserProcedureNamedLikeABuiltIn_CallsTheUsers_OneFile() => RunsOnEveryBackend("he\nUSER",
+        ("Program.bas", "Module Helpers\n Function Left(s As String, n As Integer) As String\n  Return \"USER\"\n End Function\nEnd Module\n" +
+                        "Module Program\n Sub Main()\n  Dim h As String = \"hello\"\n  PrintLine(Strings.Left(h, 2))\n  PrintLine(Left(h, 2))\n End Sub\nEnd Module\n"));
+
+    /// <summary>
+    /// Task 7d review: VB's <c>Val</c> and <c>Str</c> had no lowering (a JavaScript ReferenceError; C# called an undefined
+    /// <c>Val</c>). Now VB's rules on every backend: Val strips blanks, reads &amp;H/&amp;O (a 16-bit value is a Short), stops
+    /// at the first invalid character and is 0 for none; Str puts a space before a non-negative number.
+    /// </summary>
+    [Test]
+    public void ValAndStr_FollowVbOnEveryBackend() => RunsOnEveryBackend("1234\n-1\n150\n0\n7\n255\n 42|\n-3|",
+        ("Main.bas",
+            "Sub Main()\n" +
+            " PrintLine(Val(\"  12 34abc\"))\n PrintLine(Val(\"&HFFFF\"))\n PrintLine(Val(\"1.5e2\"))\n" +
+            " PrintLine(Val(\"x9\"))\n PrintLine(Conversion.Val(\" 7\"))\n PrintLine(Microsoft.VisualBasic.Val(\"&HFF\"))\n" +
+            " PrintLine(Str(42) & \"|\")\n PrintLine(Conversion.Str(-3) & \"|\")\nEnd Sub\n"));
+
     /// <summary>Outside any class the bare built-in still works, beside its qualified spelling.</summary>
     [Test]
     public void BareAndQualifiedBuiltIns_BothRunOutsideAClass() => RunsOnEveryBackend("he\nlo",

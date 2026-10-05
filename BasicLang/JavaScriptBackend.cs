@@ -1910,10 +1910,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// InStr are 1-based, JavaScript's are 0-based, and an off-by-one compiles perfectly
         /// and silently returns the wrong characters.</para>
         /// </summary>
-        private bool TryStringBuiltin(string name, List<string> args, out string result)
+        /// <param name="intrinsic">The call is a VB-qualified built-in (<see cref="IRCall.IsIntrinsic"/>): no
+        /// user function of the same name shadows it.</param>
+        private bool TryStringBuiltin(string name, List<string> args, out string result, bool intrinsic = false)
         {
             result = null;
-            if (string.IsNullOrEmpty(name) || _userFunctionNames.Contains(name)) return false;
+            if (string.IsNullOrEmpty(name) || (!intrinsic && _userFunctionNames.Contains(name))) return false;
 
             string Recv() => Receiver(args[0]);
 
@@ -2000,10 +2002,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 "by this program nor supported by JavaScriptStdLib. Networking, file, process, " +
                 "environment and crypto functions are deliberately unavailable on a web target.");
 
-        private bool TryStdLib(string name, List<string> args, out string result)
+        private bool TryStdLib(string name, List<string> args, out string result, bool intrinsic = false)
         {
             result = null;
-            if (string.IsNullOrEmpty(name) || _userFunctionNames.Contains(name)) return false;
+            if (string.IsNullOrEmpty(name) || (!intrinsic && _userFunctionNames.Contains(name))) return false;
 
             if (!StdLibRegistry.CanHandle(TargetPlatform.JavaScript, name)) return false;
 
@@ -3229,11 +3231,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     : $"new Array({rendered[1]}).fill({element})";
             }
 
-            if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
+            if (TryVbValStr(call, rendered, out var valStr))
+                return valStr;
+
+            if (TryStringBuiltin(call.FunctionName, rendered, out var builtin, call.IsIntrinsic))
                 return builtin;
 
-            if (TryStdLib(call.FunctionName, rendered, out var stdlib))
+            if (TryStdLib(call.FunctionName, rendered, out var stdlib, call.IsIntrinsic))
                 return stdlib;
+
+            // ⛔ A VB-qualified built-in (IRCall.IsIntrinsic) with no row above is REFUSED — never handed to
+            // CallTarget, which would resolve the bare name against the class (`this.Len(…)`) or a user
+            // procedure: the qualified spelling always means VB's function.
+            if (call.IsIntrinsic) throw NoLowering(call.FunctionName);
 
             // ⛔ A call the IR builder OWNED by a Module (CalleeModule) is the Module's procedure even
             // where the class, or a base, has a method of that name: the IR builder already applied VB's
@@ -3282,6 +3292,43 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </list>
         /// Rendered inline (an arrow for the String parse) so no prelude scan is needed.
         /// </summary>
+        /// <summary>
+        /// VB's <c>Val</c> and <c>Str</c> (Task 7d review — both were a run-time ReferenceError here). Val:
+        /// blanks, tabs and line breaks stripped; <c>&amp;H</c>/<c>&amp;O</c> hexadecimal/octal, a value that
+        /// fits 16 bits a Short and 32 bits an Integer (<c>Val("&amp;HFFFF")</c> is -1); otherwise the longest
+        /// leading number (sign, digits, one '.', an E/D exponent), 0 when there is none. Str: the number's
+        /// text (<see cref="TextOf"/>, as CStr) with a leading space unless it starts with '-'. A user's own
+        /// <c>Val</c>/<c>Str</c> wins over the bare spelling, never over a qualified one.
+        /// </summary>
+        private bool TryVbValStr(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            var name = call.FunctionName;
+            if (rendered.Count != 1 || name is null) return false;
+            if (!call.IsIntrinsic && _userFunctionNames.Contains(name)) return false;
+
+            if (string.Equals(name, "Val", StringComparison.OrdinalIgnoreCase))
+            {
+                result = "((s) => { s = String(s ?? \"\").replace(/[ \\t\\r\\n]/g, \"\"); "
+                         + "let m = s.match(/^&[Hh]([0-9A-Fa-f]+)/), r = \"0x\"; "
+                         + "if (!m) { m = s.match(/^&[Oo]([0-7]+)/); r = \"0o\"; } "
+                         + "if (m) { const v = BigInt.asUintN(64, BigInt(r + m[1])); "
+                         + "return Number(v <= 0xFFFFn ? BigInt.asIntN(16, v) : v <= 0xFFFFFFFFn ? BigInt.asIntN(32, v) : BigInt.asIntN(64, v)); } "
+                         + "m = s.match(/^[+-]?(\\d+\\.?\\d*|\\.\\d+)([EeDd][+-]?\\d+)?/); "
+                         + $"return m ? Number(m[0].replace(/[Dd]/, \"e\")) : 0; }})({rendered[0]})";
+                return true;
+            }
+
+            if (string.Equals(name, "Str", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = TextOf(call.Arguments[0], rendered[0], mustBeString: true);
+                result = $"((t) => t.startsWith(\"-\") ? t : \" \" + t)({text})";
+                return true;
+            }
+
+            return false;
+        }
+
         private bool TryVbConversion(IRCall call, List<string> rendered, out string result)
         {
             result = null;
