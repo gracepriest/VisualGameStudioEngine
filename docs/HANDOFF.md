@@ -17,6 +17,14 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #184 DONE, a Char widens to a String the VB way on every backend (fix `54d49c67`)
+- **Fixed:** `Dim s As String = c`, `= Chr(65)`, `Return c`, a Char argument, `For Each s As String In "ab"`, a field / module variable / Const / Optional default / array literal and `Case "a"c` were refused or broke the backends. `TypeInfo.IsCharToStringWidening` is the one table; `IRBuilder.WidenCharToString` re-types a literal, else `CStr`. String to Char, a Char into a ByRef String, a Char `Set(value)` and `Is` on a Char stay refused, as in vbc.
+- **Tests (13, + 1 moved):** `CharWidensToStringExecutionTests` (Integration, 7: 5 groups of 19 vbc-answered probes on C#/C++/MSIL + a JS group of the 7 with no Char local, each x CLI / `-O` / `CompileProjectFiles`, a table pin; roster now 114) and `CharWidensToStringCompileTests` (fast, 6: the four refusals, JS BL7004, the `CStr` IR shape). `ForEachOverStringTests.ExplicitString_IsRefused_PerTask184` MOVED to `ExplicitString_IsAccepted_AndPrintsVbcsAnswer`. Mutants m1-m3 killed.
+- **Gates (Linux):** fast subset 0 failed / 12,658 passed / 94 skipped; Integration, one filter each, 0 failed: `CharWidensToString` 13, `ForEachOverString` 27, `Coercion` 69, `VbConversionIntrinsic` 14, `SelectCase` 81, `Optional` 49, `JsExecutionTierRoster` 5. The full suite was NOT run; Windows owes the MSVC legs.
+- ⛔ **Gaps, NO test pins them** (fixture header): MSIL String `=` is a reference compare (#205: `c = "a"`); C# non-constant / relational String `Case` (CS9135 / CS8781); MSIL `Case Is >=` on a String and `Char()` arrays; BCL collection and .NET member arguments are untyped (`l.Add(c)`, #278); overload by parameter type and a user Operator with a Char operand stay refused (#279).
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #181 DONE, `AscW`/`Asc`, `ChrW`/`Chr` and `CByte`..`CULng` are typed and lowered as VB does (fix `1cd8618f`)
 
 - **Fixed:** `total + AscW(ch)` and `CByte(x) * 2` were refused on every backend (the ten names typed Object); `SemanticAnalyzer.RegisterStdLibFunctions` types them (Integer / Char / Byte..ULong) and each backend has an arm beside CInt's. `Chr(Asc("A"))` now prints vbc's `[A]` everywhere; #171's S6 prints 131 on all 12 cells.

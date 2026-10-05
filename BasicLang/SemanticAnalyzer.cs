@@ -36,6 +36,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// #184: a loop that DECLARES its variable as a String over Char elements
+        /// (<c>For Each s As String In "ab"</c>) — the hidden variable holds the Char and the body
+        /// begins with <paramref name="declaration"/>, <c>Dim s As String = __foreach_N</c>, whose
+        /// store widens it. <see cref="Assignment"/> is null for this shape.
+        /// </summary>
+        public ForEachControlBinding(string hiddenName, VariableDeclarationNode declaration)
+        {
+            HiddenName = hiddenName;
+            Declaration = declaration;
+        }
+
+        /// <summary>#184: the synthesized <c>Dim s As String = __foreach_N</c>; null for #168's
+        /// reuse shape.</summary>
+        public VariableDeclarationNode Declaration { get; }
+
+        /// <summary>The statement the body begins with — <see cref="Assignment"/> or
+        /// <see cref="Declaration"/>, whichever this loop has.</summary>
+        public StatementNode Prologue => (StatementNode)Assignment ?? Declaration;
+
+        /// <summary>
         /// The element variable the loop really iterates, <c>__foreach_N</c> — the
         /// <c>__with</c> / <c>__lambda_N</c> convention, and not a temp spelling
         /// (<c>IsTempDestination</c>). Unique per analyzer, so nested loops never share one.
@@ -5902,9 +5922,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// An operand converts to an operator parameter: the ordinary rule, or — for a class the
         /// ordinary rule cannot see through yet (see <see cref="DeclaringClassesOf"/>) — the
         /// parameter's class is one of the operand's declared bases.
+        ///
+        /// <para>#184: NOT through the Char → String widening. The binding records only the
+        /// operator's class and symbol, so the IR call has no parameter type to convert the Char
+        /// to, and a char passed for a string parameter does not build (C# CS1503) — the operand
+        /// stays unfitted, as before #184.</para>
         /// </summary>
         private bool OperandFits(TypeInfo parameter, TypeInfo operand) =>
             parameter != null && operand != null
+            && !TypeInfo.IsCharToStringWidening(operand, parameter)
             && (parameter.IsAssignableFrom(operand)
                 || (parameter.Kind == TypeKind.Class
                     && DeclaringClassesOf(operand).Contains(parameter.Name, StringComparer.OrdinalIgnoreCase)));
@@ -8016,9 +8042,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     node.SetterParameter.Accept(this);
 
-                    // Validate setter parameter type matches property type
+                    // Validate setter parameter type matches property type. #184: a Char `value` on
+                    // a String property stays refused, as VB refuses any type but the property's
+                    // own (BC31064) — the Char → String widening is for values, not this.
                     var paramType = GetNodeType(node.SetterParameter);
-                    if (paramType != null && !propertyType.IsAssignableFrom(paramType))
+                    if (paramType != null && (!propertyType.IsAssignableFrom(paramType)
+                                              || TypeInfo.IsCharToStringWidening(paramType, propertyType)))
                     {
                         Error($"Setter parameter type '{paramType}' does not match property type '{propertyType}'",
                               node.SetterParameter.Line, node.SetterParameter.Column);
@@ -9940,8 +9969,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // elementType was replaced with the constructed element type.
             }
 
-            // Set the node type to the element type (used by IRBuilder)
-            SetNodeType(node, elementType);
+            // #184: `For Each s As String In "ab"` (or over a Char()) — the elements are Chars and
+            // the loop variable is a String, VB's Char → String widening. No backend's foreach
+            // converts a char to a string (C# CS0030), so the loop iterates a hidden Char and the
+            // body begins with `Dim s As String = hidden` (below), whose store converts it.
+            var widensCharElement = node.VariableType != null && elementType != null
+                && collectionType != null && collectionType.NetHandleTypeFullName == null
+                && TypeInfo.IsCharToStringWidening(
+                    collectionType.Kind == TypeKind.Array ? collectionType.ElementType
+                        : IsStringForEachCollection(collectionType) ? _typeManager.CharType : null,
+                    elementType);
+
+            // Set the node type to the element type (used by IRBuilder) — the type the loop
+            // ITERATES, which for a widened element is the Char, not the declared String.
+            SetNodeType(node, widensCharElement ? _typeManager.CharType : elementType);
 
             // Task #168: `For Each x In coll` with NO `As` clause names an EXISTING variable when
             // there is one, and REUSES it (VB) — see ForEachControlBinding. Asked BEFORE the loop
@@ -9977,6 +10018,27 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
                 _forEachControlBindings[node] = new ForEachControlBinding(hiddenName, assignment);
                 controlSymbol = reused;
+            }
+            else if (widensCharElement)
+            {
+                // #184: the #168 shape with a DECLARATION in place of the assignment — the hidden
+                // variable holds the Char, and `Dim s As String = hidden` declares the loop's own
+                // `s`, analyzed exactly as a written Dim (so IRBuilder's store coercion converts).
+                var hiddenName = $"__foreach_{_forEachHiddenVariableCounter++}";
+                var hiddenSymbol = new Symbol(hiddenName, SymbolKind.Variable, _typeManager.CharType, node.Line, node.Column);
+                _currentScope.Define(hiddenSymbol);
+                _synthesizedSymbols.Add(hiddenSymbol);   // #169: no NameBinding (ADR-0013 D5)
+
+                var declaration = new VariableDeclarationNode(node.Line, node.Column)
+                {
+                    Name = node.Variable,
+                    Type = node.VariableType,
+                    Initializer = new IdentifierExpressionNode(node.Line, node.Column) { Name = hiddenName },
+                };
+                declaration.Accept(this);
+
+                _forEachControlBindings[node] = new ForEachControlBinding(hiddenName, declaration);
+                controlSymbol = GetNodeSymbol(declaration);
             }
             else
             {
@@ -12434,7 +12496,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             continue;   // `Take(Nothing)`, `obj.M(Nothing)` (#173)
                         }
 
-                        if (argType != null && paramType != null && !paramType.IsAssignableFrom(argType))
+                        // #184: a Char into a ByRef String stays refused — the value would be copied
+                        // BACK String → Char, a narrowing (VB's BC32029 under Option Strict On), and
+                        // a ByRef argument is passed as the variable itself, never a converted copy.
+                        if (argType != null && paramType != null
+                            && (!paramType.IsAssignableFrom(argType)
+                                || (i < calleeSymbol.Parameters.Count && calleeSymbol.Parameters[i].IsByRef
+                                    && TypeInfo.IsCharToStringWidening(argType, paramType))))
                         {
                             Error($"Argument {i + 1}: cannot convert from '{argType}' to '{paramType}'" +
                                   WithDelegateValueHint(argType, paramType),
