@@ -1198,7 +1198,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var genericParams = "";
             if (irClass.GenericParameters != null && irClass.GenericParameters.Count > 0)
             {
-                genericParams = "<" + string.Join(", ", irClass.GenericParameters) + ">";
+                genericParams = "<" + string.Join(", ", irClass.GenericParameters.Select(EscapeKeyword)) + ">";
             }
 
             var abstractMod = irClass.IsAbstract ? "abstract " : "";
@@ -1547,7 +1547,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var genericParams = "";
             if (method.GenericParameters != null && method.GenericParameters.Count > 0)
             {
-                genericParams = "<" + string.Join(", ", method.GenericParameters) + ">";
+                genericParams = "<" + string.Join(", ", method.GenericParameters.Select(EscapeKeyword)) + ">";
             }
 
             // Generate parameter list
@@ -1792,7 +1792,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var genericParams = "";
             if (function.GenericParameters != null && function.GenericParameters.Count > 0)
             {
-                genericParams = "<" + string.Join(", ", function.GenericParameters) + ">";
+                genericParams = "<" + string.Join(", ", function.GenericParameters.Select(EscapeKeyword)) + ">";
             }
 
             // Generate parameters, with 'this' modifier for extension methods
@@ -5525,7 +5525,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                 if (constraints.Count > 0)
                 {
-                    clauses.Add($"where {param.Name} : {string.Join(", ", constraints)}");
+                    clauses.Add($"where {EscapeKeyword(param.Name)} : {string.Join(", ", constraints)}");
                 }
             }
 
@@ -5594,7 +5594,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return type.IsNullable ? $"{result}?" : result;
             }
 
-            return type.IsNullable ? $"{type.Name}?" : type.Name;
+            var plainName = EscapeTypeName(type.Name);
+            return type.IsNullable ? $"{plainName}?" : plainName;
         }
 
         /// <summary>
@@ -5838,25 +5839,62 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (result.Length > 0 && char.IsDigit(result[0]))
                 result = "_" + result;
 
-            if (IsCSharpKeyword(result))
-                result = "@" + result;
+            result = EscapeKeyword(result);
 
             return result.Length > 0 ? result : "_unnamed";
         }
 
-        private bool IsCSharpKeyword(string name)
+        /// <summary>
+        /// Every RESERVED C# keyword (#182). A BasicLang name that is one of them — VB allows
+        /// <c>out</c>, <c>ref</c>, <c>params</c>, <c>lock</c>, <c>checked</c>, <c>base</c>, <c>int</c>
+        /// and many more as names — is emitted verbatim-escaped (<c>@out</c>) by
+        /// <see cref="SanitizeName"/>, the one place every user identifier passes through.
+        ///
+        /// <para>⛔ The list was a 33-word subset, so a local or parameter named <c>out</c> was
+        /// emitted bare: CS1001 on this backend alone. Contextual keywords (<c>var</c>,
+        /// <c>value</c>, <c>nameof</c>, <c>dynamic</c>, <c>record</c>, …) are deliberately absent:
+        /// measured, they compile as plain names in every position this backend prints one, and
+        /// <c>value</c> must stay the setter's implicit parameter.</para>
+        ///
+        /// <para>Matched case-insensitively, as it always has been: <c>@Out</c> is the same C#
+        /// identifier as <c>Out</c>, so the extra escape is harmless.</para>
+        /// </summary>
+        private static readonly HashSet<string> CSharpReservedKeywords = new(StringComparer.Ordinal)
         {
-            var keywords = new HashSet<string>
-            {
-                "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
-                "char", "class", "const", "continue", "default", "do", "double",
-                "else", "false", "finally", "for", "foreach", "goto", "if", "int",
-                "null", "object", "return", "string", "switch", "this", "true",
-                "try", "void", "while"
-            };
+            "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
+            "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else",
+            "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for",
+            "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock",
+            "long", "namespace", "new", "null", "object", "operator", "out", "override", "params",
+            "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed",
+            "short", "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw",
+            "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using",
+            "virtual", "void", "volatile", "while",
+            "__arglist", "__makeref", "__reftype", "__refvalue"
+        };
 
-            return keywords.Contains((name ?? "").ToLowerInvariant());
-        }
+        private static bool IsCSharpKeyword(string name) => CSharpReservedKeywords.Contains((name ?? "").ToLowerInvariant());
+
+        /// <summary>
+        /// THE keyword rule (#182): a reserved C# keyword used as a name, prefixed with the verbatim
+        /// <c>@</c>. <see cref="SanitizeName"/> applies it to every identifier; the few places that
+        /// print a name WITHOUT sanitizing it — a TYPE (<see cref="EscapeTypeName"/>) and a generic
+        /// type parameter list — apply it here, so a class or type parameter named <c>lock</c> is
+        /// spelled <c>@lock</c> at its declaration and at every use alike.
+        /// </summary>
+        private static string EscapeKeyword(string identifier) =>
+            IsCSharpKeyword(identifier) ? "@" + identifier : identifier;
+
+        /// <summary>
+        /// A type name <see cref="MapType"/> prints as-is — a user class or structure, a generic type
+        /// parameter, a .NET type — with each dotted segment that is a keyword escaped. A built-in
+        /// type never gets here (the front end spells it <c>Integer</c>, <c>Single</c>, … and
+        /// <c>_typeMap</c> answers first), so a type named <c>float</c> or <c>int</c> is a USER type
+        /// and must be <c>@float</c>, matching its <c>class @float</c> declaration — measured: a bare
+        /// <c>float</c> there is the built-in and the program does not compile.
+        /// </summary>
+        private static string EscapeTypeName(string typeName) =>
+            string.IsNullOrEmpty(typeName) ? typeName : string.Join(".", typeName.Split('.').Select(EscapeKeyword));
 
         private string EscapeString(string str)
         {
