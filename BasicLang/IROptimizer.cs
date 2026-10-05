@@ -928,9 +928,13 @@ namespace BasicLang.Compiler.IR.Optimization
                 // `MyBase.Bump()` is a call like any other (ADR-0006 D1 (c)): MEASURED before
                 // this arm, a base method that writes a field the caller reads bare printed `3,3`
                 // for `13,3` on C++, JavaScript and MSIL (`a = K + q : MyBase.Bump() :
-                // l(0) = K + q`). The node records no ByRef flags, and C++ does pass a ByRef
-                // argument by reference (`MyBase.SetIt(p)` MEASURED stale on C++), so every
-                // VARIABLE argument is treated as written (see NameVariableArguments).
+                // l(0) = K + q`). C++ does pass a ByRef argument by reference (`MyBase.SetIt(p)`
+                // MEASURED stale on C++), so every VARIABLE argument is treated as written (see
+                // NameVariableArguments). ⚠ Since #265 the node DOES carry ByRefArguments, so
+                // NameByRefArguments would be exact; this arm keeps the superset deliberately —
+                // narrowing it is an optimizer change of its own, with its own pin
+                // (KillVocabularyExtensionsTests builds a flagless base call and expects its
+                // variable argument named).
                 case IRBaseMethodCall baseCall:
                     isCall = true;
                     Definition(baseCall);

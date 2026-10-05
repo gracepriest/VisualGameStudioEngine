@@ -4090,8 +4090,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRBaseMethodCall baseCall:
                     {
+                        // `ref` here too (#265): `Console.WriteLine(MyBase.Bump(q))` inlines the
+                        // call, and without it csc refuses CS1620. ⚠ The IRInstanceMethodCall arm
+                        // above still writes none — the same CS1620 for `WriteLine(b.Bump(q))`,
+                        // measured; a separate defect left for its own task.
                         var methodName = SanitizeName(baseCall.MethodName);
-                        var argExprs = baseCall.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        var argExprs = baseCall.Arguments.Select((a, i) =>
+                            WithRefModifier(EmitExpression(a, stack, false), baseCall.ByRefArguments, i)).ToArray();
                         var args = string.Join(", ", argExprs);
                         return $"base.{methodName}({args})";
                     }
@@ -4948,21 +4953,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             WriteLine($"{type} {newObj.Name} = new {type}({args});");
         }
 
+        /// <summary>
+        /// A ByRef parameter needs `ref` at the call site too, not only on the declaration —
+        /// without it csc rejects the call outright (CS1620). Shared by the instance call and the
+        /// base call (#265), which carry the same <c>ByRefArguments</c> list.
+        /// </summary>
+        private static string WithRefModifier(string expression, List<bool> byRefFlags, int index) =>
+            byRefFlags != null && index < byRefFlags.Count && byRefFlags[index] ? $"ref {expression}" : expression;
+
         public void Visit(IRInstanceMethodCall methodCall)
         {
             var obj = EmitExpression(methodCall.Object);
             var methodName = SanitizeName(methodCall.MethodName);
             var generics = FormatGenericArgs(methodCall.GenericArguments);
-            // A ByRef parameter needs `ref` at the call site too, not only on the declaration —
-            // without it csc rejects the call outright (CS1620).
             var args = string.Join(", ", methodCall.Arguments.Select((arg, i) =>
-            {
-                var expr = EmitExpression(arg);
-                bool isByRef = methodCall.ByRefArguments != null
-                               && i < methodCall.ByRefArguments.Count
-                               && methodCall.ByRefArguments[i];
-                return isByRef ? $"ref {expr}" : expr;
-            }));
+                WithRefModifier(EmitExpression(arg), methodCall.ByRefArguments, i)));
 
             // Emit as statement (no assignment) if:
             // - Type is null or Void
@@ -4998,7 +5003,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         public void Visit(IRBaseMethodCall baseCall)
         {
             var methodName = SanitizeName(baseCall.MethodName);
-            var args = string.Join(", ", baseCall.Arguments.Select(EmitExpression));
+            var args = string.Join(", ", baseCall.Arguments.Select((arg, i) =>
+                WithRefModifier(EmitExpression(arg), baseCall.ByRefArguments, i)));
             var invocation = $"base.{methodName}({args})";
             var hasReturn = baseCall.Type != null && !baseCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 

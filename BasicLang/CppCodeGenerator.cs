@@ -5662,7 +5662,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         public override void Visit(IRBaseMethodCall baseCall)
         {
             var methodName = SanitizeName(baseCall.MethodName);
-            var args = string.Join(", ", baseCall.Arguments.Select(a => GetValueName(a)));
+            var argList = baseCall.Arguments.Select(a => GetValueName(a)).ToList();
+
+            // The instance call's two ByRef adjustments (InstanceCallExpression), from the same
+            // flags (#265): bind to the caller's real storage for an aliasable argument, and give
+            // a non-lvalue one a named local, braced around the statement below.
+            AliasByRefLValueArguments(baseCall.ByRefArguments, baseCall.Arguments, argList);
+            var byRefTemps = MaterializeByRefArguments(baseCall.ByRefArguments, baseCall.Arguments,
+                                                       argList, calleeParameters: null);
+            var args = string.Join(", ", argList);
 
             // Find the current class from the module to get base class name
             string baseClassName = "Base";
@@ -5682,15 +5690,21 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
 
             // Generate base class method call
-            if (baseCall.Type == null || baseCall.Type.Name == "Void")
+            var statement = baseCall.Type == null || baseCall.Type.Name == "Void"
+                ? $"{baseClassName}::{methodName}({args});"
+                : $"{GetValueName(baseCall)} = {baseClassName}::{methodName}({args});";
+
+            if (byRefTemps.Count == 0)
             {
-                WriteLine($"{baseClassName}::{methodName}({args});");
+                WriteLine(statement);
+                return;
             }
-            else
-            {
-                var result = GetValueName(baseCall);
-                WriteLine($"{result} = {baseClassName}::{methodName}({args});");
-            }
+            WriteLine("{");
+            Indent();
+            foreach (var decl in byRefTemps) WriteLine(decl);
+            WriteLine(statement);
+            Unindent();
+            WriteLine("}");
         }
 
         public override void Visit(IRFieldAccess fieldAccess)

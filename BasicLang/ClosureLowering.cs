@@ -770,6 +770,7 @@ namespace BasicLang.Compiler.IR
                             break;
                         case IRBaseMethodCall bc:
                             bc.Arguments = new List<IRValue>(bc.Arguments);
+                            bc.ByRefArguments = new List<bool>(bc.ByRefArguments);
                             break;
                         case IRNewObject no:
                             no.Arguments = new List<IRValue>(no.Arguments);
@@ -2427,6 +2428,13 @@ namespace BasicLang.Compiler.IR
                             mc.MethodName);
                         break;
                     }
+                    // #265: a base call carries ByRef flags like an instance call, from the same
+                    // IRBuilder helper. (In a lambda it never gets here — refused above.)
+                    case IRBaseMethodCall bc:
+                        CheckByRef(bc.Arguments,
+                            i => i < bc.ByRefArguments.Count && bc.ByRefArguments[i],
+                            "MyBase." + bc.MethodName);
+                        break;
                     case IRSwitch sw:
                         foreach (var name in PatternBindings(sw.PatternCases))
                             if (IsStorageBinding(Resolve(ctx, block, name)))

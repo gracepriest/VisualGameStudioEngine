@@ -3564,8 +3564,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private static CollectionKind CollectionKindOf(TypeInfo type) =>
             CollectionKindOf(type?.Name);
 
-        private string BaseCall(IRBaseMethodCall b) =>
-            $"super.{SanitizeName(b.MethodName)}({string.Join(", ", b.Arguments.ConvertAll(Expr))})";
+        /// <summary>
+        /// ByRef is re-checked here as in <see cref="InstanceCall"/>: IRBaseMethodCall carries its
+        /// own ByRefArguments list (#265). A BasicLang ByRef declaration is refused first by
+        /// BL7002's declaration walk, so this is defence in depth, never the first line.
+        /// </summary>
+        private string BaseCall(IRBaseMethodCall b)
+        {
+            if (b.ByRefArguments != null && b.ByRefArguments.Contains(true))
+                throw JsCapabilityChecker.ByRefArgumentRejection("MyBase." + b.MethodName);
+
+            return $"super.{SanitizeName(b.MethodName)}({string.Join(", ", b.Arguments.ConvertAll(Expr))})";
+        }
 
         private void EmitValueOrStatement(IRValue value, string expression)
         {
