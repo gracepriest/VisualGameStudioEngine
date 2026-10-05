@@ -1211,15 +1211,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // would evaluate side effects twice and, worse, silently drop an optimizer
                 // rewrite that re-pointed the node.
                 case IRBinaryOp b:
-                    return Bound(b) ? SanitizeName(b.Name) : BinaryExprInline(b);
+                    return Bound(b) ? BoundRef(b) : BinaryExprInline(b);
                 case IRCompare c2:
-                    return Bound(c2) ? SanitizeName(c2.Name) : CompareExprInline(c2);
+                    return Bound(c2) ? BoundRef(c2) : CompareExprInline(c2);
                 case IRIdentityCompare identity:
-                    return Bound(identity) ? SanitizeName(identity.Name) : IdentityText(identity, ExprInline);
+                    return Bound(identity) ? BoundRef(identity) : IdentityText(identity, ExprInline);
                 case IRUnaryOp u:
-                    return Bound(u) ? SanitizeName(u.Name) : UnaryText(u, ExprInline(u.Operand));
+                    return Bound(u) ? BoundRef(u) : UnaryText(u, ExprInline(u.Operand));
                 case IRCall call:
-                    return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
+                    return Bound(call) ? BoundRef(call) : CallExpr(call);
 
                 // ⛔ A gep is a POINTER, and it is rendered INLINE as an L-value rather than
                 // bound to a temp. Materialising it as a value (`const t1 = a[0];`) makes a
@@ -1259,22 +1259,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return Bound(fa) ? SanitizeName(fa.Name) : FieldAccess(fa);
 
                 case IRNewObject n:
-                    return Bound(n) ? SanitizeName(n.Name) : NewObject(n);
+                    return Bound(n) ? BoundRef(n) : NewObject(n);
 
                 case IRInstanceMethodCall mc:
-                    return Bound(mc) ? SanitizeName(mc.Name) : InstanceCall(mc);
+                    return Bound(mc) ? BoundRef(mc) : InstanceCall(mc);
 
                 case IRIndexerAccess ix:
                     return Bound(ix) ? SanitizeName(ix.Name) : IndexerAccess(ix);
 
                 case IRAwait aw:
-                    return Bound(aw) ? SanitizeName(aw.Name) : AwaitExpr(aw);
+                    return Bound(aw) ? BoundRef(aw) : AwaitExpr(aw);
 
                 // The ONLY non-virtual dispatch in the language. Everything else is
                 // prototype dispatch, which is virtual by default and already matches
                 // VB's Overridable/Overrides.
                 case IRBaseMethodCall bc:
-                    return Bound(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
+                    return Bound(bc) ? BoundRef(bc) : BaseCall(bc);
 
                 // The inline-renderer twin of Visit(IRCast) — see TryNumericCast for what each
                 // numeric shape renders as and why narrowing is not a no-op here.
@@ -1308,7 +1308,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // shape to buy nothing. Size > 0 is therefore the exact condition for "stores
                 // were suppressed", not an approximation of it.
                 case IRArrayAlloc alloc:
-                    if (Bound(alloc)) return SanitizeName(alloc.Name);
+                    if (Bound(alloc)) return BoundRef(alloc);
                     if (alloc.Size == 0) return ArrayAlloc(alloc);
                     // A guard's allocation carries its elements (IRArrayAlloc.InlineElements): a
                     // JS array literal is exactly the value. An allocation without them still
@@ -2263,6 +2263,35 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void Bind(IRValue value, string expression) =>
             Bind(value?.Name, expression, allowMember: value?.NamedAfterVariable == true);
 
+        /// <summary>
+        /// Whether <see cref="Bind(string, string, bool)"/> writes <paramref name="name"/> to the
+        /// CLASS MEMBER (<c>this.K</c> / <c>Owner.K</c>) rather than to a local, a global or a
+        /// fresh <c>const</c>. A local or parameter of the same name shadows the member.
+        /// </summary>
+        private bool BindsToMember(string name, bool allowMember) =>
+            allowMember && !_declaredNames.Contains(name) && _memberNames.Contains(name);
+
+        /// <summary>
+        /// How a later READ names a value bound through <see cref="Bind(IRValue, string)"/>: the
+        /// same target the binding WROTE, so a read and a write cannot disagree.
+        ///
+        /// <para>⛔ Without this, a value renamed after a FIELD was written as <c>this.K = …</c>
+        /// and read back as a bare <c>K</c> — a ReferenceError, because a class member body is not
+        /// a scope that holds the field. The read is reachable whenever an optimizer pass forwards
+        /// the value instead of re-reading the field: CSE merging the second <c>p + q</c> of
+        /// <c>K = p + q</c> / <c>Dim a = (p + q) * 2</c> into the first (#143, probe Q3n). C# and
+        /// C++ were right throughout — a bare <c>K</c> IS the field there.</para>
+        ///
+        /// <para>⚠ Only for the <see cref="Expr"/> arms whose visitor binds through the VALUE
+        /// overload. A field access, an indexer and a cast bind through the NAME overload, which
+        /// never takes the member arm, so their bare read already agrees with their write.</para>
+        /// </summary>
+        private string BoundRef(IRValue value)
+        {
+            var js = SanitizeName(value.Name);
+            return BindsToMember(value.Name, value.NamedAfterVariable) ? MemberReference(value.Name, js) : js;
+        }
+
         private void Bind(string name, string expression, bool allowMember)
         {
             if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
@@ -2275,7 +2304,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
             // would declare a fresh local and the member would never change — the method
             // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
-            if (allowMember && _memberNames.Contains(name))
+            if (BindsToMember(name, allowMember))
             { Line($"{MemberReference(name, js)} = {expression};"); return; }
 
             // A module-level Dim — assign.
