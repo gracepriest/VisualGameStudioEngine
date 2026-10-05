@@ -1297,18 +1297,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // Generate pure virtual method declarations
             foreach (var method in irInterface.Methods)
             {
-                var returnType = MapType(method.ReturnType);
-                var methodName = SanitizeName(method.Name);
-                // Prefer the fully-resolved Type (carries generic arguments, e.g.
-                // std::shared_ptr<BasicLang::Dictionary<std::string, int32_t>>) when present;
-                // fall back to the bare TypeName string.
-                // A ByRef parameter must carry its `&` HERE too, not only on the implementing
-                // class method: the two signatures have to match exactly or the override does
-                // not override, the class stays abstract, and the emitted C++ fails to compile.
-                var paramList = string.Join(", ", method.Parameters.Select(p =>
-                    $"{(p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName))}{(p.IsByRef ? "&" : "")} {SanitizeName(p.Name)}"));
-
-                WriteLine($"virtual {returnType} {methodName}({paramList}) = 0;");
+                WriteLine($"virtual {InterfaceMethodDeclarator(method)} = 0;");
             }
 
             // Generate property getter/setter declarations. The signature comes from the SAME
@@ -1326,6 +1315,41 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             Unindent();
             WriteLine("};");
         }
+
+        /// <summary>
+        /// An interface method's declarator, <c>int32_t Area(int32_t w, int32_t h)</c>: the ONE
+        /// spelling of it, wrapped as <c>virtual … = 0;</c> by the interface and as
+        /// <c>… override</c> by a forwarder for an inherited implementation
+        /// (<see cref="GenerateInheritedMethodForwarder"/>) — the same rule
+        /// <see cref="PropertyAccessorSignature"/> applies to accessors (ADR-0004 D1).
+        ///
+        /// <para>Prefer the fully-resolved Type (carries generic arguments, e.g.
+        /// std::shared_ptr&lt;BasicLang::Dictionary&lt;std::string, int32_t&gt;&gt;) when present;
+        /// fall back to the bare TypeName string. A ByRef parameter must carry its <c>&amp;</c>
+        /// HERE too, not only on the implementing class method: the two signatures have to match
+        /// exactly or the override does not override, the class stays abstract, and the emitted
+        /// C++ fails to compile.</para>
+        /// </summary>
+        private string InterfaceMethodDeclarator(IRInterfaceMethod method)
+        {
+            var returnType = MapType(method.ReturnType);
+            var methodName = SanitizeName(method.Name);
+            var paramList = string.Join(", ", method.Parameters.Select(p =>
+                $"{InterfaceParameterType(p)} {SanitizeName(p.Name)}"));
+
+            return $"{returnType} {methodName}({paramList})";
+        }
+
+        private string InterfaceParameterType(IRParameter p) =>
+            $"{(p.Type != null ? MapType(p.Type) : MapTypeName(p.TypeName))}{(p.IsByRef ? "&" : "")}";
+
+        /// <summary>
+        /// What C++ overrides by: the method's name and its parameter types — NOT the parameter
+        /// names, which two interfaces declaring the same method may spell differently, and one
+        /// forwarder overrides both (a second would be a redefinition).
+        /// </summary>
+        private string InterfaceMethodOverrideKey(IRInterfaceMethod method) =>
+            $"{SanitizeName(method.Name)}({string.Join(", ", method.Parameters.Select(InterfaceParameterType))})";
 
         private void GenerateStaticMemberInitializations(IRClass irClass)
         {
@@ -1548,6 +1572,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             foreach (var method in irClass.Methods)
             {
                 GenerateMethod(irClass, method);
+            }
+
+            // Interface methods this class takes on through its own Implements list but inherits
+            // the implementation of — see GenerateInheritedMethodForwarder. One forwarder per C++
+            // signature: two interfaces declaring the same method are both overridden by it.
+            var forwarded = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var inherited in InterfaceImplementationLookup.InheritedInterfaceMethods(_module, irClass))
+            {
+                if (forwarded.Add(InterfaceMethodOverrideKey(inherited.InterfaceMethod)))
+                    GenerateInheritedMethodForwarder(irClass, inherited);
             }
 
             Unindent();
@@ -1984,6 +2018,36 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine(inherited.Getter
                 ? $"{signature} override {{ return {target}(); }}"
                 : $"{signature} override {{ {target}(value); }}");
+        }
+
+        /// <summary>
+        /// A forwarding override for an interface METHOD whose implementation this class
+        /// INHERITS: <c>Rect : BaseShape, IShape</c> with <c>Area</c> declared only on
+        /// <c>BaseShape</c> (#131) — the method twin of
+        /// <see cref="GenerateInheritedAccessorForwarder"/>, for the same reason: the inherited
+        /// member overrides nothing in the unrelated interface base, so the class stays abstract,
+        /// and a call to <c>Area</c> through the class is ambiguous between the two bases.
+        ///
+        /// <para>The declarator is the INTERFACE's (<see cref="InterfaceMethodDeclarator"/>), so it
+        /// overrides the pure virtual by construction. When the inherited method is Overridable
+        /// this forwarder overrides it too, so it only runs when no further-derived class
+        /// overrides it — and then the base's body is the right one to call.</para>
+        ///
+        /// <para>⛔ THE CALL IS QUALIFIED BY THE DECLARING CLASS, not by the direct base as the
+        /// accessor forwarder's is. A method is matched by signature, and C++ name lookup from the
+        /// direct base stops at the NEAREST same-named method whatever its parameters: with
+        /// <c>Area(w As Integer)</c> on the grandparent and <c>Area(w As Long)</c> on the parent,
+        /// <c>MidShape::Area(w)</c> silently called the Long one and printed 300 for 6.</para>
+        /// </summary>
+        private void GenerateInheritedMethodForwarder(IRClass irClass, InterfaceImplementationLookup.InheritedMethod inherited)
+        {
+            var slot = inherited.InterfaceMethod;
+            var target = $"{SanitizeName(inherited.DeclaringClass.Name)}::{SanitizeName(inherited.Method.Name)}";
+            var arguments = string.Join(", ", slot.Parameters.Select(p => SanitizeName(p.Name)));
+            var call = $"{target}({arguments})";
+            var returnsValue = MapType(slot.ReturnType) != "void";
+
+            WriteLine($"{InterfaceMethodDeclarator(slot)} override {{ {(returnsValue ? "return " : "")}{call}; }}");
         }
 
         private void GenerateProperty(IRClass irClass, IRProperty prop)
