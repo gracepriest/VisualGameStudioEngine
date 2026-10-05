@@ -3014,7 +3014,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// peeled first iteration.</para>
         ///
         /// <para>A condition that is ONE block — a compare, a call, <c>Not</c>, <c>And</c>/<c>Or</c> —
-        /// keeps <c>while (cond)</c>, byte for byte. A counted <c>For</c> is not this shape and keeps
+        /// keeps <c>while (cond)</c>, byte for byte, unless the block also stores (#141, a <c>++</c>
+        /// or <c>--</c> in the condition — <see cref="WritesStorage"/>): its statements must re-run
+        /// on every test too. A counted <c>For</c> is not this shape and keeps
         /// its emission: its <c>To</c> bound sits in its condition block, and an <c>If()</c> there is
         /// computed once before the loop, as VB evaluates the bound.</para>
         ///
@@ -3030,11 +3032,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 || !(name.StartsWith("while", StringComparison.Ordinal) || name.StartsWith("do", StringComparison.Ordinal)))
                 return false;
 
-            // A condition with no control flow ends in the loop's own branch: `while (cond)`.
+            // A condition with no control flow ends in the loop's own branch: `while (cond)` —
+            // unless that one block also WRITES (#141: `Do While j-- > 0` stores `j` and the
+            // `__inc` carrier), which `while (cond)` would write once, above the loop, and never
+            // again: the loop tested a stale carrier forever. Re-entered like the condition above.
             if (block.Instructions.LastOrDefault() is not IRConditionalBranch first
-                || first.TrueTarget == null || first.FalseTarget == null
-                || IsLoopHeader(first.TrueTarget, first.FalseTarget, out _, out _, out _, out _, out _))
+                || first.TrueTarget == null || first.FalseTarget == null)
                 return false;
+            if (IsLoopHeader(first.TrueTarget, first.FalseTarget, out var ownBody, out _, out _, out _, out _))
+            {
+                if (ownBody == null || !block.Instructions.Any(WritesStorage))
+                    return false;
+                body = ownBody;
+                return true;
+            }
 
             var prefix = name.Substring(0, name.Length - ".cond".Length);
             var loopBody = _currentFunction?.Blocks.FirstOrDefault(b => b.Name == prefix + ".body");
@@ -3052,6 +3063,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             body = loopBody;
             return true;
         }
+
+        /// <summary>#141 — an instruction that stores into a variable, a member, an element or an
+        /// indexer: what a one-block loop condition may not hold if it is to be written
+        /// <c>while (cond)</c> (see <see cref="OpensReentrantLoop"/>).</summary>
+        private static bool WritesStorage(IRInstruction instruction) =>
+            instruction is IRAssignment or IRStore or IRFieldStore or IRIndexerStore
+            || instruction is IRValue { NamedAfterVariable: true };
 
         /// <param name="exitTest">#256: null for <c>while (condition) {</c>. Otherwise the loop's
         /// <c>while (true) {</c> and its condition are already written (<see cref="OpensReentrantLoop"/>)

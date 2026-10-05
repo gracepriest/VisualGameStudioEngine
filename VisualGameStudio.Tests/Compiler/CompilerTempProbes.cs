@@ -264,8 +264,11 @@ internal static class TempProbes
 
     internal const int R7ForLlvmExitCode = 135;
 
-    /// <summary>`(++a) * 0`: `++` WRITES its operand, so the unary is never removable. No VB
-    /// equivalent (VB has no `++`), and every backend already misprints it: an IR-level probe only.</summary>
+    /// <summary>`(++a) * 0`: `++` WRITES its operand, so the write must survive the multiply that discards the
+    /// value. No VB equivalent (VB has no `++`): an IR-level probe only. Since #141 IRBuilder lowers it to an add
+    /// of 1 and a STORE into `a` (what `a += 1` is) — no <c>IRUnaryOp</c> Inc is built any more — so it is the
+    /// store that must survive (<c>DeadCodeRemovalOnRealIrTests.R9_TheIncrementSurvives_…</c>). Before #141 the
+    /// unary was the node that had to survive, and every backend misprinted it.</summary>
     internal const string R9Source = """
         Sub Show(n As Integer)
             Console.WriteLine(CStr(n))

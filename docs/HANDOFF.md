@@ -105,6 +105,28 @@ Slice 6 — multi-select:
 
 ---
 
+## 🧪 NEWEST — 2026-10-05: #129 TESTED — MSIL compiles and runs Decimal (MSILBackend only)
+
+- **Tests** (19 cases): `MsilDecimalExecutionTests` (Integration) — 14 `[TestCase]` rows of 51 vbc-answered probes (`S/t129/probes`), each through the real CLI plain AND `--optimize`, plus one Release `.blproj` (`CompileProjectFiles`) test; `MsilDecimalIlShapeTests` (fast, no ilasm, 4 cases): one `valuetype [mscorlib]System.Decimal`, `op_Addition`/`op_LessThan`/`Convert.ToInt32` not `add`/`clt`/`conv.i4`, a literal rebuilt from its exact bits (the 5-arg ctor for `1.5`).
+- **Gates (Linux):** fast subset 0 failed / 11,173 passed / 94 skipped; integration `Msil` 1,179 / `Decimal` 109 / the fixture 19, 0 failed. The full suite was NOT run.
+- **Mutants** (fix + one change): typespec spelling 17 killed, opcodes instead of operator calls 11, literal via Double 3, `CInt` truncating 4, `ceq` for compare 7 — each killed by the RUNNING rows, not only the IL text. Control passes 19.
+- **Not tested, listed in the fixture header:** `d /= x` (IRBuilder types `/=` Double; MSIL refuses), literal scale (`1.50` prints 1.50, vbc 1.5; the lexer has no `D` suffix), the front-end refusals (no `CDec`, `^`, Decimal with Double/Single). Every probe is scale-independent.
+- **Follow-ups (not MSIL):** C# prints 3.75 for `7.5 \ 2` and `return null;` after a Try in a Decimal Function is CS0037; C++ fails `\` on Decimal and `Decimal + Long`; on MSIL a method on an Integer/Double receiver still `callvirt`s the raw value.
+- **Windows owes** the MSIL runs through the Windows `ilasm`; `[mscorlib]System.Decimal` is measured here only on .NET 8 under the CoreCLR `ilasm`.
+
+---
+
+## ⚡ NEWEST — 2026-10-05: #141 DONE, `++` / `--` write their operand on every backend (fix `19fed595`)
+
+- **The bug:** BasicLang's own `++`/`--` (VB has neither) reached the backends as an `IRUnaryOp` Inc/Dec over the operand's VALUE. Measured on master, no cell ran right: a statement `x++` was DROPPED everywhere; C++ incremented the temp; JS and MSIL refused it; C# wrote `t = ++x`, so `y = x++` got the NEW value.
+- **The fix:** `IRBuilder.BuildIncrementDecrement` lowers it ONCE to what `x += 1` is (read, add 1, coerce, `EmitStoreToTarget`); a used value goes through a carrier local `__inc{n}` (postfix = the value read BEFORE the store, prefix = the stored value). Locals, fields, `Me.`, module members, elements, ByRef parameters and properties take it. A With block's `.P++`, a literal, a call result, a When guard and a module-scope initializer keep the old `IRUnaryOp`.
+- ⛔ **C# needed one more change:** a one-block While/Do condition that STORES (`Do While j-- > 0`) was `while (cond)` with its stores hoisted above the loop, so it HUNG. `CSharpBackend.OpensReentrantLoop` + `WritesStorage` give it the #256 `while (true) { …; if (!c) break; }` shape.
+- **Tests:** `IncrementDecrementExecutionTests` (15 `[TestCase]` cells: values, targets, ByRef, loops x C#/C++/JS/MSIL, each through the CLI, `--optimize` and `CompileProjectFiles`; C# hang-safe; in `JsExecutionTierRosterTests`, 106) and `IncrementDecrementLoweringTests` (3 fast text tests). The expected values are C's, worked by hand: VB has no `++`, so there is no vbc oracle. ⚠ `DeadCodeRemovalOnRealIrTests.R9_…` now asserts the STORE survives (no `IRUnaryOp` Inc is built for a local); the hand-built `IRUnaryOp` Inc is still `DeadCodeRemovalLicenceTests`' (M9).
+- **Mutants:** M1 postfix yields the new value: 17 of 18 kill (all but the statement test); M2 `--` adds: 18 of 18; M3 C# hoists the condition: the fast loop-shape test and the `loops`/C# cell (`hung`).
+- **Known gaps, NO test written** (pinning one would pin a defect): JS ByRef (BL7002), Long/ULong (BL7003); MSIL Decimal (`m += 1` fails the same way); `With` (`.P++` stays on the old path; With is broken everywhere); `5++` is accepted; `a(f()) += 1` and `a(f())++` evaluate `f` twice.
+
+---
+
 ## ⚡ 2026-10-05: property grid slice 5 (EVENTS) GATED and merged to master (branch `feat/property-grid-slice5`)
 
 Slice 5 of the property grid: the Events tab. VS's lightning bolt lists the seam's events (`FormEvents.WiredOn`; a web
@@ -223,6 +245,18 @@ M1 the arm removed (a base call falls to the IRValue catch-all again) **38** sha
 - Integration, ONE fully qualified term per run, all **0 failed**: `MyBaseMethodCallStatementExecutionTests` 133 (4 m 2 s, 0 skipped), `MyBaseMethodCallStatementShapeTests` 67, `KillVocabularyExtensions` 24 (was 23: + the B2 CS1620 pin), `MsilObjectBoxingExecution` 58, `JsExecutionTierRosterTests` 5, `KillVocabularyReflectionTotality` 40 (the totality fixtures are fast; a `KillVocabularyTotality` term matches nothing), `BaseConstructorCall` 166, `InheritedMember` 36, `MeReceiverTyping` 49, `OverridableProperty` 19, `LambdaBodyEmission` 335 (9 m 38 s), `DelegateMemberInvocation` 52, `NameBindingResolutionExecution` 203, `NameBindingExecution` 36, `JavaScriptCatchDiscrimination` 20, `ClosureLowering` 100, `CppClosureRun` 43, `CppClosurePath` 75, `UserDelegateConversionExecution` 29, `CppMeAsValue` 36 (+1 skipped). ⚠ A term that matches nothing PASSES with rc 0: read the Total.
 - ⭐ The FULL suite (`dotnet test`, no filter, from a copy of the test output, run alongside the term gates): **0 failed / 15,556 passed / 348 skipped of 15,904** (1 h 41 m; the base's fast subset + Integration were 10,622 + 5,081 = 15,703 — the +201 are this ticket's 67 + 133 + 1).
 ⚠ **`BasicLang.dll` of the test output is a rebuild of `8405f802`** (md5 above); the implementer's `c500015e…` was `2957c74c` + the patch. Same size, and the C# of 62 programs x {standard, `--optimize`} is byte-identical between them; they differ by the source revision embedded in the version resource. **Only Windows can validate** the MSVC leg of every C++ cell (clang++ only here), MSIL under a Windows `ilasm`/CLR, and the child `dotnet` process of `CSharpProcessRunner` on Windows.
+
+---
+
+## 🔗 2026-10-05: #131 TESTED, C++ and MSIL forward an interface method a class inherits from its base
+
+The fix is `b86f80b8` (`InterfaceImplementationLookup.InheritedInterfaceMethods`, a C++ forwarder, an MSIL `newslot virtual final` stub; the property twin is `InheritedInterfaceAccessors`, ADR-0004 D1, which lists no coverage, so no ADR edit); the tests are the commit after it.
+**Tests (19; the owner capped it at 20):** `InheritedInterfaceMethodLookupTests` (fast, 5: one entry per slot; own method, nearest base, signature, cyclic chain), `InheritedInterfaceMethodForwardingTextTests` (fast, 5: the C++ forwarder through the standard, aggressive, project and split `App.g.h` emissions, one per C++ signature, pure virtuals byte-identical to master; the MSIL stub in whole lines, `callvirt`, none for ByRef), `InheritedInterfaceMethodForwardingCppMsilTests` (Integration, 9: m01x m06y m08x m14x m17x m24x m25x m26x on C++ and MSIL through the CLI, `--optimize` and `CompileProjectFiles`, plus m03x's MSIL TypeLoadException pinned). **The oracle is vbc's output for each row's CONTROL** (the class declares the method itself): vbc rejects every inherited shape, BC30149. No C#/JS cell (right before and after, byte-identical); no roster change. Probes: `….Probes.cs` (16 programs; m27x, m28x are new).
+**Mutants** (fix + one change, run against the 19; control 0 fail): M1 no loop 15, M2 no MSIL stub 8, M6 `call` for `callvirt` 2 (the stub test, m08x), M10 parameter types not compared 7 (m26x), M12 C++ call qualified by the direct base 4 (m24x, m26x). Fixture headers name the rest (M3-M5, M7-M9, M11).
+**Gates** (Linux, clang++ 18/ilasm, no MSVC): fast subset (`TestCategory!=Integration`) **0 failed / 11,016 passed / 94 skipped of 11,110** (the base's was 11,005 + 94 + the `TerminalServiceTests` cancellation race, which passed this run); Integration, one fully qualified term per run, all **0 failed**: the three new fixtures (9 + 5 + 5) and the implementer's 30 terms (857 passed, 1 skipped). Test DLL md5 `ce347c317145bf42e59761ba44e46e4c`; `BasicLang.dll` `4dc703af4fd95b8b18a039daffc59268` is a rebuild of `0cea858a` (148 bytes from the implementer's `cf9cc068`, header and version resource).
+**Follow-ups, none moved by #131** (F1 is pinned in the fixture): F1 MSIL declares an interface ByRef parameter without `&` (m03x; even the class's own `m03c` fails to load); F2 the MSIL PROPERTY stub uses `call`, so g13 prints `base|base`; F3 the analyzer refuses `Dim s As IShape = r` when only r's base lists IShape; F4 a member-level `Implements I.M` is dropped (m15a/b); F5 C#/JS reject a case-mismatched implementation (m16c); F6 shadowing in a further-derived class on C++/JS (m22, N1); F7 C++: a class that re-lists its base's interface has two bases (m10r); F8 C++ MustOverride is not virtual, MSIL MustInherit is not abstract (m23x); F9 JS has no overloads across inheritance (m06y, m26x); F10 #132: no diagnostic for m15b, m18s, m19m, G3, N2.
+⛔ **NUnit 4.0.1 records a failed `Assert.That` even when the exception is caught**: a pin of a program meant to fail cannot go through `TempExec.Emit`, `BclE2E.CompileRun` or `CSharpProcessRunner.RunExpectingSuccess`. ⚠ The front end has no overloads at all (two same-named methods in a class are "already defined"; `r.Area(4)` binds the NEAREST one), so m27x puts the overloads in two bases. ⚠ `BasicLang build` writes C++ classes into `obj/gen/<Project>.g.h` (the split emission), another path from the CLI's `Generate`.
+⚠ **Windows owes** the MSVC run of every C++ cell (clang++ 18 here), MSIL under a Windows `ilasm`/CLR.
 
 ---
 
@@ -3763,9 +3797,8 @@ single new failure against the 170-name baseline.
     initialized — NullReferenceException; `Date`/`DateTime` do not resolve as a type at all on
     MSIL). `MsilValueToStringTests` pins the enum/Structure fallback's IL shape only (`box
     'Shade'`/`box 'Pt'`, verified directly against the harness before writing the assertion),
-    never a run. **#129** (Decimal cannot be declared as an MSIL local at all — `MSILBackend`'s
-    type-spec sanitizes `valuetype [System.Runtime]System.Decimal` into an undefined class name;
-    every use fails to assemble, mixing or `&` or not).
+    never a run. **#129** — DONE (fix commit `3799f3dd`): MSIL declares and runs Decimal
+    (`MsilDecimalExecutionTests`; the section at the top of this file).
 - ⭐ **Newest — #189 DONE (fix commit 381b95ff).** A `Nothing` String in `&`/`Console.Write`/
   `WriteLine` (JavaScript, C#); a `Catch` variable captured by a lambda (C++). What remained of
   #189 after #185 closed its C++ `Case Is Nothing` rows (see that entry's correction above).

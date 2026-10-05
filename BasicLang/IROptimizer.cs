@@ -969,6 +969,12 @@ namespace BasicLang.Compiler.IR.Optimization
                 // the C# backend emits `t = ++x`, so `x` changes. (C++ increments the RESULT
                 // instead and JavaScript and MSIL refuse the operator — backend matters, not what
                 // the node means.) Every other unary operator is a pure definition.
+                // ⚠ #141: IRBuilder no longer builds this node for a local, a field, an element, a
+                // ByRef parameter, a module member or a property — `++`/`--` there lowers to an add
+                // of 1 and a STORE (what `x += 1` is), so the write is an IRAssignment/IRStore/
+                // IRFieldStore and this arm never sees it. It still applies to the nodes that keep
+                // the old IRUnaryOp (a With block's `.P++`, a literal or call-result operand, a When
+                // guard, a module-scope initializer) and to hand-built IR, so it STAYS.
                 case IRUnaryOp unary:
                     Definition(unary);
                     if (unary.Operation is UnaryOpKind.Inc or UnaryOpKind.Dec)

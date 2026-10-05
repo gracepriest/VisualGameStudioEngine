@@ -507,12 +507,15 @@ End Sub");
     //    on C# (also pre-existing, non-Decimal-specific).
     //  * `.ToString()` never `CStr(nativeValue)` — Task 10's conversion gate
     //    correctly rejects the intrinsic form on the five non-Decimal natives.
-    //  * The plan's Decimal bullet lists `++`; it is deliberately NOT covered.
-    //    `n++` is silently DROPPED on BOTH backends — pre-existing and
-    //    backend-agnostic, so not a P1 concern (chip task_810dc83e): on a plain
-    //    Integer `n = 5 : n++` prints 5 rather than 6, and on a Decimal it
-    //    increments an unrelated generator temp. Pinning it here would pin the
-    //    BUG. `d += 1` is the correct substitute and IS covered.
+    //  * The plan's Decimal bullet lists `++`; it is deliberately NOT covered
+    //    HERE. When this battery was written `n++` was silently DROPPED on BOTH
+    //    backends (chip task_810dc83e): on a plain Integer `n = 5 : n++` printed
+    //    5 rather than 6, and on a Decimal it incremented an unrelated generator
+    //    temp. ⭐ FIXED in #141: `++`/`--` now lower to what `n += 1` lowers to
+    //    (an add of 1 and a store), on every backend, and are covered by
+    //    IncrementDecrementExecutionTests (Integer, Short, Byte, Double, fields,
+    //    elements, ByRef, loop conditions). A Decimal `++` is not in this table
+    //    either: it is the same lowering as `d += 1`, which IS covered.
     // ==================================================================
 
     /// <summary>

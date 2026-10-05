@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.IR;
+using BasicLang.Compiler.SemanticAnalysis;
 
 namespace BasicLang.Compiler.CodeGen
 {
     /// <summary>
-    /// Which interfaces a class implements, and which interface ACCESSORS its properties fill —
-    /// one set of answers shared by every backend that has to know.
+    /// Which interfaces a class implements, which interface ACCESSORS its properties fill, and
+    /// which interface members it leaves to an inherited property or method — one set of answers
+    /// shared by every backend that has to know.
     ///
     /// <para>⛔ AN IMPLEMENTING ACCESSOR IS NOT AN ORDINARY METHOD on either native-ish backend.
     /// On C++ it must carry EXACTLY the interface's signature or it does not override, the class
@@ -130,6 +132,137 @@ namespace BasicLang.Compiler.CodeGen
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// An interface METHOD that <see cref="Class"/> must implement but does not declare: the
+        /// method that fills it, <see cref="Method"/>, is inherited from
+        /// <see cref="DeclaringClass"/>.
+        /// </summary>
+        public sealed class InheritedMethod
+        {
+            public IRClass Class { get; init; }
+            public IRInterface Interface { get; init; }
+            public IRInterfaceMethod InterfaceMethod { get; init; }
+            public IRClass DeclaringClass { get; init; }
+            public IRMethod Method { get; init; }
+        }
+
+        /// <summary>
+        /// The method twin of <see cref="InheritedInterfaceAccessors"/>: every interface method
+        /// <paramref name="irClass"/> takes on through its OWN <c>Implements</c> list but leaves
+        /// to an INHERITED method — <c>Class Rect : Inherits BaseShape : Implements IShape</c>
+        /// where only <c>BaseShape</c> declares <c>Area</c> (#131).
+        ///
+        /// <para>⛔ THE SAME TWO FAILURES AS THE ACCESSORS, for the same reason. On C++
+        /// <c>BaseShape::Area</c> and <c>IShape::Area</c> sit in unrelated bases, so <c>Rect</c>
+        /// stays abstract (and a call through <c>Rect</c> is ambiguous between the two); on MSIL
+        /// <c>BaseShape::Area</c> is not virtual and <c>Rect</c> fails to load with
+        /// TypeLoadException. C# and JavaScript need nothing: an inherited member satisfying an
+        /// interface is their own semantics.</para>
+        ///
+        /// <para>One entry per interface SLOT: two interfaces that both declare <c>Name()</c> are
+        /// two entries naming the same inherited method. MSIL needs a stub per slot; C++ needs
+        /// one forwarder per C++ signature, since one C++ function overrides every same-signature
+        /// pure virtual in every base.</para>
+        ///
+        /// <para>Unlike a property, a method is matched by SIGNATURE as well as name
+        /// (case-insensitively), because a name can be shared: a class may declare its own
+        /// <c>Area()</c> and still inherit the <c>Area(scale)</c> its interface asks for, so a
+        /// test by name alone would leave that slot empty. A method the class declares itself
+        /// with the slot's signature fills it and is never listed. The NEAREST base declaring a
+        /// matching method wins, even past a nearer base whose same-named method has other
+        /// parameters; a Shared one yields nothing (the class stays as broken as it was).</para>
+        /// </summary>
+        public static IEnumerable<InheritedMethod> InheritedInterfaceMethods(IRModule module, IRClass irClass)
+        {
+            if (irClass == null) yield break;
+
+            foreach (var iface in ImplementedInterfaces(module, irClass))
+            {
+                foreach (var im in iface.Methods ?? new List<IRInterfaceMethod>())
+                {
+                    if (im?.Name == null) continue;
+                    if (irClass.Methods.Any(m => FillsSlot(m, im))) continue;
+
+                    var (owner, inherited) = FindInheritedMethod(module, irClass, im);
+                    if (inherited == null || inherited.IsStatic) continue;
+
+                    yield return new InheritedMethod
+                    {
+                        Class = irClass,
+                        Interface = iface,
+                        InterfaceMethod = im,
+                        DeclaringClass = owner,
+                        Method = inherited
+                    };
+                }
+            }
+        }
+
+        /// <summary>
+        /// True when <paramref name="method"/> has <paramref name="slot"/>'s name
+        /// (case-insensitively) and signature: the same number of parameters, each of the same
+        /// type and passing (ByRef or not), and the same return type. Optional and ParamArray are
+        /// not part of a signature. A generic method never matches: the IR carries no type
+        /// parameters for an interface method, so its signature could not be compared.
+        /// </summary>
+        private static bool FillsSlot(IRMethod method, IRInterfaceMethod slot)
+        {
+            if (method?.Name == null || !string.Equals(method.Name, slot.Name, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (method.GenericParameters != null && method.GenericParameters.Count > 0) return false;
+
+            var parameters = method.Implementation?.Parameters ?? new List<IRVariable>();
+            var slotParameters = slot.Parameters ?? new List<IRParameter>();
+            if (parameters.Count != slotParameters.Count) return false;
+            if (!SameReturnType(method.ReturnType, slot.ReturnType)) return false;
+
+            for (var i = 0; i < parameters.Count; i++)
+            {
+                var declared = slotParameters[i];
+                var actual = parameters[i];
+                if (declared == null || actual == null || declared.IsByRef != actual.IsByRef) return false;
+                var same = declared.Type != null
+                    ? SameType(declared.Type, actual.Type)
+                    : string.Equals(declared.TypeName, actual.Type?.Name, StringComparison.OrdinalIgnoreCase);
+                if (!same) return false;
+            }
+            return true;
+        }
+
+        private static bool SameReturnType(TypeInfo a, TypeInfo b)
+        {
+            static bool IsVoid(TypeInfo t) =>
+                t == null || t.Kind == TypeKind.Void || string.Equals(t.Name, "Void", StringComparison.OrdinalIgnoreCase);
+            return IsVoid(a) || IsVoid(b) ? IsVoid(a) && IsVoid(b) : SameType(a, b);
+        }
+
+        private static bool SameType(TypeInfo a, TypeInfo b)
+        {
+            if (a == null || b == null) return a == null && b == null;
+            if (!string.Equals(a.Name, b.Name, StringComparison.OrdinalIgnoreCase)) return false;
+            if (a.ArrayRank != b.ArrayRank || a.IsPointer != b.IsPointer) return false;
+            if ((a.ElementType != null || b.ElementType != null) && !SameType(a.ElementType, b.ElementType)) return false;
+
+            var aArgs = a.GenericArguments ?? new List<TypeInfo>();
+            var bArgs = b.GenericArguments ?? new List<TypeInfo>();
+            if (aArgs.Count != bArgs.Count) return false;
+            for (var i = 0; i < aArgs.Count; i++)
+                if (!SameType(aArgs[i], bArgs[i])) return false;
+            return true;
+        }
+
+        private static (IRClass Owner, IRMethod Method) FindInheritedMethod(IRModule module, IRClass irClass, IRInterfaceMethod slot)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { irClass.Name ?? "" };
+            for (var current = FindClass(module, irClass.BaseClass); current != null; current = FindClass(module, current.BaseClass))
+            {
+                if (!seen.Add(current.Name ?? "")) break;
+                var method = current.Methods.FirstOrDefault(m => FillsSlot(m, slot));
+                if (method != null) return (current, method);
+            }
+            return (null, null);
         }
 
         /// <summary>

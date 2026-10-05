@@ -103,8 +103,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// A differential oracle only catches bugs that behave DIFFERENTLY on the two backends.
 /// It is structurally blind to a bug that behaves IDENTICALLY on both — and "identically
 /// wrong" is a real shape here, not a hypothetical: a statement the FRONT END silently
-/// drops (chip task_810dc83e — a bare <c>n++</c> statement is parsed and discarded)
-/// disappears from BOTH emissions, so both legs print the same wrong thing and this
+/// drops (chip task_810dc83e — a bare <c>n++</c> statement was parsed and discarded, until
+/// #141 made <c>++</c>/<c>--</c> write their operand; the example is historical, the shape
+/// is not) disappears from BOTH emissions, so both legs print the same wrong thing and this
 /// fixture passes. Green here means "the native runtime agrees with real .NET", never
 /// "the compiler is semantically correct". Bugs of that shape need the hand-written
 /// expectations in <see cref="CppBclEndToEndTests"/> and the native vector fixtures.
