@@ -17,6 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ✅ NEWEST — 2026-10-05: #144 DONE, a ByRef CONSTRUCTOR parameter writes back on every backend, and a value passed to one is copied in (VB's rule)
+
+- **The bug / fix:** `New Box(p)` left `p` unchanged on every backend (vbc writes into it): `IRBuilder` built constructor parameters without `IsByRef` and `IRNewObject` / `IRBaseConstructorCall` carried no flags. Both now carry them (`ByRefArguments`, the mirror of #142's). A literal / expression / Const / call passed ByRef (`New Box(5)`, `MyBase.New(7)`) gets VB's copy-in temp (`IRVariable.IsByRefCopyIn`, `IRBuilder.CopyInByRefArguments`): on C# the EXPRESSION `ref (new T[] { v })[0]` (a statement ran `Seed(2)` before `Seed(1)`; `: base(...)` admits none). Constructors only.
+- **Tests:** `ConstructorByRefExecutionTests` (Integration, 9: variable rows x C#/C++/MSIL, copy-in rows x all four incl. JavaScript, the BL7002 refusal, MSIL's `Me.K` refusal; in `JsExecutionTierRosterTests`, now 108) and `ConstructorByRefShapeTests` (fast, 3, the C# text + Roslyn). MOVED: `MsilByRefTests.ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys` -> `…_WritesBackToTheCaller_OnCppAndMsil` (`42/42`). Mutants: no IsByRef M1, no copy-in M2, C# temp as a statement M3 - each killed by name (fixture header).
+- **Gates (Linux):** fast subset 12,533 passed / 0 failed / 94 skipped; Integration `ConstructorByRef` + `MsilByRef` + `ByRef` + `BaseConstructorCall` + `MyBaseCallArguments` / `MyBaseMethodCallStatement` (Execution) + `KillVocabularyExtensions` + `JsExecutionTierRoster` 529 passed / 0 failed / 3 skipped (Raylib Image). Windows owes the MSIL runs through the Windows `ilasm`. The full suite was NOT run.
+- ⛔ **Follow-ups (not fixed, no test pins them):** an ORDINARY method called with a literal for a ByRef parameter (`Bump(41)`) is still CS1510 on C# / refused on MSIL (copy-in is constructor-only); JavaScript refuses a ByRef VARIABLE by design (BL7002); MSIL refuses `New Box(Me.K)` by name, as it refuses `b.Bump(Me.K)`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #151 DONE, JavaScript and MSIL read `Message` on a user `Inherits Exception` class (fix `e0afea6a`, JS + MSIL only)
 
 - **Fixed:** a bare `Message` / `Me.Message` / `e.Message` on a user Exception subclass was a JS ReferenceError and an MSIL InvalidProgramException / MissingFieldException from a green build; both now print vbc's answer (`JavaScriptBackend.MemberNames`, `MSILBackend.TryExceptionMember` + the bare arm in `EmitLoadLocal`).

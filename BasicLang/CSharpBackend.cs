@@ -1352,10 +1352,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             foreach (var arg in baseCall.Args) Walk(arg);
 
+            // #144: VB's copy-in temporary for a ByRef base parameter given a value with no storage
+            // (`MyBase.New(7)`) is rendered in place (ConstructorArgument), so its assignment is part
+            // of the expression, not a statement before `: base(...)`.
+            var copyIns = new HashSet<IRVariable>(ReferenceEqualityComparer.Instance);
+            foreach (var arg in baseCall.Args)
+                if (TryCopyIn(arg, out var copiedValue) && copyIns.Add((IRVariable)arg))
+                    Walk(copiedValue);
+
             for (var i = 0; i < at; i++)
             {
                 var inst = entry[i];
                 if (inst == null || inst is IRComment) continue;
+                if (inst is IRAssignment { Target: IRVariable copied } && copyIns.Contains(copied))
+                {
+                    _constructorPrologue.Add(inst);   // rendered in place, below
+                    continue;
+                }
                 if (inst is IRConstant or IRVariable)
                 {
                     _constructorPrologue.Add(inst);   // a value with no computation of its own
@@ -1373,7 +1386,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
             _constructorPrologue.Add(baseCall);
 
-            var rendered = string.Join(", ", baseCall.Args.Select(a => EmitExpression(a)));
+            var rendered = string.Join(", ", baseCall.Args.Select((a, i) =>
+                ConstructorArgument(a, baseCall.ByRefArguments, i, EmitExpression)));
             _currentFunction = null;
             return rendered;
         }
@@ -3656,6 +3670,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             foreach (var localVar in function.LocalVariables)
             {
+                if (TryCopyIn(localVar, out _)) continue;   // #144: rendered in place, never named
                 var perIter = _perIter.For(localVar);
                 var varName = perIter != null ? SanitizeName(perIter.Carrier) : GetValueName(localVar);
                 any = true;
@@ -4072,9 +4087,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRNewObject newObj:
                     {
-                        // Use MapType to get the full type including generic arguments
+                        // Use MapType to get the full type including generic arguments. A ByRef
+                        // constructor parameter needs `ref` at the call site (#144), as a method's does.
                         var typeName = MapType(newObj.Type);
-                        var argExprs = newObj.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        var argExprs = newObj.Arguments.Select((a, i) =>
+                            ConstructorArgument(a, newObj.ByRefArguments, i, v => EmitExpression(v, stack, false))).ToArray();
                         var args = string.Join(", ", argExprs);
                         return $"new {typeName}({args})";
                     }
@@ -4384,6 +4401,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         public void Visit(IRAssignment assignment)
         {
+            // #144: a copy-in carrier's value is rendered in place at its constructor argument.
+            if (TryCopyIn(assignment.Target, out _)) return;
+
             var value = EmitExpression(assignment.Value);
             // Use EmitExpression for target to handle module qualification for imported globals
             var target = EmitExpression(assignment.Target);
@@ -4945,9 +4965,58 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
         }
 
+        /// <summary>
+        /// A constructor argument, with <c>ref</c> where the constructor takes it ByRef (#144) —
+        /// without it csc refuses the call (CS1620) once the declaration says <c>ref</c>. Shared by
+        /// <c>New</c> (statement and inlined forms) and <c>: base(...)</c>.
+        ///
+        /// <para>VB's COPY-IN TEMPORARY (<see cref="IRVariable.IsByRefCopyIn"/>, a literal or
+        /// expression given to a ByRef parameter) is rendered IN PLACE as a one-element array —
+        /// <c>ref (new int[] { Seed(2) })[0]</c> — and its IR assignment is never a statement
+        /// (<see cref="Visit(IRAssignment)"/>), nor is it declared (<see cref="DeclareLocals"/>).
+        /// ⛔ As a statement it moved the value's evaluation AHEAD of the arguments before it:
+        /// this backend inlines a single-use call at its use, so <c>New Pair(Seed(1), Seed(2))</c>
+        /// with a ByRef second parameter printed <c>seed2</c> before <c>seed1</c> (measured). In
+        /// place it is evaluated where VB evaluates it, and its write-back lands in an array no
+        /// one reads, which is VB's semantics; it is also the only form <c>: base(...)</c>, which
+        /// runs no statement before the base constructor, can take.</para>
+        /// </summary>
+        private string ConstructorArgument(IRValue argument, IReadOnlyList<bool> byRefFlags, int index,
+                                           Func<IRValue, string> emit)
+        {
+            if (TryCopyIn(argument, out var copied))
+                return $"ref (new {MapType(argument.Type)}[] {{ {emit(copied)} }})[0]";
+            return WithRefModifier(emit(argument), byRefFlags, index);
+        }
+
+        /// <summary>Every copy-in carrier of the module and the value its one assignment gives it
+        /// (see <see cref="ConstructorArgument"/>), built once per module.</summary>
+        private Dictionary<IRVariable, IRValue> _copyIns;
+        private IRModule _copyInsModule;
+
+        /// <summary>True, with its value, when <paramref name="value"/> is a copy-in carrier
+        /// (<see cref="IRVariable.IsByRefCopyIn"/>) this backend renders in place.</summary>
+        private bool TryCopyIn(IRValue value, out IRValue copied)
+        {
+            copied = null;
+            if (value is not IRVariable { IsByRefCopyIn: true } carrier) return false;
+            if (_copyIns == null || !ReferenceEquals(_copyInsModule, _currentModule))
+            {
+                _copyIns = new Dictionary<IRVariable, IRValue>(ReferenceEqualityComparer.Instance);
+                _copyInsModule = _currentModule;
+                foreach (var function in _currentModule?.Functions ?? new List<IRFunction>())
+                    foreach (var block in function.Blocks)
+                        foreach (var inst in block.Instructions)
+                            if (inst is IRAssignment { Target: IRVariable { IsByRefCopyIn: true } target } assignment)
+                                _copyIns[target] = assignment.Value;
+            }
+            return _copyIns.TryGetValue(carrier, out copied);
+        }
+
         public void Visit(IRNewObject newObj)
         {
-            var args = string.Join(", ", newObj.Arguments.Select(EmitExpression));
+            var args = string.Join(", ", newObj.Arguments.Select((a, i) =>
+                ConstructorArgument(a, newObj.ByRefArguments, i, EmitExpression)));
             var type = MapType(newObj.Type);
             // Use the full type (including generic arguments) for the constructor
             WriteLine($"{type} {newObj.Name} = new {type}({args});");
@@ -4956,9 +5025,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <summary>
         /// A ByRef parameter needs `ref` at the call site too, not only on the declaration —
         /// without it csc rejects the call outright (CS1620). Shared by the instance call and the
-        /// base call (#265), which carry the same <c>ByRefArguments</c> list.
+        /// base call (#265), which carry the same <c>ByRefArguments</c> list, and by a constructor
+        /// argument (#144, <see cref="ConstructorArgument"/>).
         /// </summary>
-        private static string WithRefModifier(string expression, List<bool> byRefFlags, int index) =>
+        private static string WithRefModifier(string expression, IReadOnlyList<bool> byRefFlags, int index) =>
             byRefFlags != null && index < byRefFlags.Count && byRefFlags[index] ? $"ref {expression}" : expression;
 
         public void Visit(IRInstanceMethodCall methodCall)

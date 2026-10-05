@@ -915,11 +915,11 @@ namespace BasicLang.Compiler.IR.Optimization
                     Definition(methodCall);
                     NameByRefArguments(methodCall.Arguments, methodCall.ByRefArguments, ref names);
                     break;
-                // A constructor is a call. The node records no ByRef flags, so, as for a base
-                // call, every VARIABLE argument is treated as written: VB passes it by reference
-                // to a `Sub New(ByRef n)`. (Today every backend lowers such a parameter BY VALUE —
-                // measured, a separate defect — so this costs a merge and buys nothing until one
-                // does not; it is the answer the node's meaning requires.)
+                // A constructor is a call, and every VARIABLE argument is treated as written: VB
+                // passes it by reference to a `Sub New(ByRef n)`, and since #144 every backend
+                // does too. ⚠ The node now carries ByRefArguments, so NameByRefArguments would be
+                // exact; this arm keeps the superset deliberately — narrowing it is an optimizer
+                // change of its own, with its own pins.
                 case IRNewObject newObject:
                     isCall = true;
                     Definition(newObject);

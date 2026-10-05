@@ -1868,8 +1868,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             // ⚠ No special case for ZERO arguments: the loops below do nothing and the join is
             // empty, so the general path writes exactly `::.ctor()`.
+            // An ADDRESS for each argument the base constructor's declaration takes ByRef (#144).
             var baseParams = DeclaredCtorParams(baseClassName, args.Count);
-            EmitArgumentsIntoSlots(args, baseParams?.Select(p => IlTypeSpec(p?.Type)).ToList());
+            EmitCallArguments(args, baseParams, baseClassName + ".New");
 
             var paramTypes = DeclaredParamList(baseParams, args);
             WriteLine($"    call instance void {baseClass}::.ctor({paramTypes})");
@@ -7793,10 +7794,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 : IlTypeToken(newObj.ClassName);
 
             // Load arguments first, each fitted to the constructor parameter it fills (task #177)
-            // where the DECLARATION spells the signature. ⚠ By value, as this arm always loaded
-            // them — a ByRef constructor parameter is a separate gap, not this one.
+            // where the DECLARATION spells the signature — and an ADDRESS for each one the
+            // declaration takes ByRef (#144), through the one loader every call site shares, so the
+            // `&` in the signature below and the address on the stack come from the same list.
             var ctorParams = DeclaredCtorParams(newObj.ClassName, newObj.Arguments.Count);
-            EmitArgumentsIntoSlots(newObj.Arguments, ctorParams?.Select(p => IlTypeSpec(p?.Type)).ToList());
+            EmitCallArguments(newObj.Arguments, ctorParams, newObj.ClassName + ".New");
 
             // Build constructor signature with parameter types
             var paramTypes = DeclaredParamList(ctorParams, newObj.Arguments);

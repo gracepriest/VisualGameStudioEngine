@@ -694,26 +694,18 @@ public class MsilByRefTests
             """, "41");
 
     // ========================================================================================
-    // ⛔ PIN, NOT THIS FAMILY'S — a SHARED FRONT-END GAP that happens to be visible from here.
+    // A CONSTRUCTOR'S ByRef PARAMETER — written back like any other (task #144; this was a pin).
     // ========================================================================================
 
     /// <summary>
-    /// ⛔ PINNED SHARED FRONT-END GAP. A ByRef parameter on a CONSTRUCTOR loses its marker in
-    /// <c>IRBuilder.Visit(ConstructorNode)</c> (<c>BasicLang/IRBuilder.cs:1885</c>), which builds
-    /// every ctor parameter as <c>new IRVariable(param.Name, paramType) { IsParameter = true }</c>
-    /// and never copies <c>IsByRef</c> — unlike every OTHER parameter site in that file. No
-    /// backend ever sees a ByRef constructor parameter, so this is measured wrong and IDENTICAL
-    /// on MSIL and C++: both print 41 (the pre-increment value) for the caller's variable, then 42
-    /// for the field the constructor set from its own local copy. Correct would be 42 / 42.
-    /// <b>MSIL introduces no divergence of its own here</b> — it agrees with C++ before and after
-    /// this family's fix, so this pin does not belong to the ByRef family this fixture covers; it
-    /// is recorded here, at the cause, rather than silently promoted or dropped. ⚠ ONLY C++ and
-    /// MSIL are asserted — they are what the cause names and what was measured. C# and JavaScript
-    /// are deliberately NOT asserted here: nothing above claims what they do with this shape, and
-    /// guessing would risk pinning an unmeasured claim.
+    /// A ByRef parameter on a CONSTRUCTOR writes back to the caller's variable: vbc prints <c>42 / 42</c> (the caller's <c>v</c> after the constructor's <c>n = n + 1</c>, then the field
+    /// the constructor set from it). This was a PINNED SHARED FRONT-END GAP (task #144): <c>IRBuilder.Visit(ConstructorNode)</c> built every constructor parameter without <c>IsByRef</c> and
+    /// <c>IRNewObject</c> carried no ByRef flags, so no backend ever saw a ByRef constructor parameter and C++ and MSIL both printed the pre-increment <c>41 / 42</c>. The constructor's
+    /// parameters now carry <c>IsByRef</c> and the construction carries its flags; MSIL names <c>.ctor(int32&amp;)</c> from the declaration and loads <c>v</c>'s address. ConstructorByRefExecutionTests
+    /// runs the family (C#, C++, MSIL, JavaScript) through the CLI, the CLI with <c>--optimize</c> and CompileProjectFiles; this is the MSIL fixture's own leg, on the two backends it always asserted.
     /// </summary>
     [Test]
-    public void ConstructorByRefParameter_IsAPinnedSharedFrontEndGap_NotThisFamilys()
+    public void ConstructorByRefParameter_WritesBackToTheCaller_OnCppAndMsil()
     {
         const string program = """
             Class Holder
@@ -732,8 +724,8 @@ public class MsilByRefTests
             """;
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo("41\n42"), "C++");
-            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("41\n42"), "MSIL");
+            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(program))), Is.EqualTo("42\n42"), "C++");
+            Assert.That(Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("42\n42"), "MSIL");
         });
     }
 }

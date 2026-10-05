@@ -1851,8 +1851,17 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             {
                 if (userBase != null)
                 {
-                    var args = baseCall == null ? "" : string.Join(", ", baseCall.Args.Select(GetValueName));
-                    WriteLine($"{userBase}::ctor_({args});");
+                    // #144: a ByRef base parameter binds the caller's storage, or a braced copy-in
+                    // local for a non-lvalue — the same two adjustments as a `New`.
+                    var argList = baseCall == null ? new List<string>() : baseCall.Args.Select(GetValueName).ToList();
+                    var byRefTemps = new List<string>();
+                    if (baseCall != null)
+                    {
+                        AliasByRefLValueArguments(baseCall.ByRefArguments, baseCall.Args, argList);
+                        byRefTemps = MaterializeByRefArguments(baseCall.ByRefArguments, baseCall.Args, argList,
+                            calleeParameters: () => ConstructorParameters(irClass.BaseClass, baseCall.Args.Count));
+                    }
+                    WriteBracedWithByRefTemps($"{userBase}::ctor_({string.Join(", ", argList)});", byRefTemps);
                 }
                 var declared = DeclaredInstanceFields(irClass).ToHashSet();
                 foreach (var field in irClass.Fields.Where(declared.Contains))
@@ -3749,7 +3758,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// applied only to ByRef positions, the alias is what VB semantics ask for. A resolved
         /// .NET member is excluded: its "field" read is a property-getter call, not storage.</para>
         /// </summary>
-        private void AliasByRefLValueArguments(List<bool> byRefFlags, List<IRValue> arguments, List<string> args)
+        private void AliasByRefLValueArguments(IReadOnlyList<bool> byRefFlags, IReadOnlyList<IRValue> arguments, List<string> args)
         {
             if (byRefFlags == null || byRefFlags.Count == 0) return;
 
@@ -3811,7 +3820,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// reference is declared with the PARAMETER's type, and a widening/narrowing argument
         /// would otherwise fail to bind. Called at most once, and only when a temp is actually
         /// needed; null (or a null result) falls back to each argument's own type.</param>
-        private List<string> MaterializeByRefArguments(List<bool> byRefFlags, List<IRValue> arguments,
+        private List<string> MaterializeByRefArguments(IReadOnlyList<bool> byRefFlags, IReadOnlyList<IRValue> arguments,
                                                        List<string> args, Func<List<IRVariable>> calleeParameters)
         {
             var decls = new List<string>();
@@ -5054,7 +5063,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
         /// <summary>
         /// A statement gives a non-lvalue ByRef argument a braced named local
-        /// (<see cref="MaterializeByRefArguments(List{bool}, List{IRValue}, List{string}, Func{List{IRVariable}})"/>);
+        /// (<see cref="MaterializeByRefArguments(IReadOnlyList{bool}, IReadOnlyList{IRValue}, List{string}, Func{List{IRVariable}})"/>);
         /// an expression has nowhere to put one. <c>NeedsByRefTemp</c> cannot see this case: it
         /// judges an argument by how a STATEMENT names it, and there <c>n + 1</c> is a declared
         /// temp — in a guard it renders as the expression itself, and g++ refuses to bind
@@ -5488,7 +5497,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     : SanitizeName(newObj.ClassName);
             }
 
-            var args = string.Join(", ", newObj.Arguments.Select(a => GetValueName(a)));
+            // #144: the instance call's two ByRef adjustments, from the construction's own flags —
+            // bind a ByRef constructor parameter to the caller's real storage for an aliasable
+            // argument (an element, a field), and give a non-lvalue one a named local braced around
+            // the statement. BasicLang::New forwards an lvalue as an lvalue, so `int32_t& n` in
+            // ctor_ binds the caller's variable itself.
+            var argList = newObj.Arguments.Select(a => GetValueName(a)).ToList();
+            AliasByRefLValueArguments(newObj.ByRefArguments, newObj.Arguments, argList);
+            var byRefTemps = MaterializeByRefArguments(newObj.ByRefArguments, newObj.Arguments, argList,
+                calleeParameters: () => ConstructorParameters(newObj.ClassName, newObj.Arguments.Count));
+            var args = string.Join(", ", argList);
             var result = GetValueName(newObj);
             var isReferenceType = newObj.Type == null
                 || newObj.Type.Kind == TypeKind.Class
@@ -5497,12 +5515,47 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // ADR-0015 D2: a BasicLang class is created ONLY through BasicLang::New — the tag
             // constructor inside make_shared, then ctor_ once the instance owns itself. Anything
             // else that reaches here (a name that is not a class of this module) keeps make_shared.
+            string statement;
             if (isReferenceType && CppObjectModel.IsUserClass(_module, newObj.ClassName))
-                WriteLine($"{result} = BasicLang::New<{bareName}>({args});");
+                statement = $"{result} = BasicLang::New<{bareName}>({args});";
             else if (isReferenceType)
-                WriteLine($"{result} = std::make_shared<{bareName}>({args});");
+                statement = $"{result} = std::make_shared<{bareName}>({args});";
             else
-                WriteLine($"{result} = {bareName}({args});");
+                statement = $"{result} = {bareName}({args});";
+
+            WriteBracedWithByRefTemps(statement, byRefTemps);
+        }
+
+        /// <summary>
+        /// Writes <paramref name="statement"/>, preceded by the copy-in declarations a non-lvalue
+        /// ByRef argument needs (<see cref="MaterializeByRefArguments(IReadOnlyList{bool}, IReadOnlyList{IRValue}, List{string}, Func{List{IRVariable}})"/>)
+        /// and braced with them, so goto-lowered control flow cannot jump across an initialization.
+        /// With none it is the bare statement, exactly as before.
+        /// </summary>
+        private void WriteBracedWithByRefTemps(string statement, List<string> byRefTemps)
+        {
+            if (byRefTemps.Count == 0)
+            {
+                WriteLine(statement);
+                return;
+            }
+            WriteLine("{");
+            Indent();
+            foreach (var decl in byRefTemps) WriteLine(decl);
+            WriteLine(statement);
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>The parameters of <paramref name="className"/>'s constructor taking
+        /// <paramref name="argCount"/> arguments, or null — the type a ByRef copy-in temp is
+        /// declared with (MSIL's <c>DeclaredCtorParams</c> rule: arity picks the overload).</summary>
+        private List<IRVariable> ConstructorParameters(string className, int argCount)
+        {
+            if (className == null || _module?.Classes == null
+                || !_module.Classes.TryGetValue(className, out var cls)) return null;
+            return cls?.Constructors?.FirstOrDefault(c => c?.Implementation?.Parameters != null
+                && c.Implementation.Parameters.Count == argCount)?.Implementation.Parameters;
         }
 
         public override void Visit(IRInstanceMethodCall methodCall)

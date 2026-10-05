@@ -774,6 +774,7 @@ namespace BasicLang.Compiler.IR
                             break;
                         case IRNewObject no:
                             no.Arguments = new List<IRValue>(no.Arguments);
+                            no.ByRefArguments = new List<bool>(no.ByRefArguments);
                             break;
                         case IRGetElementPtr gep:
                             gep.Indices = new List<IRValue>(gep.Indices);
@@ -2434,6 +2435,17 @@ namespace BasicLang.Compiler.IR
                         CheckByRef(bc.Arguments,
                             i => i < bc.ByRefArguments.Count && bc.ByRefArguments[i],
                             "MyBase." + bc.MethodName);
+                        break;
+                    // #144: a construction and MyBase.New carry ByRef flags like an instance call.
+                    case IRNewObject no:
+                        CheckByRef(no.Arguments,
+                            i => i < no.ByRefArguments.Count && no.ByRefArguments[i],
+                            no.ClassName + ".New");
+                        break;
+                    case IRBaseConstructorCall baseCtor:
+                        CheckByRef(baseCtor.Args,
+                            i => i < baseCtor.ByRefArguments.Count && baseCtor.ByRefArguments[i],
+                            "MyBase.New");
                         break;
                     case IRSwitch sw:
                         foreach (var name in PatternBindings(sw.PatternCases))
