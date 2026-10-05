@@ -17,6 +17,14 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## 🧪 NEWEST — 2026-10-05: #152 TESTED — a Private member declared below its bare use resolves inside its own class (fix `ba975e1f`, `SemanticAnalyzer` pass 1 only)
+- **Fixed:** `PopulateClassMemberSignatures` left Private members out of `TypeInfo.Members`, so a Private property/auto-property/field named bare ABOVE its declaration was "Undefined identifier" (ADR-0007 P17), a Private Const typed Object, and a Private Sub/Function call typed Object (C++ no compile, MSIL MissingMethodException). It records them now; `TypeInfo.ResolveMember` still refuses a derived class naming its base's Private member.
+- **Tests (12):** `PrivateMemberDeclaredBelowExecutionTests` (Integration, 9 rows P17/P17a+o/P17f+c/P17s/P17sh/derived above+below/derived own same-named P/lambda/two files, each on C#, C++, JS and MSIL through CLI, `-O` and `CompileProjectFiles` against vbc; in `JsExecutionTierRosterTests`, now pinned at 110) + `PrivateMemberDeclaredBelowRefusalTests` (fast, 3 front-end refusals R2/R2u/R2uf). Mutants M1 (Private property recorded Public) R2u, M2 (fields/consts skipped) P17f_P17c+P17sh+P17m, M3 (subs/functions skipped) P17s on C++/MSIL: all killed.
+- **Gates (Linux):** fast subset 0 failed / 12,641 passed / 94 skipped; integration, one run: the new fixtures + `DeclarationOrder` + `ClassMember` + `Access` + `BarePropertyLowering` + `JsExecutionTierRosterTests` 355 passed, 0 failed, 0 skipped. The full suite was NOT run. Windows owes the MSIL/MSVC legs. ⚠ The disk here fills (shared, ~0.7 GB free): a run hit `No space left on device` mid-link and had to be repeated.
+- **Gaps (not fixed, in the fixture header):** a Private member used from OUTSIDE its class is not refused in either order (#273); `Me.<Const>` CS0176 on C# / wrong on JS, a Shared-property increment wrong on C++, and a below-declared member shadowing a file-scope global binds the global on C#/JS (#274); a derived class naming its base's Private FUNCTION bare is not refused (global flattening); C++ drops `R = Q * 10` after `Q = P + 1` on plain auto-properties (all-Public, master too; not filed).
+
+---
+
 ## ✅ NEWEST — 2026-10-05: #144 DONE, a ByRef CONSTRUCTOR parameter writes back on every backend, and a value passed to one is copied in (VB's rule)
 
 - **The bug / fix:** `New Box(p)` left `p` unchanged on every backend (vbc writes into it): `IRBuilder` built constructor parameters without `IsByRef` and `IRNewObject` / `IRBaseConstructorCall` carried no flags. Both now carry them (`ByRefArguments`, the mirror of #142's). A literal / expression / Const / call passed ByRef (`New Box(5)`, `MyBase.New(7)`) gets VB's copy-in temp (`IRVariable.IsByRefCopyIn`, `IRBuilder.CopyInByRefArguments`): on C# the EXPRESSION `ref (new T[] { v })[0]` (a statement ran `Seed(2)` before `Seed(1)`; `: base(...)` admits none). Constructors only.

@@ -714,13 +714,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// (<see cref="RegisterClassMemberSignatures"/>). They want the same member SHAPES from the
         /// same nodes, so this is one method with two axes rather than two methods that drift.</para>
         ///
-        /// <para>⚠ PRIVATE members are left out for both, and an in-file "include them" variant was
-        /// tried and DROPPED as inert. Nothing consults them: pass 2 overwrites every entry it
-        /// visits, and a private member resolves through the CLASS SCOPE rather than through
-        /// <c>Members</c> — measured, <c>Return other._n</c> on a second instance of the class
-        /// compiles and runs the same either way. (Access is not enforced on a member read at all
-        /// here: reading <c>c._n</c> from outside compiles in BOTH declaration orders. A separate
-        /// pre-existing gap, and the reason this choice cannot tighten or loosen anything.)</para>
+        /// <para>⛔ PRIVATE members are recorded too, with their <c>Access</c> — the same set pass 2's
+        /// <see cref="Visit(ClassNode)"/> leaves in <c>Members</c>. They were once left out as
+        /// inert, and stopped being inert when <see cref="ResolveClassMember"/> began reading
+        /// <c>Members</c> for a bare name: a Private member declared BELOW the method naming it bare
+        /// was "Undefined identifier" on every backend (task #152, ADR-0007's P17), and a Private
+        /// <c>Const</c> or field fell to the permissive .NET-type arm and typed Object. Visibility
+        /// is not decided here: <see cref="TypeInfo.ResolveMember"/> already returns a Private
+        /// member only for its OWN class, so a derived class naming its base's Private member stays
+        /// refused. (Access is not enforced on a member read from OUTSIDE the class — reading
+        /// <c>c._n</c> compiles whichever order the class is declared in. A separate pre-existing
+        /// gap, unchanged here.)</para>
         ///
         /// <para>⛔ <paramref name="includeConstructors"/> is FALSE in-file, so
         /// <see cref="RegisterConstructorSignature"/> stays the single owner of <c>.ctorN</c>. Its
@@ -779,13 +783,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RecordSharedMembers(classNode, classType);
             if (classNode.Members == null || classType?.Members == null) return;
 
-            static bool Visible(AccessModifier access) => access != AccessModifier.Private;
-
             foreach (var member in classNode.Members)
             {
                 switch (member)
                 {
-                    case FunctionNode func when Visible(func.Access):
+                    case FunctionNode func:
                     {
                         var returnType = ResolveSiblingSignatureType(func.ReturnType) ?? _typeManager.ObjectType;
                         classType.Members[func.Name] = new Symbol(func.Name, SymbolKind.Function, returnType, 0, 0)
@@ -797,7 +799,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case SubroutineNode sub when Visible(sub.Access):
+                    case SubroutineNode sub:
                     {
                         classType.Members[sub.Name] = new Symbol(sub.Name, SymbolKind.Subroutine, _typeManager.VoidType, 0, 0)
                         {
@@ -820,7 +822,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case VariableDeclarationNode field when Visible(field.Access):
+                    case VariableDeclarationNode field:
                     {
                         classType.Members[field.Name] = new Symbol(field.Name, SymbolKind.Variable,
                             ResolveSiblingSignatureType(field.Type) ?? _typeManager.ObjectType, 0, 0)
@@ -830,7 +832,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case PropertyNode prop when Visible(prop.Access):
+                    case PropertyNode prop:
                     {
                         classType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property,
                             ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType, 0, 0)
@@ -850,7 +852,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstantDeclarationNode constant when Visible(constant.Access):
+                    case ConstantDeclarationNode constant:
                     {
                         classType.Members[constant.Name] = new Symbol(constant.Name, SymbolKind.Constant,
                             SignatureTypeOfConstant(constant) ?? _typeManager.ObjectType, 0, 0)
