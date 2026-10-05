@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #201 TESTED — AddressOf on the C++ by-copy FALLBACK binds a class method and declares its temp up front (`ClosureLowering.ResolveAddressOf`; `CppCodeGenerator.Closures.cs`; `git log --grep '#201'`)
+- **Tests (10 new, 2 moved):** `CppAddressOfFallbackExecutionTests` (Integration, 9 rows of vbc-answered probes, C++ only, x CLI / `--optimize` / `CompileProjectFiles`, each asserting its roots took `ByCopy`; in `NotJavaScriptExecution`, roster still 116) + 1 fast text test in `CppClosurePathTests` (a by-copy `AddressOf obj.M` DOES emit `blTarget`). MOVED: `UserDelegateConversionExecutionTests` E8 / E9e now run (`..._RunsWithVbsAnswer`); `ExpectedByCopy` unchanged. Mutants M1-M3 killed; ADR-0019's #201 follow-up updated.
+- **Gates (Linux):** fast 0 failed / 12,681 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 9, `UserDelegateConversion` 72, `CppClosure` 119 (`CppClosurePath` 76), `ClosureLowering` 100, `AddressOf` 60 (+1 skipped), `NetDelegate` 61 (+2 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): JavaScript emits a bare `AddressOf SharedMethod` inside its own class as `Shout`, not `Greeter.Shout` (ReferenceError, #285); MSIL refuses these programs (the `When` guard, the Iterator) with stated reasons.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #196 TESTED — a C++ `Array<T>` has a real null state (ADR-0011 D3(c); `CppArrayRuntime.is_nothing()`, `CppCodeGenerator.EmitNullTest`; `git log --grep '#196'`)
 - **Tests (11 new, 2 moved):** `CppArrayNothingExecutionTests` (Integration, 11 rows of vbc-answered probes, C++ only, x CLI / `--optimize` / `CompileProjectFiles`; in `NotJavaScriptExecution`, roster still 116). MOVED: the named divergence test is now `IsIsNotOperatorExecutionTests.CppStringNothingIsStillEmptiness_ButAnEmptyArrayIsNotNothing_AgreesWithDotNet` (String row still True on C++, array row False), and the `Case Is Nothing` text pin expects `(x).is_nothing()`. ADR-0011 carries a one-line amendment. Mutants M1-M3 each killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,675 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 11, `IsIsNot` 91, `Identity` 148, `Array` 324 (+2 skipped), `ReDim` 17, `WhenGuard` 70, `NothingConversion` 81, `JsExecutionTierRoster` 5. Full suite NOT run.

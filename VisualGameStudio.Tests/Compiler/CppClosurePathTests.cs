@@ -60,8 +60,93 @@ public class CppClosurePathTests
                 // (boolean form: a failing Does.Contain would print the whole translation unit, runtime and all)
                 Assert.That(text.Contains("c__Env"), Is.False, $"{program.Name}: {entry}: a by-copy root has no environment class");
                 Assert.That(text.Contains("BasicLangClosures"), Is.False, $"{program.Name}: {entry}: ... and no holder struct");
+                // (scope: none of these programs takes AddressOf of a class method — one that does DOES emit the thunk,
+                //  see TheByCopyFallback_ForwardsAnAddressOfOfAClassMethod_ThroughTheThunk_AndKeepsAModuleProcedureAFunctionPointer)
                 Assert.That(text.Contains("blTarget"), Is.False, $"{program.Name}: {entry}: ... and no forwarding thunk");
                 Assert.That(text.Contains("[="), Is.True, $"{program.Name}: {entry}: the lambdas keep the by-copy capture list ([=] or [=, ex = …])");
+            }
+        });
+    }
+
+    private const string ByCopyAddressOfAClassMethod = """
+        Delegate Sub Notify(msg As String)
+
+        Class Greeter
+            Public Prefix As String
+            Public Sub Greet(m As String)
+                Console.WriteLine(Prefix & m)
+            End Sub
+        End Class
+
+        Sub Main()
+            Dim lim As Integer = 5
+            Dim probe As Func(Of Integer) = Function() lim + 1
+            Dim v As Integer = probe()
+            Select Case v
+                Case Is > 0 When v > lim + 1
+                    Console.WriteLine("big")
+                Case Else
+                    Console.WriteLine("small")
+            End Select
+            Dim g As New Greeter()
+            g.Prefix = "hi "
+            Dim d As Notify = AddressOf g.Greet
+            d("bob")
+        End Sub
+        """;
+
+    private const string ByCopyAddressOfAModuleProcedure = """
+        Delegate Function Transform(n As Integer) As Integer
+
+        Function Pick(up As Boolean) As Transform
+            Dim lim As Integer = 5
+            Dim probe As Func(Of Integer) = Function() lim + 1
+            Dim v As Integer = probe()
+            Select Case v
+                Case Is > 0 When v > lim + 1
+                    Console.WriteLine("big")
+                Case Else
+                    Console.WriteLine("small")
+            End Select
+            If up Then Return AddressOf Inc
+            Return Function(n) n - 1
+        End Function
+
+        Function Inc(n As Integer) As Integer
+            Return n + 1
+        End Function
+
+        Sub Main()
+            Console.WriteLine(Pick(True)(10) + Pick(False)(10))
+        End Sub
+        """;
+
+    /// <summary>
+    /// ⭐ #201 — the scope of <see cref="TheFallbackSet_TakesTheByCopyPath_WithNoEnvironment_AndKeepsTheByCopyLambdas"/>'s
+    /// "no forwarding thunk" check. It holds there only because none of those programs takes <c>AddressOf</c> of a class
+    /// method. A by-copy root that does DOES emit the lowered path's forwarding closure (<c>[blTarget = g](…) { … }</c>,
+    /// the receiver held by copy) — and still has no environment class and no holder; one that takes <c>AddressOf</c> of a
+    /// MODULE procedure keeps the plain function pointer, declared as <c>decltype(&amp;Inc)</c>, with no thunk at all.
+    /// </summary>
+    [Test]
+    public void TheByCopyFallback_ForwardsAnAddressOfOfAClassMethod_ThroughTheThunk_AndKeepsAModuleProcedureAFunctionPointer()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var entry in AllEntries)
+            {
+                var method = CppClosures.Compile(ByCopyAddressOfAClassMethod, entry);
+                Assert.That(method.PathOf("Main"), Is.EqualTo(CppClosurePath.ByCopy), $"class method: {entry}");
+                var text = method.AllText;
+                Assert.That(text.Contains("[blTarget = "), Is.True, $"class method: {entry}: the receiver is held by copy in the forwarding closure");
+                Assert.That(text.Contains("blTarget->Greet("), Is.True, $"class method: {entry}: and the method is called through it");
+                Assert.That(text.Contains("c__Env"), Is.False, $"class method: {entry}: ... yet there is still no environment class");
+                Assert.That(text.Contains("BasicLangClosures"), Is.False, $"class method: {entry}: ... and no holder struct");
+
+                var module = CppClosures.Compile(ByCopyAddressOfAModuleProcedure, entry);
+                Assert.That(module.PathOf("Pick"), Is.EqualTo(CppClosurePath.ByCopy), $"module procedure: {entry}");
+                Assert.That(module.AllText.Contains("blTarget"), Is.False, $"module procedure: {entry}: a function pointer needs no thunk");
+                Assert.That(module.AllText.Contains("decltype(&Inc)"), Is.True, $"module procedure: {entry}: its temp is declared with the others");
             }
         });
     }
@@ -123,7 +208,8 @@ public class CppClosurePathTests
         "ClosureLoweringContractPrograms.AT1 [Derived.Tag]",
         "ClosureLoweringContractPrograms.TwoRoots [Refused]",
         // fixtures of the moved pins that already carried a fallback program, and the three fallback variants of
-        // E5, E8 and E9e (a read-only When guard forces the by-copy path) that pin what remains of #201
+        // E5, E8 and E9e (a read-only When guard forces the by-copy path). E8 and E9e RUN there since #201 (the
+        // roots still take this path); E5_OnTheFallback pins what remains
         "NothingStringTextExecutionTests.E12 [Main]",
         "NothingStringTextExecutionTests.E5_OnTheFallback [Main]",
         "UserDelegateConversionExecutionTests.E8_OnTheFallback [Main]",

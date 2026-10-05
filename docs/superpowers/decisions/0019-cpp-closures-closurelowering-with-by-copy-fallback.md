@@ -317,7 +317,9 @@ Other mechanism choices, within the ruling:
   `len`, `chr`), called with no arguments, crashes the compiler on C# and C++ ("Index was outside the
   bounds of the array") — pre-existing on master; JavaScript and MSIL emit.
 - A lambda that captures nothing still allocates an empty environment (on C++ as on MSIL). Performance only.
-- What remains of #201 on C++: the AddressOf shapes (an instance method; a branch that returns an AddressOf
-  result), `List(Of Action)`'s element lowering and the module-initializer lambda still fail the C++
-  compiler on the by-copy FALLBACK path, which is byte-identical to before; they run wherever the root is
-  lowered. C#'s `__lambda_0` on a `MyBase.New` lambda argument (E13) is untouched.
+- What remains of #201 on C++: the AddressOf shapes on the by-copy FALLBACK path (an instance method; a
+  branch that returns an AddressOf result) are CLOSED by #201 — the fallback now binds a class method in the
+  lowered path's own forwarding closure and declares the AddressOf temp with the other temps, and those roots
+  still take the by-copy path. `List(Of Action)`'s element lowering and the module-initializer lambda still
+  fail the C++ compiler on the fallback path, which is otherwise byte-identical to before; they run wherever
+  the root is lowered. C#'s `__lambda_0` on a `MyBase.New` lambda argument (E13) is untouched.

@@ -15,14 +15,15 @@ namespace VisualGameStudio.Tests.Compiler;
 /// verbatim from the implementer's measured <c>.exp</c> files (<c>S/t187/probes/*.exp</c>,
 /// <c>S/t187/edge*/*.exp</c>) — the VB/C# answer — never copied from MSIL.
 ///
-/// <para>Edge probes that fail on ONE backend for a reason UNRELATED to #187 are excluded from
+/// <para>Edge probes that fail on ONE backend for a reason UNRELATED to #187 were excluded from
 /// the shared four-backend runner and pinned individually against the task that owns the gap:
 /// E1 on C++ (#140 — a captured local lambda variable was captured BY COPY on this backend); E8 on
 /// C++ (#201 — <c>AddressOf</c> an INSTANCE method failed to compile) and E9e on C++ (#201 — a
 /// branch that <c>Return</c>s an <c>AddressOf</c> result on one arm failed to compile, see that
 /// pin's own comment for what changed and what did not). ⭐ Since #140 (C++ closures go through
-/// <c>ClosureLowering</c>) all three run on C++ with VB's answer; E8's and E9e's gaps remain only on the
-/// by-copy FALLBACK path, pinned as <c>..._OnTheByCopyFallback_StillFailsClang_Against201</c>. E13 USED TO be here too (a lambda
+/// <c>ClosureLowering</c>) all three run on C++ with VB's answer, and since #201 they do on the by-copy
+/// FALLBACK path too: <c>..._OnTheByCopyFallback_RunsWithVbsAnswer</c> (the rest of that family is
+/// <c>CppAddressOfFallbackExecutionTests</c>). E13 USED TO be here too (a lambda
 /// argument to <c>MyBase.New</c> had no IL lowering on MSIL and no lambda-hoisting on C#) — ADR-
 /// 0016 / #170's <c>IRBaseConstructorCall</c> closes both, so E13 now runs on ALL FOUR backends
 /// (JavaScript and C++ already did, since ADR-0015 / task #200's two-phase construction) and its
@@ -37,8 +38,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// values, a capturing lambda added to one, and <c>.Invoke</c> on a field) all failed to COMPILE
 /// on C++, because that backend called a delegate VALUE by NAME, which its own temp-renaming
 /// could point at the wrong temp entirely. #188 is now DONE: E10, J2, E5, E5b and J1 are promoted
-/// below, folded into the shared four-backend runners. E8 and E9e stay pinned against #201 — a
-/// SEPARATE gap, <c>AddressOf</c> on an instance receiver, that #188 never touched.</para>
+/// below, folded into the shared four-backend runners. E8 and E9e were left pinned against #201 — a
+/// SEPARATE gap, <c>AddressOf</c> on an instance receiver, that #188 never touched; #201 is DONE
+/// and they run on the by-copy fallback too.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -578,15 +580,17 @@ public class UserDelegateConversionExecutionTests
         });
     }
 
-    // ---- What remains of #201 on C++: the by-copy FALLBACK path -------------------------------
+    // ---- #201 on C++: AddressOf on the by-copy FALLBACK path ----------------------------------
     //
-    // A root ClosureLowering refuses and W2 admits is emitted exactly as before #140 (byte-identical), so
-    // the AddressOf shapes #201 files still fail clang THERE — they are fixed only where the root is
-    // lowered. The two programs below are E8 and E9e with a read-only Select Case 'When' guard added to the
-    // root: a D9 refusal (the guard is rendered inline, where no environment load can be placed) that W2
-    // admits because nothing writes what a lambda captures (D07b's shape), which forces the fallback. They
-    // are pinned as the fallback still failing, NAMED for the gap, so each flips to running the day #201's
-    // fallback half is closed — or disappears with the `[=]` path itself.
+    // A root ClosureLowering refuses and W2 admits is emitted by the by-copy `[=]` path, where an `AddressOf`
+    // reaches the backend as written, never as an IRDelegateCreate. Two shapes of it failed clang THERE
+    // (fixed only where the root was lowered, until #201): `AddressOf obj.M` rendered as the member read
+    // `obj->M`, and an AddressOf temp declared at its assignment, which a goto may not cross. The two programs
+    // below are E8 and E9e with a read-only Select Case 'When' guard added to the root: a D9 refusal (the
+    // guard is rendered inline, where no environment load can be placed) that W2 admits because nothing writes
+    // what a lambda captures (D07b's shape), which forces the fallback. They now compile and run, with VB's
+    // answer; the roots still take the by-copy path (CppClosurePathTests.ExpectedByCopy lists them, unchanged),
+    // so it is the fallback's EMISSION that is fixed. The other AddressOf shapes are CppAddressOfFallbackExecutionTests.
 
     private const string E8_OnTheFallback = """
         Delegate Sub Notify(msg As String)
@@ -641,29 +645,39 @@ public class UserDelegateConversionExecutionTests
         End Sub
         """;
 
+    /// <summary>
+    /// ⭐ MOVED PIN (#201). Was <c>E8_AddressOfInstanceMethod_OnTheByCopyFallback_StillFailsClang_Against201</c>: the
+    /// fallback rendered <c>AddressOf g.Greet</c> as the member read <c>g->Greet</c> ("undeclared identifier"). The
+    /// root still takes the by-copy path (asserted in every entry point); it now binds the receiver in the lowered
+    /// path's own forwarding closure, and prints vbc's answer through the CLI, <c>--optimize</c> and
+    /// <c>CompileProjectFiles</c>.
+    /// </summary>
     [Test]
-    public void E8_AddressOfInstanceMethod_OnTheByCopyFallback_StillFailsClang_Against201()
+    public void E8_AddressOfInstanceMethod_OnTheByCopyFallback_RunsWithVbsAnswer()
     {
-        var build = CppClosures.Compile(E8_OnTheFallback);
-        Assert.That(build.PathOf("Main"), Is.EqualTo(CppClosurePath.ByCopy),
-            "the guard must force the by-copy fallback — otherwise this pins nothing about #201");
-        var (compiled, output) = CppClosures.TryClang(build.Cpp);
-        Assert.That(compiled, Is.False, "#201's AddressOf-an-instance-method half: fixed only where the root is lowered");
-        Assert.That(output, Does.Contain("undeclared identifier").Or.Contain("not declared"),
-            "the failure must still be the undeclared delegate temp (#201). A DIFFERENT failure here means this pin is stale.\n" + output);
+        AssertOnTheFallbackAndRuns(E8_OnTheFallback, "Main", "small\nhi bob");
     }
 
+    /// <summary>
+    /// ⭐ MOVED PIN (#201). Was <c>E9e_ReturnAddressOfOnOneBranchArm_OnTheByCopyFallback_StillFailsClang_Against201</c>:
+    /// the AddressOf temp was declared at its assignment, so the goto of <c>If up Then Return</c> crossed its
+    /// initialization ("cannot jump from this goto statement to its label"). It is declared with the other temps now.
+    /// </summary>
     [Test]
-    public void E9e_ReturnAddressOfOnOneBranchArm_OnTheByCopyFallback_StillFailsClang_Against201()
+    public void E9e_ReturnAddressOfOnOneBranchArm_OnTheByCopyFallback_RunsWithVbsAnswer()
     {
-        var build = CppClosures.Compile(E9e_OnTheFallback);
-        Assert.That(build.PathOf("Pick"), Is.EqualTo(CppClosurePath.ByCopy),
-            "the guard must force the by-copy fallback — otherwise this pins nothing about #201");
-        var (compiled, output) = CppClosures.TryClang(build.Cpp);
-        Assert.That(compiled, Is.False, "#201's goto-crosses-initialization half: fixed only where the root is lowered");
-        Assert.That(output, Does.Contain("cannot jump from this goto statement").Or.Contain("bypasses initialization")
-                .Or.Contain("initialization of"),
-            "the failure must still be the branch-return goto-crosses-initialization C++ compile error (#201).\n" + output);
+        AssertOnTheFallbackAndRuns(E9e_OnTheFallback, "Pick", "small\nsmall\n20");
+    }
+
+    private static void AssertOnTheFallbackAndRuns(string source, string root, string expected)
+    {
+        // the guard must force the by-copy fallback — otherwise this pins nothing about #201
+        CppClosures.RootTakes(source, root, CppClosurePath.ByCopy);
+        // (not inside Assert.Multiple: a missing C++ compiler is an Assert.Ignore, which fails the test there)
+        foreach (var entry in CppClosures.RunEntries)
+            Assert.That(CppClosures.Run(source, entry), Is.EqualTo(expected), $"C++, {entry}");
+        Assert.That(CppClosures.RunViaCli(source, optimize: false), Is.EqualTo(expected), "CLI");
+        Assert.That(CppClosures.RunViaCli(source, optimize: true), Is.EqualTo(expected), "CLI --optimize");
     }
 
     // ============================================================================================
