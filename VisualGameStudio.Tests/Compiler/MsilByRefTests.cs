@@ -21,9 +21,12 @@ namespace VisualGameStudio.Tests.Compiler;
 /// CALLER's storage; writing a ByVal parameter changes only the callee's copy (and must work —
 /// see <see cref="MsilParameterWriteTests"/> again). A ByRef argument must name storage with an
 /// address — a local, a ByVal or ByRef parameter of the CALLER, an instance field, a
-/// <c>Shared</c> field, a module global, or an array element — and nothing else: a literal, an
-/// expression or a property has no address and is REFUSED at codegen rather than silently passed
-/// by value and its write-back dropped. A ByRef argument's type must match the parameter's
+/// <c>Shared</c> field, a module global, or an array element — and nothing else: a literal or an
+/// expression has no address and is REFUSED at codegen rather than silently passed by value and
+/// its write-back dropped. A PROPERTY has none either, but it never reaches the ladder as one
+/// (task #209): IRBuilder copies it into a <c>__copyout</c> local, passes that, and writes it back
+/// through the setter after the call, as VB does (<see cref="QualifiedPropertyArgument_IsCopiedInAndWrittenBack"/>,
+/// <c>PropertyByRefCopyOutExecutionTests</c>). A ByRef argument's type must match the parameter's
 /// EXACTLY, because a managed pointer cannot be coerced. A parameter shadows a same-named field or
 /// module global for the STORE exactly as it does for the load.</para>
 ///
@@ -539,6 +542,8 @@ public class MsilByRefTests
     // REFUSALS — every shape below has exactly one address-free alternative (push the value,
     // let the callee write a throwaway copy), and that alternative ASSEMBLES AND RUNS. Refusing
     // loudly is the point; message-checked via MsilHarness.Run + GenerateFailed.
+    // (The two PROPERTY tests below were refusals until task #209; they now run and print vbc's
+    // answer, and stay here beside the shapes they were pinned with.)
     // ========================================================================================
 
     [Test]
@@ -571,9 +576,14 @@ public class MsilByRefTests
             End Sub
             """, "cannot be passed by reference");
 
+    /// <summary>
+    /// A Get/Set property passed ByRef through a receiver, <c>Bump(h.X)</c>, prints <c>42</c>, vbc's answer: the getter's value goes into a <c>__copyout</c> carrier, the carrier is passed by
+    /// reference, and the setter stores it back after the call (task #209). This was a codegen REFUSAL ("an expression's value lives in a temporary") before: a property is an accessor call, not
+    /// storage, so the ladder had no address to take. The all-backend matrix, the call order and the ReadOnly rule are <c>PropertyByRefCopyOutExecutionTests</c>.
+    /// </summary>
     [Test]
-    public void QualifiedPropertyArgument_IsRefused() =>
-        RefusedByMsil("""
+    public void QualifiedPropertyArgument_IsCopiedInAndWrittenBack()
+        => Assert.That(Norm(MsilHarness.RunExpectingSuccess("""
             Sub Bump(ByRef n As Integer)
              n = n + 1
             End Sub
@@ -593,17 +603,19 @@ public class MsilByRefTests
              Bump(h.X)
              PrintLine(CStr(h.X))
             End Sub
-            """, "an expression's value lives in a temporary");
+            """)), Is.EqualTo("42"));
 
-    /// <summary>⭐ A BARE property name, from inside the declaring class. Since ADR-0007 IRBuilder
-    /// lowers a bare Get/Set property to the node its qualified form produces (an IRFieldAccess
-    /// on <c>Me</c>), so it reaches the ladder as a TEMPORARY and is refused exactly as
-    /// <see cref="QualifiedPropertyArgument_IsRefused"/> is — and, being no longer a name at all,
-    /// it cannot fall through to a same-named module global. (The ladder's own "is a PROPERTY"
-    /// arm still guards a bare plain AUTO-property, which stays a variable.)</summary>
+    /// <summary>⭐ A BARE property name, from inside the declaring class, prints <c>42</c> (vbc's answer).
+    /// Since ADR-0007 IRBuilder lowers a bare Get/Set property to the node its qualified form
+    /// produces (an IRFieldAccess on <c>Me</c>), so it is no longer a name at all — it cannot fall
+    /// through to a same-named module global — and, since task #209, it is copied in and written
+    /// back exactly as <see cref="QualifiedPropertyArgument_IsCopiedInAndWrittenBack"/> is (the bare
+    /// form's write-back is whatever <c>X = v</c> lowers to). Before #209 it reached the ladder as a
+    /// TEMPORARY and was refused. (The ladder's own "is a PROPERTY" arm is now unreachable from the
+    /// front end; see <c>BarePropertyLoweringTests</c>.)</summary>
     [Test]
-    public void BarePropertyNameArgument_IsRefused() =>
-        RefusedByMsil("""
+    public void BarePropertyNameArgument_IsCopiedInAndWrittenBack()
+        => Assert.That(Norm(MsilHarness.RunExpectingSuccess("""
             Sub Bump(ByRef n As Integer)
              n = n + 1
             End Sub
@@ -626,7 +638,7 @@ public class MsilByRefTests
              h.Go()
              PrintLine(CStr(h.X))
             End Sub
-            """, "an expression's value lives in a temporary");
+            """)), Is.EqualTo("42"));
 
     /// <summary>A managed pointer cannot be coerced, so a mismatched declared type is refused
     /// rather than routed through a widening temporary — both directions.</summary>

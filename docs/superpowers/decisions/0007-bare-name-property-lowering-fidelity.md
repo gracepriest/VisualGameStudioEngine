@@ -254,6 +254,10 @@ lands. Not added here.
   backend's build or run outcome for that program changed (C# CS0206,
   C++ compile error, JavaScript BL7002, MSIL refusal, before and after).
   The "is a PROPERTY" arm is still live for a bare plain auto-property.
+  *(Superseded by #209: a property passed `ByRef` is now copied in and
+  written back as VB does, so both tests are now
+  `…_IsCopiedInAndWrittenBack` and print 42, and the MSIL "is a PROPERTY"
+  arm is unreachable from the front end.)*
 - **Suite (Linux):** the fast subset is cell-for-cell identical to the
   base (5763 tests, 0 failed); the full suite is 7979 tests, 0 failed, 269
   skipped, with the verifier in Throw mode — so V, S′ and F are quiet

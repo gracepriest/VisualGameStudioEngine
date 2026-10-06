@@ -594,7 +594,7 @@ public class PropertyAccessDiagnosticsTests
         """);
 
     /// <summary>L2 — a ReadOnly property passed ByRef is not a WRITE (VB passes a copy and skips
-    /// the write-back; task #209 owns making every backend do that, not this diagnostic).</summary>
+    /// the write-back; task #209 made every backend do that, see <c>PropertyByRefCopyOutExecutionTests</c> — this test is only about the diagnostic).</summary>
     [Test]
     public void Legal_ReadOnlyPropertyPassedByRef() => AssertNoPropertyAccessDiagnostic("""
         Class C
