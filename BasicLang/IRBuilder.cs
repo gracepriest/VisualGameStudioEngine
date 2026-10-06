@@ -6665,8 +6665,10 @@ namespace BasicLang.Compiler.IR
                 // "no member named 'Invoke'" from clang and "t.Invoke is not a function" from
                 // node). A named receiver takes the exact path `d(args)` takes; any other
                 // receiver is invoked as a VALUE, the form `f(a)(b)` already lowers to.
+                // #202: the analyzer's own gate (IsModeledDelegate), so a Func/Action value's
+                // `.Invoke` is lowered as the call it was typed as — not only a user Delegate's.
                 if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
-                    && _semanticAnalyzer.GetNodeType(memberExpr.Object)?.DelegateSignature != null)
+                    && SemanticAnalyzer.IsModeledDelegate(_semanticAnalyzer.GetNodeType(memberExpr.Object)))
                 {
                     if (memberExpr.Object is IdentifierExpressionNode invokedName)
                     {

@@ -639,6 +639,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
+            // Pass 1b (#202): delegate types, after the class shells so a delegate's parameter or
+            // return can be a sibling class, and before the class members so a sibling class's
+            // field or method can be typed by a sibling delegate.
+            RegisterSiblingDelegateSignatures(pendingUnits);
+
             // Pass 2: class members, now that every sibling class shell exists.
             foreach (var (classNode, classType) in pendingClasses)
             {
@@ -673,6 +678,51 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     RegisterSiblingDeclarationSignature(decl, unit);
                 }
+            }
+        }
+
+        /// <summary>
+        /// #202 — a <c>Delegate</c> declared in a not-yet-compiled sibling file, visible here
+        /// exactly as a sibling CLASS is: always (a compiled sibling exports every Class-kind
+        /// symbol, and a delegate's symbol is one — <c>Compiler.CollectExportedSymbols</c>), whatever
+        /// access it was written with, first-wins under its name. Without it a delegate was visible
+        /// only when its file compiled FIRST; in the other order its name fell through to the .NET
+        /// fallback, a member-less class, and `Dim j As Joiner = Function(…) …` was "Cannot assign
+        /// value of type 'Func' to variable of type 'Joiner'".
+        ///
+        /// <para>Two sweeps, as the class shells are: every delegate TYPE first, then the
+        /// signatures, so one sibling delegate's parameter can be another (declared later in
+        /// either file). Types resolve through <see cref="ResolveSiblingSignatureType"/>, the
+        /// sibling path's own resolver; the shape is <see cref="RecordDelegateSignature"/>.</para>
+        /// </summary>
+        private void RegisterSiblingDelegateSignatures(List<CompilationUnit> pendingUnits)
+        {
+            var pendingDelegates = new List<(DelegateDeclarationNode Node, TypeInfo Type)>();
+            foreach (var unit in pendingUnits)
+            {
+                foreach (var decl in EnumerateSiblingTopLevelDeclarations(unit))
+                {
+                    if (decl is not DelegateDeclarationNode node || string.IsNullOrEmpty(node.Name)) continue;
+                    if (GlobalScope.Resolve(node.Name) != null) continue;
+
+                    var delegateType = new TypeInfo(node.Name, TypeKind.Delegate);
+                    GlobalScope.Define(new Symbol(node.Name, SymbolKind.Class, delegateType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName
+                    });
+                    pendingDelegates.Add((node, delegateType));
+                }
+            }
+
+            foreach (var (node, delegateType) in pendingDelegates)
+            {
+                var returnType = node.ReturnType == null
+                    ? _typeManager.VoidType
+                    : ResolveSiblingSignatureType(node.ReturnType) ?? _typeManager.ObjectType;
+                RecordDelegateSignature(delegateType, node, returnType,
+                    BuildSiblingSignatureParameters(node.Parameters));
             }
         }
 
@@ -7506,8 +7556,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             var returnType = ResolveTypeReference(node.ReturnType);
-            var symbol = new Symbol(node.Name, SymbolKind.Class, delegateType, node.Line, node.Column);
-            symbol.ReturnType = returnType;
+            var parameters = new List<Symbol>();
 
             // ⛔ The parameters are the DECLARATION's own, so they get a scope of their own. They
             // used to be defined in the ENCLOSING scope — the global one, for a top-level
@@ -7522,7 +7571,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     param.Accept(this);
                     if (_nodeSymbols.TryGetValue(param, out var paramSymbol))
                     {
-                        symbol.Parameters.Add(paramSymbol);
+                        parameters.Add(paramSymbol);
                     }
                 }
             }
@@ -7534,13 +7583,37 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // #187: the signature a lambda, an AddressOf and an invocation are judged against —
             // see TypeInfo.DelegateSignature and DelegateShapeOf. On the node too, for the IR
             // builder's IRDelegate, which declared its types from bare names.
-            delegateType.DelegateSignature = symbol;
+            var symbol = RecordDelegateSignature(delegateType, node, returnType, parameters);
             SetNodeSymbol(node, symbol);
 
             if (!_currentScope.Define(symbol))
             {
                 Error($"Delegate '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
+        }
+
+        /// <summary>
+        /// The symbol a <c>Delegate</c> declaration defines — <see cref="SymbolKind.Class"/>, as a
+        /// type's is — recorded as <paramref name="delegateType"/>'s signature
+        /// (<see cref="TypeInfo.DelegateSignature"/>), which is what makes the type a user delegate
+        /// to every consumer (<see cref="DelegateShapeOf"/>). <paramref name="returnType"/> is
+        /// <c>Void</c> (or null) for a <c>Delegate Sub</c>.
+        ///
+        /// <para>#202: ONE shape for the three places a delegate type is built from its declaration —
+        /// the declaring file's own visit, a not-yet-compiled sibling file's signature sweep
+        /// (<see cref="RegisterSiblingDelegateSignatures"/>) and the LSP's project collector — each
+        /// resolving the parameter and return types its own way.</para>
+        /// </summary>
+        internal static Symbol RecordDelegateSignature(TypeInfo delegateType, DelegateDeclarationNode node,
+            TypeInfo returnType, IEnumerable<Symbol> parameters)
+        {
+            var symbol = new Symbol(node.Name, SymbolKind.Class, delegateType, node.Line, node.Column)
+            {
+                ReturnType = returnType
+            };
+            symbol.Parameters.AddRange(parameters);
+            delegateType.DelegateSignature = symbol;
+            return symbol;
         }
 
         public void Visit(ExtensionMethodNode node)
@@ -8420,6 +8493,35 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         /// <summary>True for a type declared with <c>Delegate Sub</c>/<c>Delegate Function</c>.</summary>
         private static bool IsUserDelegate(TypeInfo type) => type?.DelegateSignature != null;
+
+        /// <summary>
+        /// Every delegate type this analyzer MODELS — knows the parameters and result of: a user
+        /// <c>Delegate</c> or a typed <c>Func(Of …)</c> / <c>Action(Of …)</c>
+        /// (<see cref="TypeKind.Delegate"/>), or a bare <c>Action</c>, which the type table
+        /// resolves as a member-less CLASS named Action (<see cref="IsDelegateTypeName"/>). A .NET
+        /// delegate class (<c>EventHandler</c>, <c>Predicate(Of T)</c>) is not one: neither its
+        /// parameters nor its result are known here.
+        ///
+        /// <para>#202: the gate on the <c>.Invoke</c> redirect — <c>v.Invoke(args)</c> IS
+        /// <c>v(args)</c> for exactly these — read by the analyzer and the IR builder alike, so the
+        /// call cannot be typed as one thing and lowered as another. It was
+        /// <see cref="IsUserDelegate"/>, so <c>f.Invoke(5)</c> on a <c>Func(Of Integer, Integer)</c>
+        /// typed Object (refused into an Integer) and lowered as a METHOD call that only C# has:
+        /// "no member named 'Invoke'" from clang, "f.Invoke is not a function" from node,
+        /// MissingMethodException on MSIL.</para>
+        ///
+        /// <para>⛔ The name alone is not enough: a BasicLang <c>Class Action</c> (or <c>Func</c>)
+        /// with its own <c>Function Invoke</c> is a class, and its <c>Invoke</c> a METHOD. Measured
+        /// on the first draft, which asked only the name: <c>a.Invoke()</c> on such a class went
+        /// from printing 42 to "Cannot assign value of type 'Void'". A declared class carries
+        /// <see cref="TypeInfo.DeclaredMemberNames"/>, an <c>Extern Class</c>
+        /// <see cref="TypeInfo.IsExtern"/>; the bare .NET <c>Action</c> neither.</para>
+        /// </summary>
+        internal static bool IsModeledDelegate(TypeInfo type) =>
+            type != null &&
+            (type.Kind == TypeKind.Delegate ||
+             type.Kind == TypeKind.Class && IsDelegateTypeName(type.Name)
+                 && type.DeclaredMemberNames == null && !type.IsExtern);
 
         /// <summary>
         /// ⭐ #187 — THE one mapping from a user <c>Delegate</c> to the machinery <c>Func</c>/<c>Action</c>
@@ -12301,6 +12403,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var calleeType = GetNodeType(node.Callee);
             Symbol calleeSymbol = null;
+            var invokesThroughDotInvoke = false;   // #202: `v.Invoke(args)` on a modeled delegate
 
             if (node.Callee is IdentifierExpressionNode idExpr)
             {
@@ -12324,16 +12427,21 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 calleeSymbol = GetNodeSymbol(memberExpr);
 
-                // #187: `d.Invoke(args)` on a user-delegate value IS `d(args)` — the same
-                // argument checks, the same result type — so it takes the delegate-invocation
-                // path below with the RECEIVER as the callee. The member itself resolves to
-                // nothing (a user delegate declares no members), which typed the call Object.
+                // #187: `d.Invoke(args)` on a delegate value IS `d(args)` — the same argument
+                // checks, the same result type — so it takes the delegate-invocation path below
+                // with the RECEIVER as the callee. The member itself resolves to nothing (a user
+                // delegate declares no members), which typed the call Object.
+                // #202: every delegate the analyzer models, not only a user Delegate — a
+                // `Func(Of Integer, Integer)`'s `.Invoke(5)` typed Object too (IsModeledDelegate).
+                // A bare `Action` is a CLASS to the type table, so the arm below is entered by the
+                // flag rather than by the kind.
                 if (string.Equals(memberExpr.MemberName, "Invoke", StringComparison.OrdinalIgnoreCase)
                     && GetNodeType(memberExpr.Object) is { } invokedType
-                    && IsUserDelegate(invokedType))
+                    && IsModeledDelegate(invokedType))
                 {
                     calleeType = invokedType;
                     calleeSymbol = null;
+                    invokesThroughDotInvoke = true;
                 }
             }
 
@@ -12409,7 +12517,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (invokesDelegateMember) _delegateMemberInvocations.Add(node);
 
             // Check if this is a delegate invocation: f(...) where f is a Func/Action variable
-            if (invokesDelegateMember ||
+            if (invokesDelegateMember || invokesThroughDotInvoke ||
                 calleeType != null && calleeType.Kind == TypeKind.Delegate &&
                 (calleeSymbol == null || calleeSymbol.Kind == SymbolKind.Variable ||
                  calleeSymbol.Kind == SymbolKind.Parameter))

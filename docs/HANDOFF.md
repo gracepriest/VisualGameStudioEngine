@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #202 TESTED — a user Delegate's three gaps: a file-level `Public`/`Friend` Delegate parses (Private BC31089, Protected BC31047, Shared/Async/Iterator BC30385), a sibling file's Delegate is visible in either compile order, `.Invoke` on a Func/Action is typed and lowered as a call (`SemanticAnalyzer.IsModeledDelegate`, `RegisterSiblingDelegateSignatures`; `git log --grep '#202'`)
+- **Tests (14 new, 1 moved):** `UserDelegateGapsDiagnosticsTests` (fast, 10: the parser rows, `.Invoke` typing, a user `Class Action`, M1-M4 in every compile order, the LSP collector, a dead-Action-temp text check) + `UserDelegateGapsExecutionTests` (Integration, 4: S01-S03, M1-M4 in both orders, S07-S14 on C#, C++, JS, MSIL x CLI / `-O` / `CompileProjectFiles`; JS roster now 119 = master 118 + 1). MOVED: `DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202` is now `..._IsTypedByItsTypeArguments_Task202`. Mutants MA-MH (+2 more) killed; MG survives at run time by design.
+- **Gates (Linux):** fast 0 failed / 12,703 passed / 94 skipped (one earlier run's host crashed in `FormPropertyGridRealViewTests`' headless context-menu test under load; passes alone and on rerun); Integration, one filter each, 0 failed: the fixtures 14, `UserDelegate` 89, `Delegate` 244 (+3 skipped), `NetDelegate` 61 (+2), `CrossFile` 77, `MultiFile` 15, `LSP` 470 (+11), `ModuleResolver` 8, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture headers): a Delegate nested in a Module/Class does not parse and a file-level `Private Class` is accepted (#290); S08 on MSIL (`Func(Of Double, Double)` InvalidProgramException) and S13 on JS (a bare field's `.Invoke` in its own class, #187's path) are excluded cells, pre-existing.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #217 TESTED — a lambda parameter that hides a local or parameter of its procedure is VB's BC36641 (`SemanticAnalyzer.CheckLambdaParameterHides`; ADR-0013 D2 amended; `git log --grep '#217'`)
 - **Tests (12 new, 15 moved):** `LambdaParameterHidesDiagnosticsTests` (fast, 11: vbc-answered probes p01-p23 as 9 rows, the `CompileProjectFiles` row, the LSP row) + `LambdaParameterHidesExecutionTests` (Integration, 1: a field / module-global name still runs on C#, C++, JS x CLI / `-O` / `CompileProjectFiles`; in the JS roster, now 118 = master 117 + 1). MOVED: R7 x4, E16 / K1 / K6 / K7 are now REFUSED pins (a); K9, N4b, `BoundMiss`, `LambdaParameterCase`, `NodeName`, `ReAnalysis`, R6 keep their property on a reshaped program (module global or sibling-block local) (b). Mutants M1-M3 (+ the (b) mutants) killed.
 - **Gates (Linux):** fast 0 failed / 12,692 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 16, `LambdaBoundaryDiagnostics` 82, `NameBinding` 314, `LambdaCaptureSet` 27, `ClosureLowering` 100, `Lambda` 794, `LSP` 470 (+11 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -6971,11 +6978,13 @@ single new failure against the 170-name baseline.
       with #170 below). None of these are new — the SAME shapes fail identically with a plain
       `Func`/`Action` where a matching control exists (`S/t187/edge-func*`) — #187 only exposed
       them by making the user-delegate side of these programs compile far enough to reach them.
-    - **#202** — `.Invoke` on a Func/Action value (not a user delegate) still types Object,
-      unchanged by #187: the `.Invoke` redirect is gated on `IsUserDelegate`, so
-      `Dim r As Integer = f.Invoke(5)` (f a `Func(Of Integer, Integer)`) is still refused with
-      "Cannot assign value of type 'Object' to variable of type 'Integer'". Pinned in
-      `UserDelegateConversionTests.DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202`.
+    - **#202 — now DONE, see its own entry at the top of this file.** At the time this entry was
+      written, `.Invoke` on a Func/Action value (not a user delegate) still typed Object, unchanged
+      by #187: the `.Invoke` redirect was gated on `IsUserDelegate`, so
+      `Dim r As Integer = f.Invoke(5)` (f a `Func(Of Integer, Integer)`) was refused with
+      "Cannot assign value of type 'Object' to variable of type 'Integer'". It was pinned in
+      `UserDelegateConversionTests.DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202`, now
+      `DotInvoke_OnFuncAction_IsTypedByItsTypeArguments_Task202` (a positive assertion).
     - **#188 — now DONE, see its own entry below.** At the time this entry was written, a delegate
       FIELD invoked from inside its OWN class failed unqualified on JavaScript (`ReferenceError:
       OnClick is not defined`, E10) and via `b.OnClick("b")` call syntax on MSIL
