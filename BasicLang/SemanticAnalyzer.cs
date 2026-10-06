@@ -220,6 +220,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new Dictionary<CallExpressionNode, bool>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// #204: true when <see cref="Visit(CallExpressionNode)"/> typed <paramref name="call"/> as an
+        /// element read in VB's PAREN spelling (an array element or a collection indexer), not the
+        /// explicit <c>.Item(i)</c> property. The IR builder lowers a QUALIFIED callee by this
+        /// decision (<c>b.Items(0)</c>, <c>Make().Arr(1)</c>, <c>Me.Box.Items(i)</c>), so the call is
+        /// lowered as what it was typed as: an element of the member's value, never a method call
+        /// on the receiver, and never an index into what a METHOD returns (<c>b.MakeArr(3)</c>).
+        /// </summary>
+        internal bool IsParenElementRead(CallExpressionNode call) =>
+            call != null && _elementReadCalls.TryGetValue(call, out var viaItemProperty) && !viaItemProperty;
+
+        /// <summary>
         /// #267: VB's conversion OPERATORS among the registered intrinsics (<c>CInt</c>, <c>CStr</c>, …),
         /// by symbol. In VB they are casts, not calls, so one standing alone is BC30454 as
         /// <c>CType</c> is. Filled by <see cref="RecordConversionOperators"/> on every analysis.
