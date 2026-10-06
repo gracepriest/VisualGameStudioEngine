@@ -871,7 +871,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             {
                 var returnType = MapType(method.ReturnType);
                 var methodName = SanitizeName(method.Name);
-                var paramList = string.Join(", ", method.Parameters.Select(FormatIRParameter));
+                var paramList = FormatIRParameters(method.Parameters);
 
                 if (method.HasDefaultImplementation && method.DefaultImplementation != null)
                 {
@@ -961,7 +961,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var delegateName = SanitizeName(irDelegate.Name);
             var returnType = MapType(irDelegate.ReturnType);
-            var paramList = string.Join(", ", irDelegate.Parameters.Select(FormatIRParameter));
+            var paramList = FormatIRParameters(irDelegate.Parameters);
 
             WriteLine($"public delegate {returnType} {delegateName}({paramList});");
         }
@@ -1043,9 +1043,26 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
-        /// Format a single parameter for C# output
+        /// A parameter list of a function, method or constructor, for C# output.
         /// </summary>
-        private string FormatParameter(IRVariable param, bool isFirstExtensionParam = false)
+        private string FormatParameters(IReadOnlyList<IRVariable> parameters, bool isExtension = false) =>
+            JoinParameters(parameters.Select((p, i) => SpellParameter(p, isExtension && i == 0)).ToList());
+
+        /// <summary>
+        /// A parameter list of an interface method or a delegate, for C# output.
+        /// </summary>
+        private string FormatIRParameters(IReadOnlyList<IRParameter> parameters) =>
+            JoinParameters(parameters.Select(SpellIRParameter).ToList());
+
+        /// <summary>
+        /// One parameter as C# spells it, WITHOUT its Optional default: how the default can be
+        /// written depends on the parameters after it, so <see cref="JoinParameters"/> adds it.
+        /// <see cref="TypeDefault"/> is the initializer used when an Optional has no default value.
+        /// </summary>
+        private sealed record ParameterSpelling(
+            string Declaration, string CSharpType, bool IsOptional, IRValue DefaultValue, string TypeDefault);
+
+        private ParameterSpelling SpellParameter(IRVariable param, bool isFirstExtensionParam)
         {
             var parts = new List<string>();
 
@@ -1062,29 +1079,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 parts.Add("ref");
 
             // Type and name
-            parts.Add(MapType(param.Type));
+            var csharpType = MapType(param.Type);
+            parts.Add(csharpType);
             parts.Add(GetValueName(param));
 
-            var result = string.Join(" ", parts);
-
-            // Default value for optional
-            if (param.IsOptional && param.DefaultValue != null)
-            {
-                result += " = " + FormatDefaultValue(param.DefaultValue);
-            }
-            else if (param.IsOptional)
-            {
-                // Default value based on type
-                result += " = " + GetDefaultValueLiteral(param.Type);
-            }
-
-            return result;
+            return new ParameterSpelling(string.Join(" ", parts), csharpType,
+                param.IsOptional, param.DefaultValue, GetDefaultValueLiteral(param.Type));
         }
 
-        /// <summary>
-        /// Format a single parameter from IRParameter
-        /// </summary>
-        private string FormatIRParameter(IRParameter param)
+        private ParameterSpelling SpellIRParameter(IRParameter param)
         {
             var parts = new List<string>();
 
@@ -1098,23 +1101,102 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             // Type and name. Prefer the fully-resolved Type (carries generic arguments, e.g.
             // Dictionary<string, int>) when present; fall back to the bare TypeName string.
-            parts.Add(param.Type != null ? MapType(param.Type) : MapTypeName(param.TypeName));
+            var csharpType = param.Type != null ? MapType(param.Type) : MapTypeName(param.TypeName);
+            parts.Add(csharpType);
             parts.Add(SanitizeName(param.Name));
 
-            var result = string.Join(" ", parts);
+            return new ParameterSpelling(string.Join(" ", parts), csharpType,
+                param.IsOptional, param.DefaultValue, "default");
+        }
 
-            // Default value for optional
-            if (param.IsOptional && param.DefaultValue != null)
+        /// <summary>
+        /// A parameter list with its Optional defaults: the ONE place C# spells a parameter's
+        /// default.
+        ///
+        /// <para>⛔ #216: C# allows only <c>null</c> as the default of a reference-typed parameter
+        /// other than <c>string</c> (CS1763). So <c>Optional o As Object = 5</c> emitted
+        /// <c>object o = 5</c> and the program did not compile, through the CLI, with
+        /// <c>--optimize</c> and through a <c>.blproj</c>. <c>= "x"</c>, <c>= True</c> and
+        /// <c>= 2.5</c> failed the same way, because a String into <c>object</c> is not an
+        /// identity conversion either. MSIL and JavaScript already ran these programs. Such a
+        /// parameter now carries VB's own encoding, the one vbc emits:
+        /// <c>[Optional, DefaultParameterValue(5)] object o</c>, with no initializer. This is
+        /// the same <c>.param = int32(5)</c> metadata, and csc also honours it for a call that
+        /// omits the argument.</para>
+        ///
+        /// <para>⛔ C# accepts <c>= value</c> only on a SUFFIX of the list (CS1737), and a
+        /// parameter in that encoding counts as required for the rule. With
+        /// <c>Optional n As Integer = 1, Optional o As Object = 5</c>, encoding only <c>o</c> was
+        /// still CS1737, measured. So every Optional parameter up to the LAST one that needs the
+        /// encoding takes it too (<see cref="VbOptionalEncoding"/>). The parameters after it
+        /// keep <c>= value</c>, and a list with no such parameter is unchanged.</para>
+        ///
+        /// <para>⚠ No BasicLang call depends on the text. IRBuilder fills an omitted Optional at
+        /// the CALL (#31, <c>AppendOmittedOptionalArguments</c>), so every emitted call passes
+        /// the value. The default only has to compile and to say the right value, for reflection
+        /// and for a C# caller of the assembly.</para>
+        /// </summary>
+        private string JoinParameters(IReadOnlyList<ParameterSpelling> parameters)
+        {
+            var encodeThrough = -1;
+            for (var i = 0; i < parameters.Count; i++)
+                if (parameters[i].IsOptional && parameters[i].CSharpType == "object"
+                    && parameters[i].DefaultValue is IRConstant { Value: not null })
+                    encodeThrough = i;
+
+            return string.Join(", ", parameters.Select((p, i) =>
+                !p.IsOptional ? p.Declaration
+                : i <= encodeThrough ? $"[{VbOptionalEncoding(p)}] {p.Declaration}"
+                : p.Declaration + " = " + (p.DefaultValue != null ? FormatDefaultValue(p.DefaultValue) : p.TypeDefault)));
+        }
+
+        /// <summary>
+        /// VB's metadata encoding of an Optional parameter's default:
+        /// <c>Optional, DefaultParameterValue(value)</c>, or <c>Optional, DecimalConstant(…)</c>
+        /// for a Decimal (a <c>decimal</c> is not a valid attribute argument, CS0182).
+        ///
+        /// <para>⚠ The value is CAST to the type it must have when the literal alone would give
+        /// another type. A non-<c>object</c> parameter needs its own type. MEASURED: csc refuses
+        /// a narrowing argument (CS1908: <c>-5</c> on a Short, <c>2.5</c> on a Single), and it
+        /// stores a widening one under the LITERAL's type, so an uncast <c>7</c> on a Double or
+        /// a Long reads back by reflection as an Int32. An <c>object</c> parameter needs the
+        /// constant's type, so that <c>= 5L</c> is boxed as a Long, as vbc boxes it.</para>
+        ///
+        /// <para>A <c>Nothing</c> default is <c>DefaultParameterValue(null)</c> where the
+        /// initializer was <c>null</c>. A value type's Nothing, and a default that is not a
+        /// constant (both were <c>= default</c>), is a bare <c>Optional</c>: C# then passes the
+        /// type's default.</para>
+        /// </summary>
+        private string VbOptionalEncoding(ParameterSpelling p)
+        {
+            const string optional = "System.Runtime.InteropServices.Optional";
+            if (!(p.DefaultValue is IRConstant constant))
+                return optional;
+
+            if (constant.Value == null)
+                return EmitConstant(constant) == "null"
+                    ? optional + ", System.Runtime.InteropServices.DefaultParameterValue(null)"
+                    : optional;
+
+            var target = p.CSharpType == "object" ? MapType(constant.Type) : p.CSharpType.TrimEnd('?');
+            if (target == "decimal" || constant.Value is decimal)
             {
-                result += " = " + FormatDefaultValue(param.DefaultValue);
-            }
-            else if (param.IsOptional)
-            {
-                // Use default for the type
-                result += " = default";
+                var bits = decimal.GetBits(Convert.ToDecimal(constant.Value, CultureInfo.InvariantCulture));
+                var scale = (bits[3] >> 16) & 0xFF;
+                var sign = bits[3] < 0 ? 1 : 0;
+                return optional + $", System.Runtime.CompilerServices.DecimalConstant({scale}, {sign}, "
+                       + $"{(uint)bits[2]}u, {(uint)bits[1]}u, {(uint)bits[0]}u)";
             }
 
-            return result;
+            var literal = EmitConstant(constant);
+            var natural = constant.Value switch
+            {
+                bool => "bool", char => "char", string => "string", double => "double", float => "float", int => "int",
+                _ => null
+            };
+            if (target != "object" && target != "string" && target != natural)
+                literal = $"({target})" + (literal.StartsWith("-", StringComparison.Ordinal) ? $"({literal})" : literal);
+            return optional + $", System.Runtime.InteropServices.DefaultParameterValue({literal})";
         }
 
         /// <summary>
@@ -1316,8 +1398,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var paramList = "";
             if (ctor.Implementation != null)
             {
-                paramList = string.Join(", ", ctor.Implementation.Parameters.Select(p =>
-                    FormatParameter(p)));
+                paramList = FormatParameters(ctor.Implementation.Parameters);
             }
 
             // Base constructor call — ADR-0016 D1: the IRBaseConstructorCall's operands, rendered as
@@ -1614,8 +1695,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var paramList = "";
             if (method.Implementation != null)
             {
-                paramList = string.Join(", ", method.Implementation.Parameters.Select(p =>
-                    FormatParameter(p)));
+                paramList = FormatParameters(method.Implementation.Parameters);
             }
 
             // Check if this is an operator overload
@@ -1856,14 +1936,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             }
 
             // Generate parameters, with 'this' modifier for extension methods
-            var paramList = new List<string>();
-            for (int i = 0; i < function.Parameters.Count; i++)
-            {
-                var p = function.Parameters[i];
-                var isFirstExtensionParam = function.IsExtension && i == 0;
-                paramList.Add(FormatParameter(p, isFirstExtensionParam));
-            }
-            var parameters = string.Join(", ", paramList);
+            var parameters = FormatParameters(function.Parameters, function.IsExtension);
 
             // Handle async and iterator modifiers
             var asyncModifier = function.IsAsync ? "async " : "";
