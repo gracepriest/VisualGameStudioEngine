@@ -258,13 +258,15 @@ End Sub";
     public void Cpp_UnboundCollectionTemporary_StillEmitsPreambleViaFallback()
     {
         // A `New List(...)` result that is NOT bound to a typed local: the fluent
-        // call `New List(Of Integer)().Add(1)` produces an unbound IRNewObject whose
-        // collection type is not carried on any declared local. Only the
-        // ModuleUsesCollections IRNewObject body-scan fallback can detect it — the
-        // type-position walk (which covers declared locals/globals/fields/signatures)
+        // `New List(Of Integer)().Count` produces an unbound IRNewObject whose
+        // collection type is not carried on any declared local (`n` is an Integer).
+        // Only the ModuleUsesCollections IRNewObject body-scan fallback can detect it —
+        // the type-position walk (which covers declared locals/globals/fields/signatures)
         // sees no collection type here. Proves the fallback earns its keep.
+        // (The statement form `New List(Of Integer)().Add(1)` is refused, as vbc refuses
+        // it: BC30035, a statement cannot begin with `New` — task #267.)
         var output = CompileToCpp(
-            "Sub Main()\n New List(Of Integer)().Add(1)\nEnd Sub", out var e);
+            "Sub Main()\n Dim n As Integer = New List(Of Integer)().Count\nEnd Sub", out var e);
         Assert.That(e, Is.Empty, string.Join("; ", e));
         Assert.That(output, Does.Contain("class List"),
             "an unbound New List(...) temporary must still trigger the wrapper preamble via the IRNewObject fallback");
