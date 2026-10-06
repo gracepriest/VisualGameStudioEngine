@@ -381,6 +381,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _output.Clear();
             _indentLevel = 0;
             _usings.Clear();
+            _lateBoundCaseCount = 0;
 
             CollectUserFunctionNames(module);
 
@@ -2774,6 +2775,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void EmitPatternCase(IRPatternCase pattern, IRSwitch switchInst)
         {
             var subject = switchInst?.Value;
+
+            // #211: a label with an Object comparison is VB's late-bound one (ADR-0012), tested in
+            // a `when` over the label's own binding of the subject. C#'s constant and relational
+            // patterns on an `object` TYPE-test (`case 2` never matches a boxed 2.0), and on a
+            // String a relational one does not compile (CS8781).
+            if (subject != null && IsLateBoundCase(pattern, subject))
+            {
+                var bound = FreshLateBoundCaseName();
+                var test = LateBoundCaseTest(pattern, subject, bound, switchInst);
+                var guard = pattern.WhenGuard != null ? $" && ({EmitExpression(pattern.WhenGuard)})" : "";
+                WriteLine($"case var {bound} when {test}{guard}:");
+                return;
+            }
+
             var whenClause = pattern.WhenGuard != null ? $" when {EmitExpression(pattern.WhenGuard)}" : "";
 
             switch (pattern)
@@ -4444,9 +4459,14 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// <para>#206: a String <c>=</c>/<c>&lt;&gt;</c> is VB's, where Nothing is <c>""</c>
         /// (<see cref="IRCompare.IsStringEquality"/>). C#'s <c>string ==</c> is already ordinal
         /// value equality, so only Nothing needs handling: <c>null == ""</c> is False in C#.</para>
+        /// <para>#211: an Object operand makes it VB's late-bound comparison
+        /// (<see cref="IsLateBoundComparison"/>), decided here before anything else.</para>
         /// </summary>
-        private static string CompareText(IRCompare compare, Func<IRValue, string> render)
+        private string CompareText(IRCompare compare, Func<IRValue, string> render)
         {
+            if (IsLateBoundComparison(compare.Left, compare.Right))
+                return LateBoundCompareText(compare.Comparison, render(compare.Left), render(compare.Right));
+
             var op = MapCompareOperator(compare.Comparison);
             if (compare.Comparison is not (CompareKind.Eq or CompareKind.Ne))
                 return $"{render(compare.Left)} {op} {render(compare.Right)}";
@@ -4455,6 +4475,165 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var right = NothingAsEmpty(compare.Right, compare.Left, render);
             return $"{left} {op} {right}";
         }
+
+        // ================================================================================
+        // ⭐ LATE-BOUND COMPARISON (#211, ADR-0012). THE ONE PLACE C# decides that an `=` `<>` `<`
+        // `>` `<=` `>=` with an Object operand is VB's, for a statement, a When guard and every
+        // Select Case label alike. MSILBackend.IsLateBoundComparison is the same rule.
+        // ================================================================================
+
+        /// <summary>
+        /// ⭐ <b>True when a comparison is VB's LATE-BOUND comparison</b> (ADR-0012): either operand
+        /// is statically <c>Object</c>. BasicLang has no <c>Option Strict</c>, so <c>o = 20</c>
+        /// with <c>o As Object</c> compares the VALUES, as VB without it does.
+        ///
+        /// <para>⛔ <b>What was wrong.</b> C#'s own operator was emitted as it stood. On
+        /// <c>object</c> and a number it does not compile (CS0019: <c>If o = 20</c>,
+        /// <c>o &lt; 10</c>), and a String relational <c>Case Is &lt; "m"</c> was CS8781. Where
+        /// it DID compile it answered a different question: <c>object == object</c> and
+        /// <c>object == string</c> are C#'s REFERENCE comparison, so two boxed 5s, or an Object
+        /// holding a String built at run time and an equal String, compared unequal; <c>o =
+        /// Nothing</c> was a null test, False for an Object holding 0 or <c>""</c>; and
+        /// <c>Select Case o : Case 1 To 5</c> became a relational pattern that TYPE-tests, so an
+        /// Object holding 3.5 answered Case Else. Each printed a wrong answer from a green
+        /// build.</para>
+        ///
+        /// <para>⚠ <b>The <c>Nothing</c> literal does not make a comparison late-bound.</b> It is an
+        /// Object-typed null constant in the IR, but in VB it has no type of its own:
+        /// <c>i = Nothing</c> on an Integer keeps its Integer comparison. <c>o = Nothing</c> on an
+        /// Object is late-bound because of <c>o</c>.</para>
+        ///
+        /// <para>⛔ <c>Is</c> / <c>IsNot</c> and <c>Case Is Nothing</c> never come here. They are
+        /// reference identity (ADR-0011, <see cref="IdentityText"/> and
+        /// <see cref="NothingCaseLabel"/>).</para>
+        /// </summary>
+        private bool IsLateBoundComparison(IRValue left, IRValue right) =>
+            IsObjectComparand(left) || IsObjectComparand(right);
+
+        /// <summary>An operand statically typed Object that is not the <c>Nothing</c> literal.</summary>
+        private bool IsObjectComparand(IRValue value) =>
+            value?.Type != null && MapType(value.Type) == "object" && !(value is IRConstant { Value: null });
+
+        /// <summary>
+        /// <c>left kind right</c> as VB's late-bound comparison:
+        /// <c>Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*(left, right,
+        /// TextCompare: false)</c> — the helpers vbc itself calls for an Object comparison in a
+        /// condition, with <c>Option Compare Binary</c> (VB's default: two Strings compare
+        /// ordinally). Both operands reach it as <c>object</c>, so a value boxes as its own type
+        /// (<c>20</c> an Int32, <c>20.0</c> a Double) and the runtime sees what the program wrote:
+        /// Integer against Double compares numerically, <c>Nothing</c> is the other operand's
+        /// default, and two Objects holding class instances THROW InvalidCastException, as VB does.
+        /// The VB runtime is no new dependency here (<see cref="VbConversionText"/>).
+        /// </summary>
+        private static string LateBoundCompareText(CompareKind kind, string left, string right)
+        {
+            var helper = kind switch
+            {
+                CompareKind.Eq => "Equal",
+                CompareKind.Ne => "NotEqual",
+                CompareKind.Lt => "Less",
+                CompareKind.Le => "LessEqual",
+                CompareKind.Gt => "Greater",
+                CompareKind.Ge => "GreaterEqual",
+                _ => throw new InvalidOperationException(
+                    $"C#: unknown comparison '{kind}' with an Object operand. A comparison this backend "
+                    + "cannot name would otherwise be emitted as text that does not compile, or "
+                    + "compares something else, so it is refused here instead."),
+            };
+            return $"{VbOperators}.ConditionalCompareObject{helper}({left}, {right}, false)";
+        }
+
+        /// <summary>VB's late-binding operators, in the VB runtime every generated project targets.</summary>
+        private const string VbOperators = "Microsoft.VisualBasic.CompilerServices.Operators";
+
+        /// <summary>
+        /// Whether a Select Case label needs VB's late-bound comparison: a value, a range bound, a
+        /// <c>Case Is op</c> operand or an Or alternative compared with the subject is one
+        /// (<see cref="IsLateBoundComparison"/>), or the label is <c>Case Nothing</c> on an Object
+        /// subject — VB's <c>subject = Nothing</c>, which an Object holding 0, <c>""</c> or False
+        /// meets. <c>Case Is Nothing</c> is reference identity (ADR-0011) and stays
+        /// <c>case null</c>. A type, tuple or binding pattern is no comparison.
+        /// </summary>
+        private bool IsLateBoundCase(IRPatternCase pattern, IRValue subject) => pattern switch
+        {
+            IRConstantPatternCase constant => IsLateBoundComparison(subject, constant.Value),
+            IRComparisonPatternCase comparison => IsLateBoundComparison(subject, comparison.CompareValue),
+            IRRangePatternCase range => IsLateBoundComparison(subject, range.LowerBound)
+                || IsLateBoundComparison(subject, range.UpperBound),
+            IRNothingPatternCase nothing => !nothing.WrittenWithIs && IsLateBoundComparison(subject, null),
+            IROrPatternCase or => or.Alternatives?.Any(alternative => IsLateBoundCase(alternative, subject)) == true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// The boolean C# test that <paramref name="pattern"/> matches <paramref name="bound"/>, the
+        /// label's own binding of the subject, for a label <see cref="IsLateBoundCase"/> accepts.
+        /// Each comparison in it is decided pair by pair, as <see cref="CompareText"/> decides one:
+        /// late-bound when <see cref="IsLateBoundComparison"/> says so, C#'s own operator otherwise.
+        /// An Or alternative that is no comparison keeps its pattern, as <c>bound is pattern</c>.
+        /// </summary>
+        private string LateBoundCaseTest(IRPatternCase pattern, IRValue subject, string bound, IRSwitch switchInst)
+        {
+            string Compare(CompareKind kind, IRValue value) => IsLateBoundComparison(subject, value)
+                ? LateBoundCompareText(kind, bound, EmitExpression(value))
+                : $"{bound} {MapCompareOperator(kind)} {EmitExpression(value, new HashSet<IRValue>(), needsParens: true)}";
+
+            switch (pattern)
+            {
+                case IRConstantPatternCase constant:
+                    return Compare(CompareKind.Eq, constant.Value);
+
+                case IRComparisonPatternCase comparison:
+                    return Compare(comparison.Operator switch
+                    {
+                        "=" => CompareKind.Eq,
+                        "<>" => CompareKind.Ne,
+                        "<" => CompareKind.Lt,
+                        "<=" => CompareKind.Le,
+                        ">" => CompareKind.Gt,
+                        ">=" => CompareKind.Ge,
+                        _ => throw new InvalidOperationException(
+                            $"C#: unknown Select Case comparison operator '{comparison.Operator}'. The parser "
+                            + "emits =, <>, <, <=, > and >=; anything else would be compared as something "
+                            + "else, so it is refused here instead."),
+                    }, comparison.CompareValue);
+
+                case IRRangePatternCase range:
+                    return $"{Compare(CompareKind.Ge, range.LowerBound)} && {Compare(CompareKind.Le, range.UpperBound)}";
+
+                case IRNothingPatternCase:
+                    return LateBoundCompareText(CompareKind.Eq, bound, "null");
+
+                case IROrPatternCase or:
+                    return "(" + string.Join(" || ", or.Alternatives.Select(alternative =>
+                        IsLateBoundCase(alternative, subject)
+                            ? LateBoundCaseTest(alternative, subject, bound, switchInst)
+                            : $"{bound} is {GetPatternExpression(alternative, switchInst)}")) + ")";
+
+                default:
+                    throw new InvalidOperationException(
+                        $"C#: the Select Case pattern '{pattern?.GetType().Name}' has no late-bound test. "
+                        + "IsLateBoundCase accepts only comparisons, so this is an internal error.");
+            }
+        }
+
+        /// <summary>
+        /// A fresh name for one late-bound Case label's binding of the subject
+        /// (<c>case var _case0 when …</c>). Every label gets its own: two labels of one section
+        /// that share a pattern variable are CS0128 (measured), and a nested Select Case or a
+        /// lambda in a case body declaring the same one is CS0136. A local or parameter of the
+        /// body that happens to be spelled the same is skipped.
+        /// </summary>
+        private string FreshLateBoundCaseName()
+        {
+            string candidate;
+            do candidate = $"_case{_lateBoundCaseCount++}";
+            while (_declaredIdentifiers.Contains(candidate));
+            return candidate;
+        }
+
+        /// <summary>How many late-bound Case labels this file has bound (<see cref="FreshLateBoundCaseName"/>).</summary>
+        private int _lateBoundCaseCount;
 
         /// <summary>
         /// One operand of a String equality, reading Nothing as <c>""</c> when
