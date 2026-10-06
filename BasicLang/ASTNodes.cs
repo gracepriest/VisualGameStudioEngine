@@ -1503,6 +1503,13 @@ namespace BasicLang.Compiler.AST
     {
         public ExpressionNode Expression { get; set; }
         
+        /// <summary>
+        /// #267: the statement's first token is <c>(</c>. The tree keeps no node for parentheses —
+        /// <c>(F())</c> is the call node itself — so the parser records the fact here, and the
+        /// analyzer refuses the statement as VB does (BC30035): no VB statement begins with <c>(</c>.
+        /// </summary>
+        public bool BeginsWithParenthesis { get; set; }
+
         public ExpressionStatementNode(int line, int column) : base(line, column) { }
         
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
