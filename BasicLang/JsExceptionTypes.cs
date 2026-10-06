@@ -142,6 +142,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Mention("OverflowException");
             }
 
+            // The late-bound Object comparison (#215) throws this for a String that is no number
+            // or Boolean, and for an operand with no comparison at all (a class instance).
+            if (JavaScriptCodeGenerator.UsesObjectComparison(module))
+                Mention("InvalidCastException");
+
             // The checked List / array / Dictionary element accesses (#207) throw these.
             foreach (var name in JavaScriptCodeGenerator.ElementCheckExceptions(module))
                 Mention(name);

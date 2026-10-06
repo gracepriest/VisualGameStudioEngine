@@ -183,6 +183,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
+            EmitObjectComparisonPrelude(module);
             EmitIntegerDivisionPrelude(module);
             EmitElementCheckPrelude(module);
             EmitPrimitiveStaticsPrelude(module);
@@ -506,6 +507,243 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             Line("}");
             Line();
         }
+
+        // ================================================================================
+        // ⭐ LATE-BOUND COMPARISON (#215, ADR-0012). THE ONE PLACE this backend decides that an
+        // `=` `<>` `<` `>` `<=` `>=` with an Object operand is VB's, for a statement, a When guard
+        // and every Select Case label alike. CSharpBackend.IsLateBoundComparison and
+        // MSILBackend.IsLateBoundComparison are the same rule.
+        // ================================================================================
+
+        /// <summary>The emitted name of VB's late-bound comparison (<see cref="CompareObjectHelperSource"/>).</summary>
+        private const string CompareObjectHelperName = "__blCompareObject";
+
+        private bool _compareObjectHelperEmitted;
+
+        /// <summary>
+        /// ⭐ <b>True when a comparison is VB's LATE-BOUND comparison</b> (ADR-0012): either operand
+        /// is statically <c>Object</c>. BasicLang has no <c>Option Strict</c>, so <c>o = 20</c>
+        /// with <c>o As Object</c> compares the VALUES, as VB without it does.
+        ///
+        /// <para>⛔ <b>What was wrong.</b> JavaScript's own <c>===</c> / <c>&lt;</c> was emitted as it
+        /// stood. <c>===</c> is true only for one JS type on both sides, so an Object holding 0,
+        /// <c>""</c> or False was not <c>= Nothing</c>, <c>Case Nothing</c> did not match it, and an
+        /// Object holding "20" was not <c>= 20</c>; a String that is no number compared False instead
+        /// of throwing InvalidCastException; and <c>&lt;</c> answered by JS's coercions, so True was 1
+        /// rather than -1. Each printed a wrong answer from a green build.</para>
+        ///
+        /// <para>⚠ <b>The <c>Nothing</c> literal does not make a comparison late-bound.</b> In VB it
+        /// has no type of its own: <c>i = Nothing</c> on an Integer keeps its Integer comparison.
+        /// <c>o = Nothing</c> on an Object is late-bound because of <c>o</c>.</para>
+        ///
+        /// <para>⛔ <c>Is</c> / <c>IsNot</c> and <c>Case Is Nothing</c> never come here. They are
+        /// reference identity (ADR-0011, <see cref="IdentityText"/> and <see cref="NullTest"/>).</para>
+        /// </summary>
+        private static bool IsLateBoundComparison(IRValue left, IRValue right) =>
+            IsObjectComparand(left) || IsObjectComparand(right);
+
+        /// <summary>An operand statically typed Object that is not the <c>Nothing</c> literal.</summary>
+        private static bool IsObjectComparand(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase)
+            && value is not IRConstant { Value: null };
+
+        /// <summary>
+        /// Whether a Select Case label needs the late-bound comparison: a value, a range bound, a
+        /// <c>Case Is op</c> operand or an Or alternative compared with the subject is one
+        /// (<see cref="IsLateBoundComparison"/>), or the label is <c>Case Nothing</c> on an Object
+        /// subject — VB's <c>subject = Nothing</c>, which an Object holding 0, <c>""</c> or False
+        /// meets. <c>Case Is Nothing</c> is reference identity (ADR-0011) and stays the null test.
+        /// The C# backend's <c>IsLateBoundCase</c> is the same rule.
+        /// </summary>
+        private static bool IsLateBoundCase(IRPatternCase pattern, IRValue subject) => pattern switch
+        {
+            IRConstantPatternCase constant => IsLateBoundComparison(subject, constant.Value),
+            IRComparisonPatternCase comparison => IsLateBoundComparison(subject, comparison.CompareValue),
+            IRRangePatternCase range => IsLateBoundComparison(subject, range.LowerBound)
+                || IsLateBoundComparison(subject, range.UpperBound),
+            IRNothingPatternCase nothing => !nothing.WrittenWithIs && IsLateBoundComparison(subject, null),
+            IROrPatternCase or => or.Alternatives?.Any(alternative => IsLateBoundCase(alternative, subject)) == true,
+            _ => false,
+        };
+
+        /// <summary>
+        /// Whether any comparison the module lowers is late-bound: a block's <see cref="IRCompare"/>,
+        /// a Select Case label, or a comparison inside a <c>When</c> guard (built with emission
+        /// suppressed, so in no block — the blind spot <see cref="GuardUsesRoundingHelper"/> covers).
+        /// ⛔ SCANNED up front for the reason <see cref="EmitConversionPrelude"/> gives: the prelude
+        /// precedes every body. A miss is refused at the use site
+        /// (<see cref="LateBoundCompareText(string, string, string)"/>), never a ReferenceError.
+        /// <see cref="JsExceptionTypes.CollectRequired"/> reads it too: the helper throws
+        /// InvalidCastException, which must exist whether or not the program names it.
+        /// </summary>
+        internal static bool UsesObjectComparison(IRModule module)
+        {
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        switch (instruction)
+                        {
+                            case IRCompare compare when IsLateBoundComparison(compare.Left, compare.Right):
+                                return true;
+                            case IRSwitch sw when sw.Cases?.Any(c => IsLateBoundComparison(sw.Value, c.Item1)) == true
+                                || sw.PatternCases?.Any(p => PatternUsesObjectComparison(p, sw.Value)) == true:
+                                return true;
+                        }
+
+            return false;
+        }
+
+        private static bool PatternUsesObjectComparison(IRPatternCase pattern, IRValue subject) =>
+            pattern != null
+            && (IsLateBoundCase(pattern, subject)
+                || TreeUsesObjectComparison(pattern.WhenGuard)
+                || pattern switch
+                {
+                    IROrPatternCase or => or.Alternatives?.Any(a => PatternUsesObjectComparison(a, subject)) == true,
+                    IRTuplePatternCase tuple => tuple.Elements?.Any(e => PatternUsesObjectComparison(e, subject)) == true,
+                    _ => false,
+                });
+
+        /// <summary>The node kinds <see cref="ExprInline"/> rebuilds in place, walked for a late-bound comparison.</summary>
+        private static bool TreeUsesObjectComparison(IRValue value) => value switch
+        {
+            IRCompare compare => IsLateBoundComparison(compare.Left, compare.Right)
+                || TreeUsesObjectComparison(compare.Left) || TreeUsesObjectComparison(compare.Right),
+            IRBinaryOp binary => TreeUsesObjectComparison(binary.Left) || TreeUsesObjectComparison(binary.Right),
+            IRCast cast => TreeUsesObjectComparison(cast.Value),
+            IRCall call => call.Arguments.Any(TreeUsesObjectComparison),
+            IRIdentityCompare identity => TreeUsesObjectComparison(identity.Left) || TreeUsesObjectComparison(identity.Right),
+            IRUnaryOp unary => TreeUsesObjectComparison(unary.Operand),
+            _ => false,
+        };
+
+        /// <summary>
+        /// <c>left kind right</c> as VB's late-bound comparison: a call of
+        /// <see cref="CompareObjectHelperName"/> with the operator VB names it by.
+        /// </summary>
+        private string LateBoundCompareText(CompareKind kind, string left, string right) =>
+            LateBoundCompareText(kind switch
+            {
+                CompareKind.Eq => "=",
+                CompareKind.Ne => "<>",
+                CompareKind.Lt => "<",
+                CompareKind.Le => "<=",
+                CompareKind.Gt => ">",
+                CompareKind.Ge => ">=",
+                _ => throw NotYet($"CompareKind.{kind} with an Object operand"),
+            }, left, right);
+
+        /// <summary>
+        /// The same, for the raw VB operator a <c>Case Is op</c> label carries. An operator the
+        /// helper does not know is refused here: it would otherwise be answered as <c>&gt;=</c>.
+        /// </summary>
+        private string LateBoundCompareText(string vbOperator, string left, string right)
+        {
+            if (vbOperator is not ("=" or "<>" or "<" or "<=" or ">" or ">="))
+                throw NotYet($"Select Case comparison operator '{vbOperator}' with an Object operand");
+
+            // Scanned into the prelude by UsesObjectComparison with this same predicate; a miss
+            // would be "__blCompareObject is not defined" at run time, so refuse it here instead.
+            if (!_compareObjectHelperEmitted)
+                throw new InvalidOperationException(
+                    $"JavaScript backend: {CompareObjectHelperName} is needed but UsesObjectComparison did not see it.");
+
+            return $"{CompareObjectHelperName}({left}, {right}, \"{vbOperator}\")";
+        }
+
+        /// <summary>
+        /// VB's late-bound comparison, emitted only when the module makes one
+        /// (<see cref="UsesObjectComparison"/>), so a program without one — and the web-form
+        /// output, which shares this prelude — is unchanged.
+        /// </summary>
+        private void EmitObjectComparisonPrelude(IRModule module)
+        {
+            _compareObjectHelperEmitted = UsesObjectComparison(module);
+            if (!_compareObjectHelperEmitted) return;
+            foreach (var line in CompareObjectHelperSource.Replace("\r\n", "\n").TrimEnd('\n').Split('\n'))
+                Line(line);
+            Line();
+        }
+
+        /// <summary>
+        /// <c>Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*(a, b,
+        /// TextCompare:=False)</c> — what vbc, the C# backend and MSIL call — for the runtime types
+        /// this backend produces, with the VB operator as <c>op</c>:
+        /// <list type="bullet">
+        /// <item><c>Nothing</c> (<c>null</c> or <c>undefined</c>) is the other operand's default:
+        /// False, 0 or <c>""</c>; two Nothings are equal.</item>
+        /// <item>Two Strings compare ORDINALLY (<c>Option Compare Binary</c>, VB's default); JS's
+        /// <c>&lt;</c> on strings is already UTF-16 code-unit order.</item>
+        /// <item>A String against a number converts by VB's <c>Conversions.ToDouble</c>: surrounding
+        /// white space, a leading or trailing sign or parentheses, thousands commas, an exponent,
+        /// <c>&amp;H</c>/<c>&amp;O</c>, Infinity and NaN; anything else throws InvalidCastException
+        /// with VB's own message. Against a Boolean it converts by <c>Conversions.ToBoolean</c>:
+        /// "True"/"False" in any case, else that number's non-zero-ness.</item>
+        /// <item>A Boolean is a number, True as -1, so True &lt; False, as VB has it.</item>
+        /// <item>Numbers compare numerically; a NaN is unordered — False for every operator but
+        /// <c>&lt;&gt;</c>, as VB's helpers answer.</item>
+        /// <item>Anything else (a class instance, an array, a List, a delegate) throws
+        /// InvalidCastException, as VB does for a type with no operator.</item>
+        /// </list>
+        /// <para>⚠ Stated gaps, all in what is thrown or parsed, never in a value that compares:
+        /// the operator message names a number Integer or Double by whether it is whole (JS has one
+        /// number type) where VB's wording also varies by operand; a currency symbol is not
+        /// parsed; an <c>&amp;H</c>/<c>&amp;O</c> value past 64 bits is InvalidCastException where VB
+        /// throws OverflowException. Char never reaches here: the capability checker refuses it
+        /// (BL7004).</para>
+        /// </summary>
+        private const string CompareObjectHelperSource = @"function __blCompareObject(a, b, op) {
+    const kind = (x) => x === null || x === undefined ? ""Nothing"" : typeof x === ""boolean"" ? ""Boolean""
+        : typeof x === ""number"" ? ""Number"" : typeof x === ""string"" ? ""String"" : ""Object"";
+    let ka = kind(a), kb = kind(b);
+    if (ka === ""Object"" || kb === ""Object"") {
+        const name = (x, k) => k === ""Number"" ? (Number.isInteger(x) ? ""Integer"" : ""Double"")
+            : k === ""Object"" ? (x.constructor && x.constructor.name) || ""Object"" : k;
+        throw new InvalidCastException(""Operator '"" + op + ""' is not defined for type '"" + name(a, ka) + ""' and type '"" + name(b, kb) + ""'."");
+    }
+    if (ka === ""Nothing"") { a = kb === ""Boolean"" ? false : kb === ""String"" ? """" : 0; ka = kb === ""Nothing"" ? ""Number"" : kb; }
+    if (kb === ""Nothing"") { b = ka === ""Boolean"" ? false : ka === ""String"" ? """" : 0; kb = ka; }
+    const fail = (s, type) => new InvalidCastException(""Conversion from string \"""" + s.substring(0, 32) + ""\"" to type '"" + type + ""' is not valid."");
+    const toDouble = (s, type) => {
+        let m = /^[ \u3000]*&([HhOo])(.+)$/.exec(s);
+        if (m) {
+            const hex = m[1] === ""H"" || m[1] === ""h"";
+            if (!(hex ? /^[0-9A-Fa-f]+$/ : /^[0-7]+$/).test(m[2])) throw fail(s, type);
+            const v = BigInt((hex ? ""0x"" : ""0o"") + m[2]);
+            if (v >> 64n) throw fail(s, type);
+            return Number(BigInt.asIntN(64, v));
+        }
+        const t = s.replace(/^[\t-\r ]+|[\t-\r ]+$/g, """");
+        if (/^[+-]?infinity$/i.test(t)) return t[0] === ""-"" ? -Infinity : Infinity;
+        if (/^[+-]?nan$/i.test(t)) return NaN;
+        m = /^(?:([+-]?)((?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)|((?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)([+-])|\(((?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\))$/.exec(t);
+        if (!m) throw fail(s, type);
+        const n = Number((m[2] ?? m[3] ?? m[5]).replace(/,/g, """"));
+        return m[1] === ""-"" || m[4] === ""-"" || m[5] !== undefined ? -n : n;
+    };
+    const toBoolean = (s) => {
+        const l = s.toLowerCase();
+        return l === ""true"" ? true : l === ""false"" ? false : toDouble(s, ""Boolean"") !== 0;
+    };
+    let c;
+    if (ka === ""String"" && kb === ""String"") {
+        c = a < b ? -1 : a > b ? 1 : 0;
+    } else {
+        if (ka === ""String"") a = kb === ""Boolean"" ? toBoolean(a) : toDouble(a, ""Double"");
+        if (kb === ""String"") b = ka === ""Boolean"" ? toBoolean(b) : toDouble(b, ""Double"");
+        if (typeof a === ""boolean"") a = a ? -1 : 0;
+        if (typeof b === ""boolean"") b = b ? -1 : 0;
+        c = a < b ? -1 : a > b ? 1 : a === b ? 0 : NaN;
+    }
+    switch (op) {
+        case ""="": return c === 0;
+        case ""<>"": return c !== 0;
+        case ""<"": return c < 0;
+        case ""<="": return c <= 0;
+        case "">"": return c > 0;
+        default: return c >= 0;
+    }
+}";
 
         private const string IntDivHelperName = "__blIntDiv";
         private const string ModHelperName = "__blMod";
@@ -2090,6 +2328,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string RenderCompare(IRCompare op, Func<IRValue, string> render)
         {
+            // #215: an Object operand makes it VB's late-bound comparison, decided before anything else.
+            if (IsLateBoundComparison(op.Left, op.Right))
+                return LateBoundCompareText(op.Comparison, render(op.Left), render(op.Right));
+
             var isEquality = op.Comparison is CompareKind.Eq or CompareKind.Ne;
             var l = isEquality ? NothingAsEmpty(op.Left, op.Right, render(op.Left)) : render(op.Left);
             var r = isEquality ? NothingAsEmpty(op.Right, op.Left, render(op.Right)) : render(op.Right);
@@ -3405,6 +3647,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private string PatternTest(string subject, IRValue subjectValue, IRPatternCase pattern)
         {
+            string RangeBound(CompareKind kind, string op, IRValue bound) => IsLateBoundComparison(subjectValue, bound)
+                ? LateBoundCompareText(kind, subject, ExprInline(bound))
+                : $"{subject} {op} {ExprInline(bound)}";
+
             string test;
             switch (pattern)
             {
@@ -3412,9 +3658,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     test = CaseEqualityTest(subject, subjectValue, c.Value);
                     break;
 
-                // Inclusive at both ends, matching `Case 1 To 10`.
+                // Inclusive at both ends, matching `Case 1 To 10`. Each bound is late-bound on its
+                // own when it or the subject is Object (#215), as the C# backend decides it.
                 case IRRangePatternCase r:
-                    test = $"({subject} >= {ExprInline(r.LowerBound)} && {subject} <= {ExprInline(r.UpperBound)})";
+                    test = $"({RangeBound(CompareKind.Ge, ">=", r.LowerBound)} && {RangeBound(CompareKind.Le, "<=", r.UpperBound)})";
+                    break;
+
+                // #215: `Case Is op x` with an Object subject or operand is VB's late-bound comparison.
+                case IRComparisonPatternCase cmp when IsLateBoundComparison(subjectValue, cmp.CompareValue):
+                    test = LateBoundCompareText(cmp.Operator, subject, ExprInline(cmp.CompareValue));
                     break;
 
                 // Operator is a raw STRING from the parser, not an enum.
@@ -3430,7 +3682,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // `Case Nothing` is VB's `subject = Nothing`, so on a String it is the String
                 // equality with Nothing (#206), which "" meets too. `Case Is Nothing` is reference
-                // identity (ADR-0011) and stays the null test.
+                // identity (ADR-0011) and stays the null test. On an Object subject it is the
+                // late-bound `subject = Nothing` (#215), which an Object holding 0, "" or False meets.
+                case IRNothingPatternCase n when !n.WrittenWithIs && IsLateBoundComparison(subjectValue, null):
+                    test = LateBoundCompareText(CompareKind.Eq, subject, "null");
+                    break;
+
                 case IRNothingPatternCase n when !n.WrittenWithIs
                         && IRCompare.IsStringEquality(subjectValue, new IRConstant(null, null)):
                     test = CaseEqualityTest(subject, subjectValue, new IRConstant(null, null));
@@ -3468,10 +3725,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// <c>Case value</c>: the subject (bound to <paramref name="subject"/>) <c>===</c> the
         /// value, each side through <see cref="NothingAsEmpty"/> so a String Select Case answers
-        /// what a String <c>=</c> answers.
+        /// what a String <c>=</c> answers. With an Object on either side it is VB's late-bound
+        /// <c>=</c> instead (#215, <see cref="IsLateBoundComparison"/>), as a statement's is.
         /// </summary>
         private string CaseEqualityTest(string subject, IRValue subjectValue, IRValue caseValue) =>
-            $"{NothingAsEmpty(subjectValue, caseValue, subject)} === {NothingAsEmpty(caseValue, subjectValue, ExprInline(caseValue))}";
+            IsLateBoundComparison(subjectValue, caseValue)
+                ? LateBoundCompareText(CompareKind.Eq, subject, ExprInline(caseValue))
+                : $"{NothingAsEmpty(subjectValue, caseValue, subject)} === {NothingAsEmpty(caseValue, subjectValue, ExprInline(caseValue))}";
 
         private static string ComparisonPatternOperator(string op)
         {
