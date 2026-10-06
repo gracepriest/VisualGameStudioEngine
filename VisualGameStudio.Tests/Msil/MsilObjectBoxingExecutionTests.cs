@@ -32,6 +32,11 @@ namespace VisualGameStudio.Tests.Msil;
 /// <para><b>C++ refuses every probe here by design</b> ("Object has no C++ mapping") — a
 /// pre-existing, total, unrelated gap, asserted once per probe via <c>Throws.Exception</c>, never
 /// a skipped test.</para>
+///
+/// <para><b>C# since #211.</b> C# refused ten of these programs (E02, C1, L01, L03-L08, L10:
+/// CS0019, CS8781) until #211 gave it the same late-bound comparison (ADR-0012). The group in
+/// section 4 now RUNS each on C# against the expectation in this file.
+/// <see cref="CSharpLateBoundComparisonExecutionTests"/> is the C# fixture for the rest.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -347,18 +352,19 @@ public class MsilObjectBoxingExecutionTests
             End Select
         End Sub
         """;
+    private const string E02Expected = "eq\ntwenty";
 
     [Test]
     public void E02_CompareObjectInIfAndSelectCase_JsAndMsilAgree()
     {
-        // C# itself refuses this program (CS0019 — see the #211 pin group below), so it is not
-        // part of this assertion; JS and MSIL both agree with VB's late-bound answer.
+        // C# is not part of this assertion: it refused this program (CS0019) until #211 and now
+        // runs it, in the #211 group below. JS and MSIL both agree with VB's late-bound answer.
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(E02)), Is.EqualTo("eq\ntwenty"), "JavaScript");
+            Assert.That(Norm(JavaScriptExecutionTests.RunJs(E02)), Is.EqualTo(E02Expected), "JavaScript");
             AssertCppRefuses(E02);
         });
-        AssertMsilAllEntryPoints(E02, "eq\ntwenty");
+        AssertMsilAllEntryPoints(E02, E02Expected);
     }
 
     private const string E03 = """
@@ -882,7 +888,7 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void C1_LateBoundEquality_JsAndMsilAgree()
     {
-        // C# itself refuses (CS0019 — see the #211 pin group below).
+        // C# runs this in the #211 group below (it was CS0019 until #211).
         Assert.Multiple(() =>
         {
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(C1)), Is.EqualTo(C1Expected), "JavaScript");
@@ -1200,7 +1206,7 @@ public class MsilObjectBoxingExecutionTests
     public void L08_CaseNothingCaseIsNothingAndAGuard_MsilAgreesWithVb()
     {
         // JS is pinned separately below (#215) — it disagrees with VB on `Case Nothing` and the
-        // guard. C# itself refuses (CS0019 — see the #211 pin group below).
+        // guard. C# runs this in the #211 group below (it was CS0019 until #211).
         AssertCppRefuses(L08);
         AssertMsilAllEntryPoints(L08, L08Expected);
     }
@@ -1292,7 +1298,7 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void L10_SelectCaseStringBooleanAndMixedNumeric_JsAndMsilAgree()
     {
-        // C# itself refuses (CS8781 — see the #211 pin group below).
+        // C# runs this in the #211 group below (it was CS8781 until #211).
         Assert.Multiple(() =>
         {
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(L10)), Is.EqualTo(L10Expected), "JavaScript");
@@ -1327,7 +1333,8 @@ public class MsilObjectBoxingExecutionTests
     // ====================================================================================
     // 4. Pins for follow-up tasks this fix's own probes surfaced. Each is a fact about a
     //    DIFFERENT area (the C#/JS backends, or the optimizer's constant folding), not a defect
-    //    in #177's own MSIL work — do not fix here.
+    //    in #177's own MSIL work — do not fix here. (#211 is the one that moved: it is FIXED, and
+    //    its group is now a positive assertion that C# runs the programs.)
     // ====================================================================================
 
     /// <summary>Compiles <paramref name="source"/> to C# and returns the Roslyn diagnostics,
@@ -1335,11 +1342,8 @@ public class MsilObjectBoxingExecutionTests
     private static ImmutableArray<Diagnostic> CSharpDiagnostics(string source)
     {
         var csharp = ReturnCoercionTests.EmitCSharpForTest(source);
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Cast<MetadataReference>()
-            .ToImmutableArray();
+        // #211: the shared list, which carries the VB runtime an Object comparison calls into.
+        var references = FourBackends.EmittedCSharpReferences();
         var compilation = CSharpCompilation.Create(
             "MsilObjectBoxingCSharpProbe_" + Guid.NewGuid().ToString("N"),
             new[] { CSharpSyntaxTree.ParseText(csharp) },
@@ -1348,42 +1352,69 @@ public class MsilObjectBoxingExecutionTests
         return compilation.GetDiagnostics();
     }
 
-    // #211 — a comparison with a statically Object operand refuses to compile on C# at all
-    // (CS0019 for the ordinary operators; CS8781 for L10's string relational pattern). MSIL's
-    // own late-bound comparison (this fix) has no C# counterpart yet.
-    [TestCase(nameof(E02), "CS0019")]
-    [TestCase(nameof(C1), "CS0019")]
-    [TestCase(nameof(L01), "CS0019")]
-    [TestCase(nameof(L03), "CS0019")]
-    [TestCase(nameof(L04), "CS0019")]
-    [TestCase(nameof(L05), "CS0019")]
-    [TestCase(nameof(L06), "CS0019")]
-    [TestCase(nameof(L07), "CS0019")]
-    [TestCase(nameof(L08), "CS0019")]
-    [TestCase(nameof(L10), "CS8781")]
-    public void ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211(string which, string diagnosticId)
+    // #211, FIXED — a comparison with a statically Object operand used to refuse to compile on C#
+    // at all (CS0019 for the ordinary operators; CS8781 for L10's string relational pattern). C# now
+    // emits MSIL's own late-bound comparison (ADR-0012: Microsoft.VisualBasic.CompilerServices.
+    // Operators.ConditionalCompareObject*), so each of these ten programs compiles AND RUNS on C#
+    // and prints what vbc prints — the same expectation the MSIL tests above assert, never what C#
+    // printed. This was ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211: the pin moved
+    // to a positive assertion rather than being deleted.
+    //
+    // Two pipelines here, through the in-process emitters: the standard passes, and the AGGRESSIVE
+    // ones (AggressivePipeline, what --optimize and a Release .blproj run). The CLI and
+    // CompileProjectFiles entry points are CSharpLateBoundComparisonExecutionTests'. Every run goes
+    // through CSharpProcessRunner (a child process with a time limit), never the in-process runner.
+    //
+    // ⚠ L02, L11 and L11b are NOT here: they compiled on C# before #211 (the optimizer folds their
+    // constants), so they were never in the pin group. L11b's wrong answer is #214, on every backend.
+    [TestCase(nameof(E02))]
+    [TestCase(nameof(C1))]
+    [TestCase(nameof(L01))]
+    [TestCase(nameof(L03))]
+    [TestCase(nameof(L04))]
+    [TestCase(nameof(L05))]
+    [TestCase(nameof(L06))]
+    [TestCase(nameof(L07))]
+    [TestCase(nameof(L08))]
+    [TestCase(nameof(L10))]
+    public void ObjectComparison_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211(string which)
     {
-        var source = which switch
+        var (source, expected) = which switch
         {
-            nameof(E02) => E02,
-            nameof(C1) => C1,
-            nameof(L01) => L01,
-            nameof(L03) => L03,
-            nameof(L04) => L04,
-            nameof(L05) => L05,
-            nameof(L06) => L06,
-            nameof(L07) => L07,
-            nameof(L08) => L08,
-            nameof(L10) => L10,
+            nameof(E02) => (E02, E02Expected),
+            nameof(C1) => (C1, C1Expected),
+            nameof(L01) => (L01, L01Expected),
+            nameof(L03) => (L03, L03Expected),
+            nameof(L04) => (L04, L04Expected),
+            nameof(L05) => (L05, L05Expected),
+            nameof(L06) => (L06, L06Expected),
+            nameof(L07) => (L07, L07Expected),
+            nameof(L08) => (L08, L08Expected),
+            nameof(L10) => (L10, L10Expected),
             _ => throw new ArgumentOutOfRangeException(nameof(which)),
         };
-        var diagnostics = CSharpDiagnostics(source);
-        Assert.That(diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error && d.Id == diagnosticId),
-            $"task #211 (pre-existing, unrelated to #177's MSIL fix): expected a {diagnosticId} "
-            + "diagnostic when {which} is emitted to C#. A DIFFERENT diagnostic set (including "
-            + "none at all, meaning C# now compiles this) means #211 moved — update this pin, "
-            + "do not just delete it.\n"
-            + string.Join("\n", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+
+        var failures = new System.Collections.Generic.List<string>();
+        foreach (var (pipeline, emit) in new (string, Func<string, string>)[]
+        {
+            ("standard passes", ReturnCoercionTests.EmitCSharpForTest),
+            ("aggressive passes (--optimize)", ReturnCoercionTests.EmitCSharpAggressiveForTest),
+        })
+        {
+            try
+            {
+                var got = Norm(CSharpProcessRunner.RunExpectingSuccess(emit(source)));
+                if (got != Norm(expected))
+                    failures.Add($"C# {pipeline}: printed [{got.Replace("\n", " | ")}] where vbc prints [{Norm(expected).Replace("\n", " | ")}]");
+            }
+            catch (AssertionException ex)
+            {
+                // A compile failure (the old CS0019 / CS8781) or a crash: the first line names it.
+                failures.Add($"C# {pipeline}: {ex.Message.Split('\n')[0]}");
+            }
+        }
+
+        Assert.That(failures, Is.Empty, $"task #211: {which} on C#:\n" + string.Join("\n", failures));
     }
 
     // #215 — the JavaScript backend disagrees with VB on `= Nothing`, `Case Nothing` and a

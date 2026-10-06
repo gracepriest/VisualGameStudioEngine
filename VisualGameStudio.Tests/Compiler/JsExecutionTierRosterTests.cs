@@ -649,6 +649,8 @@ public class JsExecutionTierRosterTests
         "CppAddressOfFallbackExecutionTests",
         // Task #209: a property passed ByRef is copied in and written back, on C#, C++ and MSIL through the CLI, --optimize and CompileProjectFiles. JavaScript refuses a ByRef parameter by design (BL7002), so its one row only COMPILES (CLI and generator) and asserts the refusal - it never runs Node, and the roster's count stays as it was.
         "PropertyByRefCopyOutExecutionTests",
+        // Task #211: an Object comparison on C# is VB's late-bound comparison (ADR-0012), run against vbc on C# only, through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was.
+        "CSharpLateBoundComparisonExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

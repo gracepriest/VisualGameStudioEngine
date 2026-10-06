@@ -159,6 +159,24 @@ internal static class FourBackends
     }
 
     /// <summary>
+    /// ⭐ THE ONE LIST of what emitted C# is compiled against in-process: every assembly the test host has loaded, plus the VB runtime.
+    ///
+    /// <para>⛔ #211. The VB runtime (<c>Microsoft.VisualBasic.Core</c>) is NOT necessarily loaded by the time a test compiles, and the C# backend
+    /// emits a call into it for an Object comparison (<c>Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*</c>), as it
+    /// already did for a String-to-number conversion (<c>Conversions.ToInteger</c>). A list built from the loaded assemblies alone made that program
+    /// CS0234 here while the product's own output ran right, so the reference is added by TYPE, as <c>SampleProgramBuildTests</c> does. Both
+    /// <see cref="CompileEmittedCSharp"/> (and so <see cref="CSharpProcessRunner"/>) and <c>MsilObjectBoxingExecutionTests.CSharpDiagnostics</c> read it.</para>
+    /// </summary>
+    internal static ImmutableArray<MetadataReference> EmittedCSharpReferences()
+        => AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Select(a => a.Location)
+            .Append(typeof(Microsoft.VisualBasic.CompilerServices.Operators).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(location => (MetadataReference)MetadataReference.CreateFromFile(location))
+            .ToImmutableArray();
+
+    /// <summary>
     /// The Roslyn half of <see cref="RunEmittedCSharpText"/>: emitted C# in, a console assembly's bytes out,
     /// asserting it compiles. ⭐ SHARED, not copied: <see cref="CSharpProcessRunner"/> (the out-of-process,
     /// time-limited runner, #256) compiles through this and only RUNS differently, so the two runners cannot
@@ -166,11 +184,7 @@ internal static class FourBackends
     /// </summary>
     internal static byte[] CompileEmittedCSharp(string csharp)
     {
-        var references = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => MetadataReference.CreateFromFile(a.Location))
-            .Cast<MetadataReference>()
-            .ToImmutableArray();
+        var references = EmittedCSharpReferences();
 
         var compilation = CSharpCompilation.Create(
             "FourBackendsProbe_" + Guid.NewGuid().ToString("N"),
