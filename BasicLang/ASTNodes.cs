@@ -843,6 +843,13 @@ namespace BasicLang.Compiler.AST
     public class DelegateDeclarationNode : ASTNode
     {
         public string Name { get; set; }
+
+        /// <summary>
+        /// The written access (#202), recorded as a Class's is (<see cref="ClassNode.Access"/>): set
+        /// from a modifier, the enum default when none is written. Like a Class's, it does not
+        /// decide visibility — every file-level type is visible to the project's other files.
+        /// </summary>
+        public AccessModifier Access { get; set; }
         public List<ParameterNode> Parameters { get; set; }
         public TypeReference ReturnType { get; set; }
         

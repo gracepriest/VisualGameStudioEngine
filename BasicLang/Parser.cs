@@ -143,6 +143,7 @@ namespace BasicLang.Compiler
                 Check(TokenType.Async) || Check(TokenType.Iterator) || Check(TokenType.Inline) ||
                 Check(TokenType.Shared) || Check(TokenType.Extern))
             {
+                var declarationStart = Peek();  // the first modifier — where a refusal points
                 AccessModifier? access = null;  // none written: each arm applies its kind's default
                 bool isAsync = false;
                 bool isIterator = false;
@@ -240,6 +241,34 @@ namespace BasicLang.Compiler
                     cls.Access = access ?? ImplicitMemberAccess;
                     return cls;
                 }
+                // #202: `Public Delegate Sub D(…)` — a Delegate is a TYPE and takes an access
+                // modifier. This arm was missing, so only a bare `Delegate` parsed: "Expected
+                // Function, Sub, Class, … after modifiers, got 'Delegate'".
+                //
+                // ⛔ Only the modifiers VB allows HERE, at file (namespace) level: Public and Friend.
+                // Every other one was refused before this arm existed and stays refused, with vbc's
+                // own diagnostic — Private and Protected are for a type inside another type
+                // (BC31089, BC31047), and Shared/Async/Iterator never apply to a Delegate (BC30385).
+                // The declaration is read first, so the error leaves no half-parsed delegate behind.
+                // (A file-level `Private Class` is still accepted; that is a separate follow-up.)
+                if (Check(TokenType.Delegate))
+                {
+                    var del = ParseDelegate();
+                    var invalidModifier = isStatic ? "Shared" : isAsync ? "Async" : isIterator ? "Iterator"
+                        : isInline ? "Inline" : null;
+                    if (access == AccessModifier.Private)
+                        throw new ParseException(
+                            "BC31089: Types declared 'Private' must be inside another type.", declarationStart);
+                    if (access == AccessModifier.Protected || access == AccessModifier.ProtectedFriend)
+                        throw new ParseException(
+                            "BC31047: Protected types can only be declared inside of a class.", declarationStart);
+                    if (invalidModifier != null)
+                        throw new ParseException(
+                            (invalidModifier == "Inline" ? "" : "BC30385: ") +
+                            $"'{invalidModifier}' is not valid on a Delegate declaration.", declarationStart);
+                    del.Access = access ?? AccessModifier.Public;
+                    return del;
+                }
                 if (Check(TokenType.Module))
                 {
                     return ParseModule();
@@ -273,7 +302,7 @@ namespace BasicLang.Compiler
                     throw new ParseException("Expected 'Class' after 'MustInherit'", Peek());
                 }
                 throw new ParseException(
-                    $"Expected Function, Sub, Class, Module, Interface, Enum, Structure, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
+                    $"Expected Function, Sub, Class, Delegate, Module, Interface, Enum, Structure, Dim, or Const after modifiers, got '{Peek().Lexeme}'",
                     Peek());
             }
             if (Check(TokenType.Function))

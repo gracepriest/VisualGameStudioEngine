@@ -609,6 +609,25 @@ namespace BasicLang.Compiler.LSP
                     break;
                 }
 
+                case DelegateDeclarationNode delegateNode:
+                {
+                    // #202: a Delegate is a TYPE, exported exactly as a Class is (compiler parity:
+                    // its symbol is Class-kind, which CollectExportedSymbols always exports). It
+                    // carries its signature, or a sibling file's `Dim j As Joiner = Function(…) …`
+                    // was "Cannot assign value of type 'Func' to variable of type 'Joiner'" in the
+                    // editor while the build ran it.
+                    var returnType = delegateNode.ReturnType == null
+                        ? new TypeInfo("Void", TypeKind.Void)
+                        : ConvertTypeReference(delegateNode.ReturnType);
+                    var symbol = SemanticAnalyzer.RecordDelegateSignature(
+                        new TypeInfo(delegateNode.Name, TypeKind.Delegate), delegateNode, returnType,
+                        ConvertParameters(delegateNode.Parameters));
+                    symbol.Access = EffectiveAccess(delegateNode.Access, isModuleFile);
+                    symbol.SourceFilePath = filePath;
+                    target.AddSymbol(symbol, AccessModifier.Public);
+                    break;
+                }
+
                 case StructureNode structNode:
                 {
                     var access = EffectiveAccess(structNode.Access, isModuleFile);
