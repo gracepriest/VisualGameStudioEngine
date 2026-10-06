@@ -184,6 +184,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitExceptionPrelude(module);
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
+            EmitElementCheckPrelude(module);
             EmitPrimitiveStaticsPrelude(module);
 
             // Module-level Dims, also before classes — a static field initialiser may read one.
@@ -599,6 +600,221 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _indentLevel--;
             Line("}");
             Line();
+        }
+
+        // ------------------------------------------------------------------
+        // Checked element access (#207)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The checked element accesses a module lowers, one flag per runtime helper. A List and an
+        /// array are plain JS arrays and a Dictionary is a <c>Map</c>, and none of the three checks
+        /// anything on its own: MEASURED, <c>l(3)</c> on a three-element List and <c>a(3)</c> on
+        /// <c>Dim a(2)</c> both answered <c>undefined</c>, <c>l(5) = 1</c> and <c>a(5) = 9</c> silently
+        /// GREW the array to six, and <c>d("missing")</c> answered <c>undefined</c> — where .NET
+        /// throws, so a <c>Try</c> never entered its <c>Catch</c> and the program ran on with a
+        /// garbage value.
+        /// </summary>
+        [Flags]
+        private enum ElementCheck
+        {
+            None = 0,
+            ListGet = 1,
+            ListSet = 2,
+            ArrayGet = 4,
+            ArraySet = 8,
+            DictionaryGet = 16,
+        }
+
+        private const string ListGetHelperName = "__blListGet";
+        private const string ListSetHelperName = "__blListSet";
+        private const string ArrayGetHelperName = "__blArrayGet";
+        private const string ArraySetHelperName = "__blArraySet";
+        private const string DictionaryGetHelperName = "__blDictGet";
+
+        /// <summary>The .NET text of each check's exception (a fixed string for all but the Dictionary's).</summary>
+        private const string ListIndexMessage =
+            "Index was out of range. Must be non-negative and less than the size of the collection. (Parameter 'index')";
+        private const string ArrayIndexMessage = "Index was outside the bounds of the array.";
+
+        private ElementCheck _elementChecksEmitted;
+
+        /// <summary>
+        /// The check a read needs. ONE index only: a List and a Dictionary have a one-argument
+        /// indexer, so any other count is not a shape this lowers, and it keeps its old spelling.
+        /// An IList / IReadOnlyList receiver (<see cref="CollectionKind.None"/>) is not checked
+        /// either — what it holds at run time is not known here.
+        /// </summary>
+        private static ElementCheck CheckOf(IRIndexerAccess ix) =>
+            ix.Indices?.Count != 1
+                ? ElementCheck.None
+                : CollectionKindOf(ix.Collection?.Type) switch
+                {
+                    CollectionKind.List => ElementCheck.ListGet,
+                    CollectionKind.Dictionary => ElementCheck.DictionaryGet,
+                    _ => ElementCheck.None,
+                };
+
+        /// <summary>
+        /// A Dictionary write is insert-or-update in .NET, exactly what <c>Map.set</c> does, so only
+        /// a List write is checked.
+        /// </summary>
+        private static ElementCheck CheckOf(IRIndexerStore store) =>
+            store.Indices?.Count == 1 && CollectionKindOf(store.Collection?.Type) == CollectionKind.List
+                ? ElementCheck.ListSet
+                : ElementCheck.None;
+
+        /// <summary>
+        /// An element of a real ARRAY. A gep is also built over a receiver that is not an array (the
+        /// IRBuilder's "not a known indexable target" store fallback); what that holds at run time
+        /// is not known here, so it keeps its old spelling.
+        /// </summary>
+        private static bool IsArrayElement(IRGetElementPtr gep) =>
+            gep.BasePointer?.Type?.Kind == TypeKind.Array && gep.Indices?.Count > 0;
+
+        /// <summary>A store through an array gep with N indices reads N-1 levels and writes the last.</summary>
+        private static ElementCheck CheckOfArrayStore(IRGetElementPtr gep) =>
+            ElementCheck.ArraySet | (gep.Indices.Count > 1 ? ElementCheck.ArrayGet : ElementCheck.None);
+
+        /// <summary>
+        /// Every checked access the module lowers: block instructions, plus <c>When</c> guards, which
+        /// are built with emission suppressed and so sit in no block — the blind spot
+        /// <see cref="GuardUsesIntegerDivision"/> covers for <c>\</c>. ⛔ SCANNED up front for the
+        /// reason <see cref="EmitConversionPrelude"/> gives: the prelude precedes every body. A miss
+        /// is refused at the use site (<see cref="RequireElementHelper"/>), never a ReferenceError.
+        /// </summary>
+        private static ElementCheck ElementChecksUsed(IRModule module)
+        {
+            var used = ElementCheck.None;
+            foreach (var function in module?.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        used |= instruction switch
+                        {
+                            IRIndexerAccess ix => CheckOf(ix),
+                            IRIndexerStore store => CheckOf(store),
+                            IRLoad { Address: IRGetElementPtr gep } when IsArrayElement(gep) => ElementCheck.ArrayGet,
+                            IRStore { Address: IRGetElementPtr gep } when IsArrayElement(gep) => CheckOfArrayStore(gep),
+                            IRSwitch sw => GuardElementChecks(sw.PatternCases),
+                            _ => ElementCheck.None,
+                        };
+            return used;
+        }
+
+        private static ElementCheck GuardElementChecks(IEnumerable<IRPatternCase> patterns)
+        {
+            var used = ElementCheck.None;
+            foreach (var pattern in patterns ?? Enumerable.Empty<IRPatternCase>())
+            {
+                if (pattern == null) continue;
+                used |= TreeElementChecks(pattern.WhenGuard);
+                used |= pattern switch
+                {
+                    IROrPatternCase or => GuardElementChecks(or.Alternatives),
+                    IRTuplePatternCase tuple => GuardElementChecks(tuple.Elements),
+                    _ => ElementCheck.None,
+                };
+            }
+            return used;
+        }
+
+        /// <summary>The node kinds a guard's operator tree is rebuilt from, walked for a checked access.</summary>
+        private static ElementCheck TreeElementChecks(IRValue value) => value switch
+        {
+            IRIndexerAccess ix => CheckOf(ix) | TreeElementChecks(ix.Collection) | TreeElementChecks(ix.Indices),
+            IRLoad load => (load.Address is IRGetElementPtr gep && IsArrayElement(gep) ? ElementCheck.ArrayGet : ElementCheck.None)
+                | TreeElementChecks(load.Address),
+            IRGetElementPtr gep => TreeElementChecks(gep.BasePointer) | TreeElementChecks(gep.Indices),
+            IRBinaryOp binary => TreeElementChecks(binary.Left) | TreeElementChecks(binary.Right),
+            IRCast cast => TreeElementChecks(cast.Value),
+            IRCall call => TreeElementChecks(call.Arguments),
+            IRInstanceMethodCall call => TreeElementChecks(call.Object) | TreeElementChecks(call.Arguments),
+            IRCompare compare => TreeElementChecks(compare.Left) | TreeElementChecks(compare.Right),
+            IRIdentityCompare identity => TreeElementChecks(identity.Left) | TreeElementChecks(identity.Right),
+            IRUnaryOp unary => TreeElementChecks(unary.Operand),
+            _ => ElementCheck.None,
+        };
+
+        private static ElementCheck TreeElementChecks(IEnumerable<IRValue> values)
+        {
+            var used = ElementCheck.None;
+            foreach (var v in values ?? Enumerable.Empty<IRValue>()) used |= TreeElementChecks(v);
+            return used;
+        }
+
+        /// <summary>
+        /// The provided exception classes the checked accesses throw, for
+        /// <see cref="JsExceptionTypes.CollectRequired"/>: an uncaught throw must still find its class.
+        /// </summary>
+        internal static IEnumerable<string> ElementCheckExceptions(IRModule module)
+        {
+            var used = ElementChecksUsed(module);
+            if ((used & (ElementCheck.ListGet | ElementCheck.ListSet)) != 0) yield return "ArgumentOutOfRangeException";
+            if ((used & (ElementCheck.ArrayGet | ElementCheck.ArraySet)) != 0) yield return "IndexOutOfRangeException";
+            if ((used & ElementCheck.DictionaryGet) != 0) yield return "KeyNotFoundException";
+        }
+
+        /// <summary>
+        /// One helper per check, emitted only when used. In range, each is one comparison and the
+        /// plain access; out of range, it throws the provided .NET class (<see cref="JsExceptionTypes"/>),
+        /// so <c>Catch ex As ArgumentOutOfRangeException</c> catches it by <c>instanceof</c> and a
+        /// catch-all's <c>Exception.Wrap</c> passes it through unchanged. The message is .NET's.
+        ///
+        /// <para>A List out of range is <c>ArgumentOutOfRangeException</c> and an array
+        /// <c>IndexOutOfRangeException</c>, read and write alike — .NET's own split. A negative index
+        /// fails the same test (<c>-1 &gt;= 0</c> is false), as does a NaN.</para>
+        ///
+        /// <para>A Dictionary read of a missing key is <c>KeyNotFoundException</c>, with the key in
+        /// the message as .NET puts it (a Boolean key as <c>True</c>/<c>False</c>, as .NET prints it).</para>
+        /// </summary>
+        private void EmitElementCheckPrelude(IRModule module)
+        {
+            _elementChecksEmitted = ElementChecksUsed(module);
+            if (_elementChecksEmitted == ElementCheck.None) return;
+
+            var listThrow = $"throw new ArgumentOutOfRangeException(\"{ListIndexMessage}\");";
+            var arrayThrow = $"throw new IndexOutOfRangeException(\"{ArrayIndexMessage}\");";
+
+            void Helper(ElementCheck check, string signature, string inRange, string outOfRange)
+            {
+                if ((_elementChecksEmitted & check) == 0) return;
+                Line($"function {signature} {{");
+                _indentLevel++;
+                Line(inRange);
+                Line(outOfRange);
+                _indentLevel--;
+                Line("}");
+            }
+
+            Helper(ElementCheck.ListGet, $"{ListGetHelperName}(l, i)", "if (i >= 0 && i < l.length) return l[i];", listThrow);
+            Helper(ElementCheck.ListSet, $"{ListSetHelperName}(l, i, v)", "if (i >= 0 && i < l.length) { l[i] = v; return; }", listThrow);
+            Helper(ElementCheck.ArrayGet, $"{ArrayGetHelperName}(a, i)", "if (i >= 0 && i < a.length) return a[i];", arrayThrow);
+            Helper(ElementCheck.ArraySet, $"{ArraySetHelperName}(a, i, v)", "if (i >= 0 && i < a.length) { a[i] = v; return; }", arrayThrow);
+            Helper(ElementCheck.DictionaryGet, $"{DictionaryGetHelperName}(d, k)", "if (d.has(k)) return d.get(k);",
+                "throw new KeyNotFoundException(\"The given key '\" + (typeof k === \"boolean\" ? (k ? \"True\" : \"False\") : String(k)) + \"' was not present in the dictionary.\");");
+            Line();
+        }
+
+        /// <summary>
+        /// The helper's name, after checking that <see cref="ElementChecksUsed"/> emitted it. A miss
+        /// would be "__blListGet is not defined" at run time, so it is refused at build time instead
+        /// (the <see cref="TextOf"/> rule).
+        /// </summary>
+        private string RequireElementHelper(ElementCheck check, string name)
+        {
+            if ((_elementChecksEmitted & check) == 0)
+                throw new InvalidOperationException(
+                    $"JavaScript backend: {name} is needed but ElementChecksUsed did not see it.");
+            return name;
+        }
+
+        /// <summary>An array element READ: one checked level per index, <c>m(i, j)</c> → <c>get(get(m, i), j)</c>.</summary>
+        private string ArrayElementRead(IRGetElementPtr gep)
+        {
+            var rendered = Expr(gep.BasePointer);
+            foreach (var index in gep.Indices)
+                rendered = $"{RequireElementHelper(ElementCheck.ArrayGet, ArrayGetHelperName)}({rendered}, {Expr(index)})";
+            return rendered;
         }
 
         /// <summary>The <see cref="JsPrimitiveStatics"/> helpers, when any row is used (scanned, as above).</summary>
@@ -1312,6 +1528,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // with no side effects; do not extend inlining to nodes that have any.
                 case IRGetElementPtr gep:
                     return ElementAccess(gep);
+                // #207: an array element READ is bounds-checked; the gep itself stays the plain
+                // L-value above (a store goes through Visit(IRStore), which checks its own way).
+                case IRLoad { Address: IRGetElementPtr elementGep } when IsArrayElement(elementGep):
+                    return ArrayElementRead(elementGep);
                 case IRLoad load:
                     return Expr(load.Address);
 
@@ -3301,6 +3521,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // backend declares the local.
             if (store.Address is IRAlloca) return;
 
+            // #207: an array element WRITE is bounds-checked — a plain `a[5] = v` silently GREW the
+            // array. Every level but the last is a checked read; the value is rendered after the
+            // receiver and index, so it is evaluated before the check throws, as .NET's stelem does.
+            if (store.Address is IRGetElementPtr gep && IsArrayElement(gep))
+            {
+                var receiver = Expr(gep.BasePointer);
+                for (var level = 0; level < gep.Indices.Count - 1; level++)
+                    receiver = $"{RequireElementHelper(ElementCheck.ArrayGet, ArrayGetHelperName)}({receiver}, {Expr(gep.Indices[level])})";
+                var last = Expr(gep.Indices[gep.Indices.Count - 1]);
+                Line($"{RequireElementHelper(ElementCheck.ArraySet, ArraySetHelperName)}({receiver}, {last}, {Expr(store.Value)});");
+                return;
+            }
+
             // The destination is an L-VALUE expression, not a previously-bound temp.
             var target = Expr(store.Address);
             var value = Expr(store.Value);
@@ -4591,10 +4824,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // A List index is a plain subscript; a Dictionary lookup is Map.get — `d["k"]` on a
         // Map is NOT an error, it silently returns undefined, which is exactly the kind of
         // wrong-but-running output this backend refuses.
+        //
+        // #207: and so are `l[3]` past the end and `m.get(k)` for a missing key — both answered
+        // undefined where .NET throws. A one-index List or Dictionary read goes through its checked
+        // helper (see EmitElementCheckPrelude); any other shape keeps the plain spelling below.
         private string IndexerAccess(IRIndexerAccess ix)
         {
             var receiver = Expr(ix.Collection);
             var indices = (ix.Indices ?? new List<IRValue>()).ConvertAll(Expr);
+
+            switch (CheckOf(ix))
+            {
+                case ElementCheck.ListGet:
+                    return $"{RequireElementHelper(ElementCheck.ListGet, ListGetHelperName)}({receiver}, {indices[0]})";
+                case ElementCheck.DictionaryGet:
+                    return $"{RequireElementHelper(ElementCheck.DictionaryGet, DictionaryGetHelperName)}({receiver}, {indices[0]})";
+            }
 
             if (CollectionKindOf(ix.Collection?.Type) == CollectionKind.Dictionary)
                 return $"{receiver}.get({string.Join(", ", indices)})";
@@ -4618,6 +4863,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (CollectionKindOf(indexerStore.Collection?.Type) == CollectionKind.Dictionary)
             {
                 Line($"{receiver}.set({string.Join(", ", indices)}, {value});");
+                return;
+            }
+
+            // #207: a plain `l[5] = v` past the end silently GREW the List (holes and all).
+            if (CheckOf(indexerStore) == ElementCheck.ListSet)
+            {
+                Line($"{RequireElementHelper(ElementCheck.ListSet, ListSetHelperName)}({receiver}, {indices[0]}, {value});");
                 return;
             }
 
