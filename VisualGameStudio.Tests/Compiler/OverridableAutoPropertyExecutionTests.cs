@@ -29,8 +29,9 @@ namespace VisualGameStudio.Tests.Compiler;
 ///   overflows) — task #271.</item>
 ///   <item>C++ drops a bare store to a PLAIN (non-Overridable) auto-property (probe V6shared prints <c>10 0 6</c>
 ///   where vbc prints <c>12 4 6</c>) — #254 / PRa.</item>
-///   <item>An auto-property initialiser (<c>Property V As Integer = 4</c>) does not parse — #210.</item>
 /// </list>
+/// <para>(An auto-property initialiser, <c>Property V As Integer = 4</c>, used to be listed here as not parsing; #210 fixed it, and
+/// <c>AutoPropertyInitializerExecutionTests</c> P07 runs it on an Overridable property.)</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]

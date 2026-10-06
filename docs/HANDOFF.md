@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #210 TESTED — an auto-property initializer (`Public Property P As Integer = 7`, ReadOnly / Shared too) parses and runs: instance = `Me.P = const` THROUGH the property after the base call in every constructor (one is synthesized when none is declared), Shared = `IRProperty.Initializer` beside each backend's Shared field initializer, so it runs before a `Shared Sub New` body (`git log --grep '#210'`)
+- **Tests (12 new, 0 moved):** `AutoPropertyInitializerExecutionTests` (Integration, 11 groups of 19 vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 125 = master 124 + 1, #209 may also take 125) + `AutoPropertyInitializerDiagnosticsTests` (fast, 1: BC36714 on a Get/Set and an interface property, BC30439, and the conversion / non-constant refusals as PARITY with the field, since vbc accepts those two). Mutants M1-M6 all killed (fixture headers). `OverridableAutoPropertyExecutionTests` no longer lists #210 as a gap.
+- **Gates (Linux, ilasm / g++ / Node present, one filter each, 0 failed):** fast 12,722 passed / 94 skipped; the fixtures 12, `Initializer` 203, `Property` 1,444 (+3 skipped), `Parser` 77, `Constructor` 341, `SharedConstructor` 14, `OverridableAutoProperty` 16, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): `As New T(...)` on a property and a non-constant initializer are refused as on a field (#236); within a class, field initializers run before property initializers; LLVM; JS has no Decimal / Long (BL7007 / BL7003); C++ drops a bare store to a plain auto-property (#254: P06, Q01, Q03, Q04 skip C++); JS class-field timing (P07p, P20; #234 family); JS overloaded constructors (#238); MSIL generic `As T` (#239); C++ `Inherits Exception` (#151).
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #209 TESTED — a property passed ByRef is copied in and written back out, as VB does (`IRBuilder.CopyOutPropertyArgument` / `CompletePropertyCopyOuts`, `__copyout{n}` carriers, the analyzer's one predicate `IsCopyOutPropertyArgument`; BL4004 inside `MyBase.New`; `git log --grep '#209'`)
 - **Tests (15 new, 3 moved):** `PropertyByRefCopyOutExecutionTests` (Integration, 15: vbc-answered probes on C#, C++, MSIL x CLI / `--optimize` / `CompileProjectFiles`: auto and Get/Set properties with the Get / call / Set ORDER visible, bare / `Me.` / Shared, ReadOnly (no write-back), a Function in an expression, two arguments written back right to left, a call receiver evaluated once, a rebound receiver, an inherited String, every call arm, a lambda, the controls; `MyBase.New`: a Get/Set property is refused BL4004 on all four targets x CLI / `-O` / project, a plain auto-property still runs on C++; ONE JS row, a BL7002 refusal, no Node, so the fixture is under `NotJavaScriptExecution` and the roster count is unchanged). MOVED (renamed, now positive): `MsilByRefTests.{Qualified,BareProperty}Argument_..._IsCopiedInAndWrittenBack` (42) and `BarePropertyLoweringTests.BarePlainAutoPropertyArgument_IsCopiedInAndWrittenBack_OnMsil` (1). Mutants M1-M7 killed (fixture header).
 - **Gates (Linux, on the fix before #208 landed; the landing gate re-ran them on top of #208):** fast 0 failed / 12,719 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 15, `ByRef` 210 (+3 skipped), `BarePropertyLowering` 38, `PropertyAccess` 74, `ConstructorByRef` 14, `MyBaseCallArguments` 12, `OperandEvaluationOrder` 14, `Shared` 201 (+1 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -187,7 +194,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 JavaScript emitted such a property as a class field (own data property, shadows the derived accessor: P16 printed `3,3`, vbc `12,3`); it is now a get/set pair over a `$Class$Prop` slot, and C++'s ReadOnly constructor write stores the data member (was `no member named 'set_P'`).
 - **Tests (13):** `OverridableAutoPropertyExecutionTests` (Integration: 9 JS rows P16/P16q/V1var/V2inside/V3ro/V5bchain/V7ctor/V8order/V9iface + 2 C++ rows V3ro/E24, each through CLI, `-O` and `CompileProjectFiles` against vbc; in `JsExecutionTierRosterTests`, now pinned at 108) + `OverridableAutoPropertyEmissionTests` (fast, 2 JS-text shape tests). Mutants M1 (slot off), M2 (unguarded derived init), M3 (C++ carve-out off) each killed.
 - **Gates (Linux):** fast subset 0 failed / 12,530 passed / 94 skipped; integration, each alone: the new fixture 11, `OverridableProperty` 19, `PropertyAccess` 74, `JavaScriptClass` 13, `BarePropertyLowering` 38, `JsExecutionTierRosterTests` 5 - 0 failed, 0 skipped. The full suite was NOT run. Windows owes the MSVC/MSIL legs.
-- **Follow-ups (not fixed, listed in the fixture header):** `MyBase.P` on a property dispatches to the override on all four backends (V4autoboth `5,5` for `5,0`; V5grand recurses) — #271; C++ drops a bare store to a plain auto-property (V6shared, #254/PRa); an auto-property initializer (`= 4`) does not parse (#210).
+- **Follow-ups (not fixed, listed in the fixture header):** `MyBase.P` on a property dispatches to the override on all four backends (V4autoboth `5,5` for `5,0`; V5grand recurses) — #271; C++ drops a bare store to a plain auto-property (V6shared, #254/PRa); an auto-property initializer (`= 4`) did not parse (#210) — FIXED 2026-10-06, see the #210 section at the top.
 
 ---
 
@@ -4797,8 +4804,8 @@ single new failure against the 170-name baseline.
   ⚠ **A NON-LITERAL initializer was dropped in the IR, for every backend — FIXED as of
   2026-09-18**, see the entry below. It is why every test in the two field-initializer fixtures
   uses a plain literal.
-  ⚠ **An auto-property initializer does not PARSE**: `Public Property X As Integer = 5` is
-  "Unexpected token in class: '='".
+  ⚠ **An auto-property initializer did not PARSE** (`Public Property X As Integer = 5` was
+  "Unexpected token in class: '='") — FIXED 2026-10-06 (#210), see the #210 section at the top.
   ⚠ **The initializer-before-array-sizing precedence is UNREACHABLE, not load-bearing** — measured:
   the analyzer refuses an initializer on an array-typed field at all ("Cannot assign value of type
   'Integer' to variable of type 'Integer[]'"), so no field carries both and swapping the two arms
@@ -6816,8 +6823,8 @@ single new failure against the 170-name baseline.
     - #208-#210 were filed while briefing #178 (ReadOnly/WriteOnly diagnostics), not by #177:
       **#208** `Shared Sub New` never ran on any backend (a Shared field it sets read 0) — FIXED 2026-10-06, see the #208 section at the top;
       **#209** a property passed ByRef loses VB's copy-back (C++ silently, C# CS0206, MSIL
-      refuses); **#210** an auto-property initializer (`Property P As Integer = 7`) does not
-      parse.
+      refuses); **#210** an auto-property initializer (`Property P As Integer = 7`) did not
+      parse — FIXED 2026-10-06, see the #210 section at the top.
 - ⭐ **Newest — #164 DONE (fix committed `151a8137`).** A multi-line `Function(...) [As T] ...
   End Function` lambda used to fail in the front end on EVERY backend and entry point (measured:
   96/96 cells across probe.py's 4 backends × CLI/CLI `-O`/Release `.blproj` matrix). Two defects:
