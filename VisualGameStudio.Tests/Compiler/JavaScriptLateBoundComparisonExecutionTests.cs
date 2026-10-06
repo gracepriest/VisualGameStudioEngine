@@ -46,8 +46,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * The InvalidCastException MESSAGE for an operand that is no primitive (a class instance, an array) only approximates VB's wording; the primitive-to-primitive messages are asserted (P05).
 //    * A currency symbol is not parsed (`"$5" = 5` throws where VB's ToDouble accepts it under a currency culture).
 //    * An `&H` / `&O` string past 64 bits throws InvalidCastException where VB throws OverflowException.
-//    * An Object holding Nothing compared with a number once the optimizer has propagated the Nothing literal into the comparison (`Dim n As Object = Nothing : n = 0`, `n < 1`, `n = False`) is #214's known gap: False where vbc
-//      prints True. On JavaScript it is the Nothing-literal exemption in `CopyPropagationPass.KeepsLateBinding` alone: without it the helper answers vbc's True (the M2 note in `ObjectComparisonUnderOptimizerExecutionTests`).
+//    * (WAS: an Object holding Nothing compared with a number once the optimizer had propagated the Nothing literal into the comparison, `Dim n As Object = Nothing : n = 0` / `n < 1` / `n = False` False where vbc
+//      prints True.) FIXED by #300: `CopyPropagationPass.KeepsLateBinding` no longer exempts the Nothing literal, so the variable reaches this helper, which answers vbc's True. Asserted on JavaScript, C# and MSIL by
+//      `ObjectComparisonUnderOptimizerExecutionTests` (`…AnObjectHoldingNothing_…`, `…AnObjectAssignedNothing_…`).
 //    * C++ has no Object at all ("Object has no C++ mapping"), so there is nothing to compare there; LLVM has no console.
 //
 //  ⚠ Named "…ExecutionTests" and every row spawns Node, so it is in JsExecutionTierRosterTests' roster. JavaScriptLateBoundComparisonShapeTests (no process, no [Category("Integration")]) is NOT.
