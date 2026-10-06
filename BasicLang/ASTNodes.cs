@@ -704,6 +704,18 @@ namespace BasicLang.Compiler.AST
         public bool IsAuto { get; set; }
 
         /// <summary>
+        /// #210: the <c>= value</c> of <c>Public Property P As Integer = 7</c>, or null. Legal only
+        /// on an auto-property of a class: the analyzer refuses it on a property with a Get/Set
+        /// block and on an interface property, as vbc does (BC36714).
+        ///
+        /// <para>VB runs it where a field initializer runs — an instance one in every constructor
+        /// after the base call, a Shared one in the type initializer — and, measured against vbc,
+        /// as an assignment THROUGH THE PROPERTY: an Overridable one dispatches to a derived
+        /// class's setter. <c>IRBuilder</c> lowers it so (see its <c>EmitPropertyInitializers</c>).</para>
+        /// </summary>
+        public ExpressionNode Initializer { get; set; }
+
+        /// <summary>
         /// ⭐ ADR-0007's "ACCESSOR-BACKED": reading or writing this property may run USER CODE —
         /// it declares a Get or Set block, or it is Overridable/Overrides, so a derived class's
         /// accessor may run in its place (an Overrides member is itself overridable).

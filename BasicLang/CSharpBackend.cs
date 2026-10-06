@@ -1485,18 +1485,24 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // syntax, so emit that and let the C# compiler own the backing field.
             if (prop.Getter == null && prop.Setter == null)
             {
+                // #210: a SHARED initializer, spelled as a Shared field's is (` = 3`, EmitConstant);
+                // IRProperty.Initializer is null for an instance property, whose initializer is a
+                // store in its constructors.
+                var init = prop.Initializer is IRConstant initial ? $" = {EmitConstant(initial)}" : "";
+
                 // WriteOnly has no auto form: C# requires a get accessor on an
                 // auto-property (CS8051), so `{ set; }` would not compile. Emit an explicit
                 // backing field instead of silently producing a broken file.
                 if (prop.IsWriteOnly)
                 {
                     var backing = SanitizeName("__" + prop.Name);
-                    WriteLine($"private {staticMod}{type} {backing};");
+                    WriteLine($"private {staticMod}{type} {backing}{init};");
                     WriteLine($"{access} {staticMod}{virtualMod}{type} {name} {{ set {{ {backing} = value; }} }}");
                     return;
                 }
 
-                WriteLine($"{access} {staticMod}{virtualMod}{type} {name} {{ {(prop.IsReadOnly ? "get;" : "get; set;")} }}");
+                WriteLine($"{access} {staticMod}{virtualMod}{type} {name} {{ {(prop.IsReadOnly ? "get;" : "get; set;")} }}"
+                          + (init.Length > 0 ? init + ";" : ""));
                 return;
             }
 

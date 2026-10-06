@@ -1260,10 +1260,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return;
                 }
 
+                // #210: a SHARED initializer, spelled and placed as a Shared field's is (Expr) — in
+                // the guarded `$C$P` slot when the class has a type initializer (#208), so it is set
+                // before the `Shared Sub New` body runs. Null for an instance property, whose
+                // initializer is a store in its constructor.
+                var initial = prop.Initializer != null ? Expr(prop.Initializer) : TypeMapper.GetDefaultValue(prop.Type);
                 if (prop.IsStatic && _typeInitGuard != null)
-                    EmitGuardedStatic(SanitizeName(prop.Name), TypeMapper.GetDefaultValue(prop.Type));
+                    EmitGuardedStatic(SanitizeName(prop.Name), initial);
                 else
-                    Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {TypeMapper.GetDefaultValue(prop.Type)};");
+                    Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {initial};");
                 return;
             }
 
