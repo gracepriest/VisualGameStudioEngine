@@ -2105,6 +2105,229 @@ namespace BasicLang.Compiler.IR
             _ => false,
         };
 
+        // ====================================================================
+        // #209 — a PROPERTY passed ByRef: VB's copy-in / copy-out
+        // ====================================================================
+
+        /// <summary>
+        /// One property argument of one call that is passed to a <c>ByRef</c> parameter and has
+        /// to be written back once the call returns (see <see cref="CopyOutPropertyArgument"/>).
+        /// </summary>
+        private sealed class PropertyCopyOut
+        {
+            /// <summary>The written argument: <c>b.P</c> / <c>Me.P</c> / <c>Box.P</c>, or a bare <c>P</c>.</summary>
+            public ExpressionNode Argument;
+            /// <summary>The local the property's value was read into and passed by reference.</summary>
+            public IRVariable Carrier;
+            /// <summary>The carrier's assignment — where the getter's value was taken.</summary>
+            public IRAssignment Anchor;
+            /// <summary>Qualified form only: the receiver the getter ran on, and its spelling.</summary>
+            public IRValue Receiver;
+            public string MemberName;
+            /// <summary>Qualified form only: the receiver as a #203 operand read, for a receiver
+            /// variable the call itself may rebind (<c>Swap(b.P, b)</c>).</summary>
+            public OperandRead ReceiverRead;
+        }
+
+        /// <summary>Numbers the <c>__copyout{n}</c> carriers of <see cref="CopyOutPropertyArgument"/>
+        /// and <see cref="PinCopyOutOperand"/>.</summary>
+        private int _copyOutCounter;
+
+        /// <summary>The constructor whose <c>MyBase.New(...)</c> arguments are being lowered — its
+        /// prologue (ADR-0016) — or null. A lambda in those arguments is a function of its own and is
+        /// not the prologue.</summary>
+        private IRFunction _baseConstructorPrologue;
+
+        /// <summary>Whether <paramref name="argument"/> is a property this call copies in and back out —
+        /// the analyzer's one answer (<see cref="SemanticAnalyzer.IsCopyOutPropertyArgument"/>), shared
+        /// with its BL4004 refusal. In a <c>MyBase.New</c> argument list (the constructor's prologue,
+        /// <see cref="_baseConstructorPrologue"/>; a lambda there is a function of its own) only an
+        /// accessor-backed property is one: a plain auto-property lowers there exactly as before #209.</summary>
+        private bool IsPropertyArgument(ExpressionNode argument, out bool writable)
+        {
+            writable = false;
+            return _semanticAnalyzer != null && _semanticAnalyzer.IsCopyOutPropertyArgument(argument,
+                inBaseConstructorArguments: _currentFunction != null
+                    && ReferenceEquals(_currentFunction, _baseConstructorPrologue),
+                out writable);
+        }
+
+        /// <summary>
+        /// ⭐ #209 — VB's rule for a PROPERTY passed to a <c>ByRef</c> parameter: a property is an
+        /// accessor call, not storage, so VB reads it (the Get) into a temporary, passes the
+        /// temporary by reference, and after the call writes the temporary back through the Set —
+        /// Get, then the call, then Set. A <c>ReadOnly</c> property is read and passed the same way
+        /// and NOT written back, with no diagnostic.
+        ///
+        /// <para>⛔ Before, the IR passed the property's value — the getter's temp, or the
+        /// property's bare name — as if it were storage, and each backend did something different
+        /// with it: C++ wrote the callee's change into the getter's temp and dropped it (a silent
+        /// wrong answer — <c>Bump(b.P)</c> printed 10 for 22), C# emitted <c>ref b.P</c> (CS0206),
+        /// MSIL refused it, and C++ passed a plain auto-property's FIELD, which is right at the end
+        /// but lets the callee see its own writes through the object mid-call, which VB's copy does
+        /// not.</para>
+        ///
+        /// <para>Here the value is copied into a carrier, <c>__copyout{n}</c>, declared exactly as the
+        /// <c>__copyin</c> and <c>__snap</c> carriers are (pushed, so the name is reserved —
+        /// ADR-0018 — and in <see cref="IRFunction.LocalVariables"/>, so every backend declares it),
+        /// and the carrier stands in for the argument: an ordinary local passed by reference, which
+        /// every backend already handles. A writable property is recorded in
+        /// <paramref name="copyOuts"/>; <see cref="CompletePropertyCopyOuts"/> writes it back after
+        /// the call. Returns the value unchanged for anything it was not taught — the argument
+        /// then lowers exactly as before.</para>
+        ///
+        /// <para>⚠ The carrier is NOT flagged <see cref="IRVariable.IsByRefCopyIn"/>: that flag means
+        /// "VB discards the write-back", which JavaScript and the C# constructor path render by
+        /// value, and a writable property's write-back is the point. JavaScript still refuses a
+        /// ByRef parameter (BL7002).</para>
+        /// </summary>
+        private IRValue CopyOutPropertyArgument(ExpressionNode argument, IRValue value, bool writable,
+            ref List<PropertyCopyOut> copyOuts)
+        {
+            if (_currentFunction == null || _currentBlock == null || _suppressEmit) return value;
+            if (value?.Type == null || value.Type.Kind == TypeKind.Foreign) return value;
+
+            // The shapes the read lowers to: the qualified form is always the getter's
+            // IRFieldAccess; the bare form is that same node (an accessor-backed property, ADR-0007)
+            // or the property's name as a variable (a plain auto-property).
+            var getter = value as IRFieldAccess;
+            if (argument is MemberAccessExpressionNode && getter == null) return value;
+            if (argument is IdentifierExpressionNode && getter == null && value is not IRVariable) return value;
+
+            var carrier = DeclareCopyOutCarrier(value.Type);
+            var anchor = new IRAssignment(carrier, value);
+            EmitInstruction(anchor);
+            if (!writable) return carrier;
+
+            var copyOut = new PropertyCopyOut { Argument = argument, Carrier = carrier, Anchor = anchor };
+            if (argument is MemberAccessExpressionNode member)
+            {
+                copyOut.Receiver = getter.Object;
+                copyOut.MemberName = getter.FieldName;
+                // A REFERENCE-typed receiver is the object VB writes back to, taken before the
+                // call: a value-typed one must be written in place, never through a copy.
+                var receiverKind = getter.Object?.Type?.Kind;
+                if (receiverKind == TypeKind.Class || receiverKind == TypeKind.Interface)
+                    copyOut.ReceiverRead = ReadOperand(member.Object, getter.Object);
+            }
+
+            (copyOuts ??= new List<PropertyCopyOut>()).Add(copyOut);
+            return carrier;
+        }
+
+        /// <summary>A <c>__copyout{n}</c> carrier: declared as the <c>__snap</c> carriers are.</summary>
+        private IRVariable DeclareCopyOutCarrier(TypeInfo type)
+        {
+            var carrier = CreateVariable($"__copyout{_copyOutCounter++}", type, _nextVersion++);
+            PushVariableVersion(carrier.Name, carrier);
+            _currentFunction.LocalVariables.Add(carrier);
+            return carrier;
+        }
+
+        /// <summary>
+        /// Takes <paramref name="value"/> — an operand already built — into a <c>__copyout{n}</c>
+        /// carrier HERE, and returns the carrier to stand in for it; anything that is not an
+        /// instruction's result (a constant, a variable), or has no declarable type, comes back
+        /// unchanged. A call is RENAMED to the carrier (<see cref="TryRenameToVariable"/>), as a
+        /// <c>Dim</c> initialiser is, so it stays one statement.
+        ///
+        /// <para>Needed because the C# backend inlines a single-use value at its USE: the carrier's
+        /// assignment and the write-back are statements, so without this <c>Two(Seed(1), b.P)</c>
+        /// ran the property's Get before <c>Seed(1)</c>, and <c>r = F(b.P) + 1</c> ran the Set
+        /// before <c>F</c>. Every other backend evaluates a temp where it stands, and the copy is
+        /// only a copy there.</para>
+        /// </summary>
+        private IRValue PinCopyOutOperand(IRValue value)
+        {
+            if (value == null || value is IRConstant || value is IRVariable) return value;
+            if (value.Type == null || value.Type.Kind == TypeKind.Foreign
+                || string.Equals(value.Type.Name, "Void", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrEmpty(value.Name)) return value;
+            if (_currentFunction == null || _currentBlock == null || _suppressEmit) return value;
+            // The base call's prologue is closed and expression-only (ADR-0016 D5(c)): a renamed call
+            // is a write it does not admit, and C# — the backend a pin is for — refuses any
+            // prologue statement by name anyway.
+            if (ReferenceEquals(_currentFunction, _baseConstructorPrologue)) return value;
+
+            var carrier = DeclareCopyOutCarrier(value.Type);
+            if (!TryRenameToVariable(value, carrier))
+                EmitInstruction(new IRAssignment(carrier, value));
+            return carrier;
+        }
+
+        /// <summary>
+        /// Before a property argument's Get runs, every EARLIER by-value argument (from index
+        /// <paramref name="from"/>) is taken (<see cref="PinCopyOutOperand"/>): VB evaluates the
+        /// arguments left to right. A ByRef argument is never copied — it passes storage.
+        /// </summary>
+        private void PinArgumentsBeforePropertyRead(List<IRValue> arguments, List<bool> byRefFlags, int from)
+        {
+            for (var i = Math.Max(from, 0); i < arguments.Count; i++)
+            {
+                if (i < byRefFlags.Count && byRefFlags[i]) continue;
+                arguments[i] = PinCopyOutOperand(arguments[i]);
+            }
+        }
+
+        /// <summary>Whether any argument of a call to <paramref name="callee"/> is a property passed
+        /// to a ByRef parameter — asked before the receiver of an instance call is consumed.</summary>
+        private bool HasPropertyByRefArgument(IList<ExpressionNode> written, Symbol callee)
+        {
+            for (var i = 0; i < written.Count; i++)
+                if (IsByRefParameter(callee, i) && IsPropertyArgument(written[i], out _)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// ⭐ #209 — the copy-OUT half, called right after the call instruction is emitted:
+        /// each writable property argument recorded by <see cref="CopyOutPropertyArgument"/> is
+        /// stored back through its setter — the IRFieldStore <c>b.P = v</c> produces, or for a bare
+        /// name whatever <c>P = v</c> lowers to (<see cref="EmitStoreToTarget"/>). Returns what
+        /// stands for the call's value: <paramref name="call"/> itself when nothing is written
+        /// back (and then nothing is emitted, so every other call is byte-identical), else a
+        /// carrier holding the result, taken BEFORE the first Set (see
+        /// <see cref="PinCopyOutOperand"/>).
+        ///
+        /// <para>⚠ Written back RIGHT TO LEFT. Measured with vbc: <c>Two(b.P, b.Q)</c> runs
+        /// <c>set Q</c> before <c>set P</c>, and <c>Two(b.P, b.P)</c> leaves P holding the FIRST
+        /// argument's value.</para>
+        ///
+        /// <para>The qualified form is written to the receiver the getter ran on — evaluated once,
+        /// so <c>Bump(GetBox().P)</c> calls GetBox once — and a receiver VARIABLE the call itself
+        /// may rebind (<c>Swap(b.P, b)</c>, b ByRef) is taken before the call by #203's own
+        /// <see cref="ValueBeforeLaterOperands"/>: VB writes back to the object it read.</para>
+        /// </summary>
+        private IRValue CompletePropertyCopyOuts(IRValue call, List<PropertyCopyOut> copyOuts)
+        {
+            if (copyOuts == null || copyOuts.Count == 0) return call;
+
+            var result = PinCopyOutOperand(call);
+
+            for (var i = copyOuts.Count - 1; i >= 0; i--)
+            {
+                var copyOut = copyOuts[i];
+                if (copyOut.Argument is IdentifierExpressionNode bare)
+                {
+                    EmitStoreToTarget(bare, copyOut.Carrier);
+                    continue;
+                }
+
+                var receiver = copyOut.Receiver;
+                if (copyOut.ReceiverRead.Variable != null)
+                {
+                    // The receiver read was recorded right after the carrier's assignment; #203's
+                    // own copies may since have been inserted ahead of it, so re-anchor it there.
+                    var at = copyOut.ReceiverRead.Block.Instructions.IndexOf(copyOut.Anchor);
+                    if (at >= 0)
+                        receiver = ValueBeforeLaterOperands(copyOut.ReceiverRead.At(at + 1), receiver);
+                }
+
+                EmitInstruction(new IRFieldStore(receiver, copyOut.MemberName, copyOut.Carrier));
+            }
+
+            return result;
+        }
+
         /// <summary>
         /// The IRFunction a class member's visit DECLARED: the one <c>CreateFunction</c>
         /// appended at the index <c>Functions</c> had just before the visit.
@@ -2542,6 +2765,7 @@ namespace BasicLang.Compiler.IR
             // IRBaseConstructorCall before any of the body (ADR-0016 D1).
             var baseArgs = new List<IRValue>();
             var baseByRef = new List<bool>();
+            List<PropertyCopyOut> baseCopyOuts = null;   // #209
             if (node.IsShared)
             {
                 // A type initializer calls no base constructor: the analyzer refuses MyBase.New in
@@ -2561,15 +2785,37 @@ namespace BasicLang.Compiler.IR
                 // ⚠ Not LowerMethodCallArguments, though it records ByRef the same way: this arm
                 // skips an argument that lowered to nothing and has never packed a ParamArray, and
                 // the helper does neither — routing it there would change both (#144).
-                foreach (var arg in node.BaseConstructorArgs)
+                // #209: here (and in a call nested in these arguments) only an ACCESSOR-BACKED
+                // property is copied in (IsPropertyArgument): a ReadOnly one gets a carrier the
+                // prologue assigns and only the call uses (ADR-0016 D5(c)); a WRITABLE one never
+                // reaches this — its write-back cannot run inside the base call, and the analyzer
+                // refuses it (BL4004). A plain auto-property lowers exactly as before #209. Nothing
+                // is pinned here (PinCopyOutOperand): a pin is a renamed call, which the closed
+                // prologue does not admit.
+                var outerPrologue = _baseConstructorPrologue;
+                _baseConstructorPrologue = _currentFunction;
+                try
                 {
-                    arg.Accept(this);
-                    if (_expressionResult != null)
+                    foreach (var arg in node.BaseConstructorArgs)
                     {
-                        baseArgs.Add(CoerceToParameterType(
-                            _expressionResult, baseCtor, baseArgs.Count));
-                        baseByRef.Add(IsByRefParameter(baseCtor, baseArgs.Count - 1));
+                        var baseWritable = false;
+                        var baseProperty = IsByRefParameter(baseCtor, baseArgs.Count)
+                            && IsPropertyArgument(arg, out baseWritable);
+                        arg.Accept(this);
+                        if (_expressionResult != null)
+                        {
+                            baseArgs.Add(CoerceToParameterType(
+                                _expressionResult, baseCtor, baseArgs.Count));
+                            baseByRef.Add(IsByRefParameter(baseCtor, baseArgs.Count - 1));
+                            if (baseProperty)
+                                baseArgs[baseArgs.Count - 1] = CopyOutPropertyArgument(arg, baseArgs[baseArgs.Count - 1],
+                                    baseWritable, ref baseCopyOuts);
+                        }
                     }
+                }
+                finally
+                {
+                    _baseConstructorPrologue = outerPrologue;
                 }
 
                 AppendOmittedOptionalArguments(baseArgs, baseByRef, baseCtor);
@@ -2585,6 +2831,7 @@ namespace BasicLang.Compiler.IR
                 CopyInByRefArguments(baseArgs, baseByRef, implicitBase);
             }
             EmitBaseConstructorCall(baseArgs, baseByRef);
+            CompletePropertyCopyOuts(null, baseCopyOuts);   // #209: after the base call, before the body
 
             // Generate body
             if (node.Body != null)
@@ -4971,30 +5218,40 @@ namespace BasicLang.Compiler.IR
         /// <para>⛔ ONE path for both arms. The base-call arm used to add the bare argument values
         /// and nothing else, so <c>MyBase.M</c> lost all four facts an instance call carries
         /// (#142/#265/#213).</para>
+        ///
+        /// <para>Returns the property arguments to write back once the caller has emitted the call
+        /// (#209, <see cref="CompletePropertyCopyOuts"/>); null when there are none.</para>
         /// </summary>
-        private void LowerMethodCallArguments(
+        private List<PropertyCopyOut> LowerMethodCallArguments(
             IList<ExpressionNode> written, Symbol methodSymbol,
             List<IRValue> arguments, List<bool> byRefFlags, bool packParamArray)
         {
             // #203: each argument's value is taken before a later one runs (reads[i] is arguments[i]).
             var reads = new List<OperandRead>();
             for (int i = 0; i < arguments.Count; i++) reads.Add(default);
+            var firstWritten = arguments.Count;
+            List<PropertyCopyOut> copyOuts = null;
             foreach (var arg in written)
             {
+                var byRef = IsByRefParameter(methodSymbol, arguments.Count);
+                var writable = false;
+                var property = byRef && IsPropertyArgument(arg, out writable);
+                if (property) PinArgumentsBeforePropertyRead(arguments, byRefFlags, firstWritten);   // #209
+
                 arg.Accept(this);
                 arguments.Add(CoerceToParameterType(_expressionResult, methodSymbol, arguments.Count));
-
-                var methodParams = methodSymbol?.Parameters;
-                byRefFlags.Add(
-                    methodParams != null && arguments.Count - 1 < methodParams.Count
-                    && methodParams[arguments.Count - 1].IsByRef);
-                reads.Add(ReadOperand(arg, arguments[arguments.Count - 1], byRefFlags[byRefFlags.Count - 1]));
+                byRefFlags.Add(byRef);
+                if (property)
+                    arguments[arguments.Count - 1] = CopyOutPropertyArgument(arg, arguments[arguments.Count - 1],
+                        writable, ref copyOuts);
+                reads.Add(ReadOperand(arg, arguments[arguments.Count - 1], byRef));
             }
             ReadOperandsInOrder(arguments, reads);
 
             if (packParamArray)
                 PackParamArrayArguments(arguments, byRefFlags, methodSymbol, written);
             AppendOmittedOptionalArguments(arguments, byRefFlags, methodSymbol);
+            return copyOuts;
         }
 
         /// <summary>
@@ -5811,6 +6068,11 @@ namespace BasicLang.Compiler.IR
             public int Index { get; }
             public int BlockCount { get; }
             public int SourceLine { get; }
+
+            /// <summary>The same read, re-anchored at <paramref name="index"/> in its block — for a
+            /// read recorded before other copies were inserted ahead of it (#209).</summary>
+            public OperandRead At(int index) =>
+                new(Variable, Storage, Function, Block, index, BlockCount, SourceLine);
         }
 
         /// <summary>Numbers the <c>__snap{n}</c> carriers of <see cref="ValueBeforeLaterOperands"/>.</summary>
@@ -6960,11 +7222,11 @@ namespace BasicLang.Compiler.IR
                     // construction (see IRBaseMethodCall), so a ParamArray tail is always packed.
                     var baseCall = new IRBaseMethodCall(tempName, DeclaredMemberSpelling(memberExpr), returnType);
 
-                    LowerMethodCallArguments(node.Arguments, _semanticAnalyzer.GetNodeSymbol(memberExpr),
+                    var baseCopyOuts = LowerMethodCallArguments(node.Arguments, _semanticAnalyzer.GetNodeSymbol(memberExpr),
                         baseCall.Arguments, baseCall.ByRefArguments, packParamArray: true);
 
                     EmitInstruction(baseCall);
-                    _expressionResult = baseCall;
+                    _expressionResult = CompletePropertyCopyOuts(baseCall, baseCopyOuts);   // #209
                     return;
                 }
 
@@ -7121,11 +7383,26 @@ namespace BasicLang.Compiler.IR
                     // reads ByRef from.
                     var staticCalleeSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
                     var staticReads = new List<OperandRead>(node.Arguments.Count);
+                    List<PropertyCopyOut> staticCopyOuts = null;
                     foreach (var arg in node.Arguments)
                     {
+                        // #209: whether this argument is a property passed by reference — the same
+                        // two sources the ByRef flag below is read from, asked before the visit.
+                        var staticIndex = call.Arguments.Count;
+                        var staticNetParameters = call.ResolvedNetTarget?.Parameters;
+                        var staticByRef = (staticNetParameters != null && staticIndex < staticNetParameters.Count
+                                && staticNetParameters[staticIndex].RefKind != BasicLang.Net.NetRefKind.None)
+                            || (call.ResolvedNetTarget == null && IsByRefParameter(staticCalleeSymbol, staticIndex));
+                        var staticWritable = false;
+                        var staticProperty = staticByRef && IsPropertyArgument(arg, out staticWritable);
+                        if (staticProperty) PinArgumentsBeforePropertyRead(call.Arguments, call.ByRefArguments, 0);
+
                         arg.Accept(this);
                         call.Arguments.Add(CoerceToParameterType(
                             _expressionResult, staticCalleeSymbol, call.Arguments.Count));
+                        if (staticProperty)
+                            call.Arguments[staticIndex] = CopyOutPropertyArgument(arg, call.Arguments[staticIndex],
+                                staticWritable, ref staticCopyOuts);
 
                         // P2a-2 Task 8: ByRefArguments was populated only for resolved USER
                         // functions (funcSymbol.Parameters[i].IsByRef, below). A resolved .NET
@@ -7178,7 +7455,7 @@ namespace BasicLang.Compiler.IR
                     }
 
                     EmitInstruction(call);
-                    _expressionResult = call;
+                    _expressionResult = CompletePropertyCopyOuts(call, staticCopyOuts);   // #209
                 }
                 else
                 {
@@ -7201,13 +7478,20 @@ namespace BasicLang.Compiler.IR
                             : BoundaryTypeCategory.Unknown;
                     }
 
+                    // #209: the receiver is evaluated before any argument, so a property argument's
+                    // Get must not overtake a call that produced it (the C# backend inlines one).
+                    var instanceCallee = _semanticAnalyzer.GetNodeSymbol(memberExpr);
+                    if (obj is IRCall or IRInstanceMethodCall or IRNewObject or IRBaseMethodCall
+                        && HasPropertyByRefArgument(node.Arguments, instanceCallee))
+                        methodCall.Object = PinCopyOutOperand(obj);
+
                     // A .NET method's `params` is csc's to pack; only a user callee is packed here.
-                    LowerMethodCallArguments(node.Arguments, _semanticAnalyzer.GetNodeSymbol(memberExpr),
+                    var instanceCopyOuts = LowerMethodCallArguments(node.Arguments, instanceCallee,
                         methodCall.Arguments, methodCall.ByRefArguments,
                         packParamArray: methodCall.ResolvedNetTarget == null);
 
                     EmitInstruction(methodCall);
-                    _expressionResult = methodCall;
+                    _expressionResult = CompletePropertyCopyOuts(methodCall, instanceCopyOuts);   // #209
                 }
             }
             else if (node.Callee is IdentifierExpressionNode idExpr)
@@ -7365,17 +7649,23 @@ namespace BasicLang.Compiler.IR
             call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
             var reads = new List<OperandRead>(node.Arguments.Count);
+            List<PropertyCopyOut> copyOuts = null;
             for (int i = 0; i < node.Arguments.Count; i++)
             {
-                node.Arguments[i].Accept(this);
-                call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
-
                 bool isByRef = false;
                 if (funcSymbol?.Parameters != null && i < funcSymbol.Parameters.Count)
                 {
                     isByRef = funcSymbol.Parameters[i].IsByRef;
                 }
+                var writable = false;
+                var property = isByRef && IsPropertyArgument(node.Arguments[i], out writable);
+                if (property) PinArgumentsBeforePropertyRead(call.Arguments, call.ByRefArguments, 0);   // #209
+
+                node.Arguments[i].Accept(this);
+                call.Arguments.Add(CoerceToParameterType(_expressionResult, funcSymbol, i));
                 call.ByRefArguments.Add(isByRef);
+                if (property)
+                    call.Arguments[i] = CopyOutPropertyArgument(node.Arguments[i], call.Arguments[i], writable, ref copyOuts);
                 reads.Add(ReadOperand(node.Arguments[i], call.Arguments[i], isByRef));
             }
             ReadOperandsInOrder(call.Arguments, reads);   // #203
@@ -7384,7 +7674,7 @@ namespace BasicLang.Compiler.IR
             AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
 
             EmitInstruction(call);
-            _expressionResult = call;
+            _expressionResult = CompletePropertyCopyOuts(call, copyOuts);   // #209
         }
 
         public void Visit(ArrayAccessExpressionNode node)
@@ -7485,13 +7775,13 @@ namespace BasicLang.Compiler.IR
             // constructor's parameters, ByRef recorded, a ParamArray packed (not for a .NET
             // constructor — csc's to pack) and omitted Optionals filled. Without the ByRef flags
             // `New Box(p)` into `Sub New(ByRef n)` was passed by value on every backend.
-            LowerMethodCallArguments(node.Arguments, ctorSymbol, newObj.Arguments, newObj.ByRefArguments,
-                packParamArray: newObj.ResolvedNetTarget == null);
+            var ctorCopyOuts = LowerMethodCallArguments(node.Arguments, ctorSymbol, newObj.Arguments,
+                newObj.ByRefArguments, packParamArray: newObj.ResolvedNetTarget == null);
             if (newObj.ResolvedNetTarget == null)
                 CopyInByRefArguments(newObj.Arguments, newObj.ByRefArguments, ctorSymbol);
 
             EmitInstruction(newObj);
-            _expressionResult = newObj;
+            _expressionResult = CompletePropertyCopyOuts(newObj, ctorCopyOuts);   // #209
         }
 
         public void Visit(CastExpressionNode node)
