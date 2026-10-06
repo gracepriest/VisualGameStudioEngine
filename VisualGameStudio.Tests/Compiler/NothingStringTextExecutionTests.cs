@@ -544,8 +544,9 @@ public class NothingStringTextExecutionTests
 
     /// <summary>
     /// E10 — a native (out-of-bounds List index) exception whose message is read once directly
-    /// and once through a lambda captured in the SAME Catch, then compared. All three backends that
-    /// run it print <c>same=True</c> — the two reads see the same message. MSIL used to print
+    /// and once through a lambda captured in the SAME Catch, then compared. All four backends print
+    /// <c>same=True</c> — the two reads see the same message (JavaScript only since #207: its List read
+    /// used to return <c>undefined</c> instead of throwing, see the JavaScript test below). MSIL used to print
     /// <c>same=False</c>, filed as #205 and first guessed to be a closure / catch-message bug. It was
     /// not: MSIL compared Strings with <c>ceq</c>, a REFERENCE compare, and the two reads are two
     /// separate string objects with equal text. #206 lowers every String equality to
@@ -581,28 +582,31 @@ public class NothingStringTextExecutionTests
     }
 
     /// <summary>
-    /// E10's OWN JavaScript leg is not "wrong" in the same sense — it does not run to the point of
-    /// comparing messages at all. <c>List(Of Integer)</c> in JS is a real JS array with no bounds
-    /// check on read: <c>a(3)</c> on an array with nothing added returns <c>undefined</c> rather
-    /// than throwing, so the <c>Try</c> never enters its <c>Catch</c>, <c>f</c> stays <c>Nothing</c>,
-    /// and <c>f()</c> after the Try throws an UNCAUGHT <c>TypeError: f is not a function</c>. This
-    /// is a JavaScript List-bounds gap, not a #189 one — pinned here against task #207 (filed from
-    /// this measurement). A DIFFERENT outcome means #207 moved — update this pin, do not delete it.
+    /// E10's OWN JavaScript leg, now the fourth backend that prints <c>same=True</c>. Until #207 it did
+    /// not run to the point of comparing messages at all: <c>List(Of Integer)</c> in JS is a real JS
+    /// array and a read of it was unchecked, so <c>a(3)</c> on an array with nothing added returned
+    /// <c>undefined</c> instead of throwing, the <c>Try</c> never entered its <c>Catch</c>, <c>f</c>
+    /// stayed <c>Nothing</c>, and <c>f()</c> after the Try died with an UNCAUGHT
+    /// <c>TypeError: f is not a function</c>. That was a JavaScript List-bounds gap, not a #189 one.
+    /// #207 routes the read through <c>__blListGet</c>, which throws .NET's
+    /// <c>ArgumentOutOfRangeException</c> with .NET's message, so the <c>Catch</c> runs, the lambda is
+    /// assigned and both reads of <c>ex.Message</c> see the same text. This used to PIN the
+    /// <c>undefined</c> and the crash (<c>E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207</c>);
+    /// it is the positive assertion now. <c>JavaScriptBoundsCheckExecutionTests</c> holds the rest of #207.
     /// </summary>
     [Test]
-    public void E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207()
+    public void E10_JavaScript_OutOfBoundsListRead_ThrowsAndPrintsSameTrue_Issue207Fixed()
     {
         var js = JsTestSupport.Compile(E10);
-        var (exitCode, stdout, _) = JavaScriptExecutionTests.RunNodeScriptForOutcome(js);
+        var (exitCode, stdout, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(js);
         Assert.Multiple(() =>
         {
-            Assert.That(FourBackends.Norm(stdout), Is.EqualTo("undefined"),
-                "a(3) on an empty JS array must print 'undefined' rather than throw — if this " +
-                "changed, either JS gained bounds-checked List indexing (great — file the fix as " +
-                "closing this gap) or something else regressed.\n" + js);
-            Assert.That(exitCode, Is.Not.Zero,
-                "f stays Nothing (the Catch never ran) and f() must still crash with an uncaught " +
-                "TypeError.\n" + js);
+            Assert.That(FourBackends.Norm(stdout), Is.EqualTo("same=True"),
+                "a(3) on an empty List must throw, so the Catch runs and both reads of ex.Message agree. " +
+                "'undefined' means the read is unchecked again (#207 regressed).\n" + js);
+            Assert.That(exitCode, Is.Zero,
+                "the Catch assigns f, so f() runs and the program exits normally — a non-zero exit means " +
+                "the read did not throw (f is still Nothing) or the throw escaped.\n--- stderr ---\n" + stderr + "\n" + js);
         });
     }
 

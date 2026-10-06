@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #207 TESTED — JavaScript bounds-checks List / array element access and Dictionary reads, throwing .NET's exception with .NET's message (`JavaScriptBackend.cs` `ElementCheck` + five `__bl…Get/Set` prelude helpers, `JsExceptionTypes.CollectRequired`; `git log --grep '#207'`)
+- **Tests (15 new, 1 moved):** `JavaScriptBoundsCheckExecutionTests` (Integration, 14 rows over 26 programs, JS only x CLI / `--optimize` / `CompileProjectFiles`: a List read past the end typed / catch-all / at `Count` / negative / `.Item`; a List write that never grows; array read + write incl. 2-D; Dictionary missing key; .NET's message text; `+=` / `++`; a `When` guard; field / lambda / constructor / property / Shared; `List(Of Integer())`; a loop ended by the exception; an UNCAUGHT read dying with AOORE; an unused read still throwing; controls) + `JavaScriptBoundsCheckEmissionTests` (fast, 1: a program that never indexes emits none of the helpers, the prelude is shared with web forms). MOVED: `NothingStringTextExecutionTests.E10_JavaScript_…_Against207` is now `…_ThrowsAndPrintsSameTrue_Issue207Fixed`. Mutants M1-M5 killed; no fix at all fails 14 of 15.
+- **Gates (Linux, on the fix 4fe79e38):** fast 12,717 passed / 94 skipped, the one failure being `RosterIsPinned` on a tree without #203 (pin 123 = #203's 122 + this one; green once merged after #203, as it was); Integration, one filter each: the fixtures 15, `JavaScript` 1,333 (+2 skipped), `NothingStringText` 34, `Collection` 199, `Array` 333 (+2), `TryCatch` 20 (+1), all 0 failed; `JsExecutionTierRoster` 4 passed + that same pin; `Exception` 136 passed + 1 FAILED, `TerminalService` cancellation (#287, a Linux race, not #207's). Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): C++ List reads throw `std::out_of_range` (a typed Catch misses it) and C++ arrays are unchecked; MSIL refuses `Catch` of AOORE / KNFE; a String paren index `s(5)` (B15); `a(5) & F()` runs F before the throw (#292 family); an array element indexed by a CALL runs it twice on JS (before and after #207); the C# backend drops a conditionless `Do ... Loop` (#293).
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #203 TESTED — a bare field / Shared field / module global / ByRef operand is read BEFORE a later operand's call, as VB reads it (`IRBuilder.ReadOperand` / `ValueBeforeLaterOperands`; `git log --grep '#203'`)
 - **Fix:** a bare field, Shared field, global or ByRef parameter lowers to an `IRVariable` that C++, JS and MSIL read BY NAME at the consuming instruction, after a later operand's call; when a LATER operand may write it, the read is copied into a `__snap{n}` carrier AT the read (pushed, reserved, in `LocalVariables`, like `__sc` / `__inc`). ⛔ NOT a `DeclareTemp` temp: ADR-0018 E1 — the reserved names are not published until after the walk, so a minted `tN` could collide with a user name, and `SeparateTempsFromUserNames` never renames an `IRVariable`. A ByRef argument is never copied; a plain field read (`o.K`) is not a writer.
 - **Tests (14 new, 1 moved):** `OperandEvaluationOrderExecutionTests` (Integration, 13 groups of 27 vbc-answered probes on C#, C++, JS, MSIL x CLI / `-O` / `CompileProjectFiles`; JS roster now 122 = master 121 + 1) + `OperandEvaluationOrderTextTests` (fast, 1: `K + o.K`, `K + 1`, `K + L` emit no `__snap`). MOVED: the G2b pin is now `DelegateMemberInvocationExecutionTests.G2b_..._EveryBackendPrintsTheOracle_Task203`. Mutants M1-M5 killed (fixture header).
@@ -4087,11 +4094,12 @@ single new failure against the 170-name baseline.
       as `IsIsNotOperatorExecutionTests.CppStringAndArrayNothingIsEmptiness_DivergesFromDotNet`'s
       P12). C++'s own answer is internally inconsistent between fold time and run time — exactly
       why this needs a deliberate owner decision, not a quick fix.
-    - **Filed as #207.** JavaScript reads past the end of a `List` without throwing:
+    - **Filed as #207 — FIXED (see the #207 section at the top).** JavaScript reads past the end of a `List` without throwing:
       `Dim a As New List(Of Integer)() : a(3)` returns `undefined` rather than raising, so E10's
       own JS leg never enters its `Catch` at all and crashes later with an uncaught
-      `TypeError: f is not a function` when the (never-assigned) `f` is invoked. Measured in
-      `NothingStringTextExecutionTests.E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207`.
+      `TypeError: f is not a function` when the (never-assigned) `f` is invoked. It was pinned in
+      `NothingStringTextExecutionTests.E10_JavaScript_ReadingPastEndOfList_DoesNotThrow_Against207`, now
+      `E10_JavaScript_OutOfBoundsListRead_ThrowsAndPrintsSameTrue_Issue207Fixed` (prints `same=True`).
   - **Mutants:** 9 attempted, 8 killed for real — source patched in a SEPARATE
     `git worktree --detach`, `BasicLang.dll` rebuilt there and swapped into the test output only
     between `dotnet test` runs (never during one), then the main tree's real DLL restored and

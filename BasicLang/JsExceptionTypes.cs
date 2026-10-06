@@ -142,6 +142,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Mention("OverflowException");
             }
 
+            // The checked List / array / Dictionary element accesses (#207) throw these.
+            foreach (var name in JavaScriptCodeGenerator.ElementCheckExceptions(module))
+                Mention(name);
+
             // The type keywords' Shared members (String.Format, Integer.Parse, …) throw these.
             if (JsPrimitiveStatics.IsUsed(module))
                 foreach (var name in JsPrimitiveStatics.ThrownExceptions)
