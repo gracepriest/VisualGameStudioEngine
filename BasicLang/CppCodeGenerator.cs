@@ -928,7 +928,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // #208: a bare name that is an INHERITED Shared field of a base with a type initializer
             // (see InheritedStaticGuard) — as a value and as a destination alike.
             if (value is not IRConstant && !string.IsNullOrEmpty(value?.Name)
-                && (value is IRVariable || _declaredIdentifiers.Contains(value.Name))
+                && (value is IRVariable || IsNamedDestination(value))
                 && InheritedStaticGuard(value.Name) is string guardedBare)
                 return guardedBare;
 
@@ -938,8 +938,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // non-variables and invents a fresh temp, which both loses the assignment
             // and references an undeclared identifier. Honor the destination name.
             if (value != null && !(value is IRVariable) && !(value is IRConstant)
-                && !string.IsNullOrEmpty(value.Name)
-                && _declaredIdentifiers.Contains(value.Name)
+                && IsNamedDestination(value)
                 && !_valueNames.ContainsKey(value))
             {
                 var name = SanitizeName(value.Name);
@@ -2430,9 +2429,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // showed it: only a computed one is renamed to its destination and so has to be
             // recognised as a real name. The walk mirrors DeclaringClassOfStaticMember.
             //
-            // ⚠ PROPERTIES were registered here too and are not any more: that half survived
-            // mutation. A property is not a storage destination on this backend — a Get/Set
-            // property is read and written through its accessors (AccessorPropertyOf).
+            // ⚠ PROPERTIES are not registered here. An accessor-backed one is no destination at all
+            // (it reaches this backend as Me.P, AccessorPropertyOf); a PLAIN auto-property is
+            // storage and a real destination (#218/#254), but it is recognised by
+            // IsStorageAutoProperty instead — this set also decides whether a name shadows a
+            // TYPE, and a property is often named after its own type (see there).
             for (var cls = _emittingClass; cls != null; )
             {
                 foreach (var field in cls.Fields ?? new List<IRField>())
@@ -7065,11 +7066,60 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 "reported success — add an arm above instead.")
         };
 
+        /// <summary>
+        /// Whether <paramref name="value"/> is bound to a REAL name — a declared identifier
+        /// (parameter, local, global, field of the emitting class or a base) or a plain
+        /// auto-property of the emitting class or a base — rather than a temp. The IR renames a
+        /// computed value after its assignment target (<c>P = P + 10</c> is an
+        /// <see cref="IRBinaryOp"/> NAMED <c>P</c>, with no <see cref="IRAssignment"/>), so a name
+        /// this answers false for decays to a temp and the store is lost.
+        /// </summary>
         private bool IsNamedDestination(IRValue value)
         {
             if (value == null) return false;
             if (string.IsNullOrEmpty(value.Name)) return false;
-            return _declaredIdentifiers.Contains(value.Name);
+            return _declaredIdentifiers.Contains(value.Name) || IsStorageAutoProperty(value.Name);
+        }
+
+        /// <summary>
+        /// #218 / #254: whether <paramref name="rawName"/>, used bare inside a member of the class
+        /// being emitted, names a PLAIN auto-property of it or of a base — storage, exactly like a
+        /// field: <see cref="GenerateProperty"/> gives it a data member of its own name, and
+        /// ADR-0007 leaves a bare use of it as that name (only an ACCESSOR-BACKED property is
+        /// lowered to <c>Me.P</c>). The first declaration of the name walking up from the
+        /// emitting class decides, as in <see cref="InheritedStaticGuard"/>.
+        ///
+        /// <para>⛔ Without it, <c>P = P + 10</c>, <c>P += 20</c>, <c>Count += 1</c> and
+        /// <c>S = S * 10</c> emitted <c>t0 = P + 10;</c> and DROPPED the store, on this backend
+        /// alone, while a plain <c>P = 5</c> (an <see cref="IRAssignment"/>) still landed.</para>
+        ///
+        /// <para>⚠ It is a DESTINATION question only, and that is why such a property is not
+        /// added to <c>_declaredIdentifiers</c> beside the fields. That set also answers "does
+        /// this value name SHADOW a type?" (<see cref="StaticMemberQualifier"/>,
+        /// <see cref="StaticCallTarget"/>, <see cref="FieldReadExpression"/>), and a property is
+        /// very often named after its own type: MEASURED, registering it there turned
+        /// <c>DateTime.Now</c> inside a class with <c>Property DateTime As DateTime</c> from
+        /// <c>BasicLang::DateTime::Now()</c> (runs) into <c>DateTime.Now</c> (does not compile).
+        /// VB binds a Shared member through such a name to the TYPE.</para>
+        /// </summary>
+        private bool IsStorageAutoProperty(string rawName)
+        {
+            if (_emittingClass == null || string.IsNullOrEmpty(rawName)) return false;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var cls = _emittingClass; cls != null && seen.Add(cls.Name ?? ""); )
+            {
+                if (cls.Fields?.Any(f => string.Equals(f?.Name, rawName, StringComparison.OrdinalIgnoreCase)) ?? false)
+                    return false;
+                var prop = cls.Properties?.FirstOrDefault(p => string.Equals(p?.Name, rawName, StringComparison.OrdinalIgnoreCase));
+                if (prop != null) return !prop.IsAccessorBacked;
+
+                if (string.IsNullOrEmpty(cls.BaseClass) || _module?.Classes == null
+                    || !_module.Classes.TryGetValue(cls.BaseClass, out var next) || ReferenceEquals(next, cls))
+                    break;
+                cls = next;
+            }
+            return false;
         }
 
         /// <summary>
