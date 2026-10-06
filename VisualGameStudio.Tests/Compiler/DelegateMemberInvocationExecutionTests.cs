@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using NUnit.Framework;
@@ -857,13 +858,15 @@ public class DelegateMemberInvocationExecutionTests
     /// <summary>
     /// G6c: a <c>List(Of Action)</c> FIELD (not a local) indexed with VB's paren syntax through an
     /// EXTERNAL receiver (<c>b.Items(0)</c>) — even copied into a local first, exactly like #173's
-    /// N6b control does for a plain field. Unlike every other pin in this fixture, this one fails
-    /// on C# TOO: the generated C# is <c>b.Items(0)</c>, and <c>List&lt;T&gt;</c> has no such
-    /// method — CS1955, "Non-invocable member". <see cref="G6"/> above (the SAME indexer, called
-    /// BARE from a method of the declaring class — <c>Items(0)()</c>) runs everywhere, so the gap
-    /// is specific to reading a List-typed FIELD through an EXTERNAL, qualified receiver — filed as
-    /// #204, not #188 (C# failing rules out "C# is the oracle" reasoning; this is a pre-existing
-    /// codegen gap #188 never touched, measured independently of the delegate-invocation fix).
+    /// N6b control does for a plain field. <see cref="G6"/> above (the SAME indexer, called BARE from
+    /// a method of the declaring class — <c>Items(0)()</c>) always ran everywhere; this qualified
+    /// spelling was #204, filed apart from #188 because it failed on C# TOO (the generated C# was
+    /// <c>b.Items(0)</c>, and <c>List&lt;T&gt;</c> has no such method — CS1955, "Non-invocable
+    /// member"), so the C# oracle could not be used. #204 is FIXED: the IR builder lowers the
+    /// qualified callee as the element read the analyzer typed it as, exactly as the bare one. This
+    /// was a pin of the C# compile failure; it is now vbc's answer ("one") on every backend, through
+    /// the CLI, the CLI with --optimize and CompileProjectFiles. <c>QualifiedElementReadExecutionTests</c>
+    /// holds the rest of #204's matrix.
     /// </summary>
     private const string G6c = """
         Class Board
@@ -882,12 +885,28 @@ public class DelegateMemberInvocationExecutionTests
         """;
 
     [Test]
-    public void G6c_ListFieldIndexedThroughAnExternalReceiver_PinsTodaysCSharpCompileFailure_Against204()
+    public void G6c_ListFieldIndexedThroughAnExternalReceiver_PrintsVbcsAnswer_OnEveryBackend_Issue204()
     {
-        var ex = Assert.Throws<AssertionException>(() => FourBackends.RunEmittedCSharp(G6c));
-        Assert.That(ex!.Message, Does.Contain("CS1955").And.Contain("Items"),
-            "the failure must still be C#'s own CS1955 over List<Action>.Items(0) — even the "
-            + "ORACLE fails to build this shape (#204). A DIFFERENT failure here means this pin "
-            + "is stale.\n" + ex.Message);
+        // vbc prints "one". Each backend through every entry point (the C# leg in a child process with a time limit);
+        // a failure on one backend is collected so the others still report, and a missing tool SKIPS its leg, never fails it.
+        var failures = new List<string>();
+        var skipped = new List<string>();
+        foreach (var backend in TempExec.Backends(Bk.All))
+        {
+            try
+            {
+                TempExec.AssertMatchesInEveryEntryPoint(backend, G6c, "one", "G6c", hangSafe: true);
+            }
+            catch (IgnoreException ex)
+            {
+                skipped.Add($"{backend} ({ex.Message})");
+            }
+            catch (AssertionException ex)
+            {
+                failures.Add(ex.Message);
+            }
+        }
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+        if (skipped.Count > 0) Assert.Ignore($"ran and passed everywhere else; skipped: {string.Join("; ", skipped)}");
     }
 }

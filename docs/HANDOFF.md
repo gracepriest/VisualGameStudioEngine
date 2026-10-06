@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #204 TESTED — `b.Items(0)`, a paren element read through ANY receiver, lowers like the bare `Items(0)` (`SemanticAnalyzer.IsParenElementRead`, `IRBuilder.TryEmitElementRead`; `git log --grep '#204'`)
+- **Tests (14 new, 1 moved):** `QualifiedElementReadExecutionTests` (Integration, 13 rows of vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`: List / Dictionary / `List(Of Action)` / array members read, written and `+=`; a computed index; `Make().Arr(1)` calling Make ONCE; `b.MakeArr(3)` staying a call; `Me.` / `MyBase.` / Shared / Module / inherited / property / nested receivers; the controls; in the JS roster, now 121) + `QualifiedElementReadEmissionTests` (fast, 1: the C# is `b.Items[0]`). MOVED: `DelegateMemberInvocationExecutionTests.G6c_…_PinsTodaysCSharpCompileFailure_Against204` is now `…_PrintsVbcsAnswer_OnEveryBackend_Issue204`. Mutants M1-M4 killed (M1 by P01_P02 / P04 / P07 / the text test / G6c, M2 and M4 by Q21, M3 by Q15); M5 (the `.Item` admission clause) survives BY DESIGN: it is defensive.
+- **Gates (Linux, on the fix 6c47ebba):** fast 0 failed / 12,717 passed / 94 skipped; Integration, one filter each: the fixture 14 / 0 failed, `DelegateMemberInvocation` 52, `Indexer` 53 (+1 skipped, MSVC), `ExpressionStatement` 31, `PropertyAccess` 74, `Array` 329 (+2 skipped, Windows), `JsExecutionTierRoster` 5, all 0 failed; `Collection` 198 passed + 1 FAILED, `CppCollectionTests.Cpp_UnboundCollectionTemporary_StillEmitsPreambleViaFallback` (BC30035, #267's statement check: fails on master too, NOT #204's, fixed apart). Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header; each fails identically before and after): a String paren index (`b.Name(1)`, a bare local `s(1)` too, P12); `s.Split(","c)` is read by the analyzer as an array index (Q25); a With block leaves `__with` undeclared for ANY member (Q26 / Q27).
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #267 TESTED — the expression statements VB refuses are refused, with vbc's numbers BC30035 / BC30545 / BC30057 / BC30454 (`SemanticAnalyzer.NonInvocationStatement`; `git log --grep '#267'`)
 - **Tests (15 new, 0 moved — no existing program is newly refused):** `ExpressionStatementVbRefusalTests` (fast, 13: 11 rows of statements measured against vbc — refused BC30035 / BC30545 / BC30057 / BC30454 values, elements and casts / BC30524, accepted delegates, calls, events / .NET / Await, a user's own `CInt` — plus the `CompileProjectFiles` row (a class in another file, both orders) and the LSP row) + `ExpressionStatementVbRefusalExecutionTests` (Integration, 2: accepted shapes run on C# / C++ / JS x CLI / `-O` / `CompileProjectFiles`, events C# + JS only; the real CLI refuses on five targets; in the JS roster, now 119). Mutants M1-M3 + M1b-M10 killed.
 - **Gates (Linux, on the amended fix 98f20b6d):** fast 0 failed / 12,706 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 15, `ExpressionStatement` 31, `Statement` 377 (+1 skipped), `LSP` 566 (+11 skipped), `JsExecutionTierRoster` 5. `MyBaseMethodCallStatement` 207, `PropertyAccess` 74, `Indexer` 52, `StringNothingEquality` 12 and `LambdaParameterHides` 16 were green on the first #267 build (f4ed9e6a) and NOT re-run on the amended one. Full suite NOT run.
@@ -7052,7 +7059,7 @@ single new failure against the 170-name baseline.
     every edge probe that runs everywhere on four backends × both pipelines × the
     `CompileProjectFiles` project entry point, the multi-file project, the L1 IIFE on C++/
     JavaScript, G8's Nothing-raises-everywhere, and the P8/#140, G2b/#203, G5/#192 and G6c/#204
-    pins). Promoted five tests that pinned #187/#188/#201 exceptions in
+    pins; G6c has since MOVED to vbc's answer, #204 being fixed). Promoted five tests that pinned #187/#188/#201 exceptions in
     `UserDelegateConversionExecutionTests.cs`: E10 (JavaScript), J2 (MSIL) and J1/E5/E5b (C++) all
     now run, folded into that fixture's four-backend runners (35 cases → 30: five separate pin
     tests became four-backend rows on the tests they already shared). Corrected `#173`'s N6 note in
@@ -7071,12 +7078,12 @@ single new failure against the 170-name baseline.
       run; the bare spelling's `CalleeValue` is an `IRVariable` read INLINE at the call site
       (ADR-0007's bare-name rule), with no such snapshot. Pinned as `DelegateMemberInvocation
       ExecutionTests.G2b_BareSpellingEvaluatesTheCalleeAfterItsArgument_PinsTodaysWrongOrder_Against203`.
-    - **#204** — a `List(Of Action)` FIELD (not a local) indexed with VB's paren syntax through an
-      EXTERNAL, qualified receiver (`b.Items(0)`) fails to build on EVERY backend, C# included
-      (`CS1955: Non-invocable member`) — a pre-existing codegen gap #188 never touched. The SAME
-      indexer called BARE from a method of the declaring class (`Items(0)()`) runs everywhere, so
-      the gap is specific to the qualified-receiver spelling of a List-typed field. Pinned as
-      `DelegateMemberInvocationExecutionTests.G6c_ListFieldIndexedThroughAnExternalReceiver_PinsTodaysCSharpCompileFailure_Against204`.
+    - **#204 — FIXED** (`git log --grep '#204'`; see the #204 section at the top). A `List(Of Action)`
+      FIELD (not a local) indexed with VB's paren syntax through an EXTERNAL, qualified receiver
+      (`b.Items(0)`) failed to build on EVERY backend, C# included (`CS1955: Non-invocable member`);
+      the qualified callee is now lowered as the element read the analyzer typed it as, exactly like
+      the bare `Items(0)`. The pin MOVED to vbc's answer, renamed
+      `DelegateMemberInvocationExecutionTests.G6c_ListFieldIndexedThroughAnExternalReceiver_PrintsVbcsAnswer_OnEveryBackend_Issue204`.
     - **#192** — a `Structure` (value type) with a delegate FIELD, called through a bare identifier
       after a member-access write (`s.F = ...; s.F(41)`), throws a `NullReferenceException` on MSIL
       where C#/C++ both run it correctly; JavaScript refuses the whole `Structure` at compile time

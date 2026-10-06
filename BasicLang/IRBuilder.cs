@@ -6659,6 +6659,20 @@ namespace BasicLang.Compiler.IR
             // Check for different call types
             if (node.Callee is MemberAccessExpressionNode memberExpr)
             {
+                // #204: `b.Items(0)`, `Make().Arr(1)`, `Me.Box.Items(i)` — the analyzer typed this
+                // call as an ELEMENT of the member's value (IsParenElementRead), so it is lowered as
+                // one, exactly as the bare `Items(0)` is: the member read once, then indexed. ⛔
+                // Before, only an ARRAY member was indexed — by its own type test, after a receiver
+                // visit it then repeated (`Make()` ran twice) and blind to a method returning an
+                // array (`b.MakeArr(3)` became `b.MakeArr[3]`) — and every List or Dictionary member
+                // became a METHOD call on the receiver: CS1955 on C#, "b.Items is not a function" on
+                // JavaScript, MissingMethodException on MSIL, a call of a shared_ptr on C++.
+                if (_semanticAnalyzer.IsParenElementRead(node)
+                    && TryEmitElementRead(node, _semanticAnalyzer.GetNodeType(memberExpr), returnType))
+                {
+                    return;
+                }
+
                 // #187: `d.Invoke(args)` on a user-delegate value is `d(args)`, as the analyzer
                 // types it — lowered to the SAME IR, so no backend has to know a delegate has an
                 // Invoke member (a std::function and a JavaScript function have none: measured,
@@ -6743,41 +6757,6 @@ namespace BasicLang.Compiler.IR
                     }
                     EmitInstruction(itemAccess);
                     _expressionResult = itemAccess;
-                    return;
-                }
-
-                // `obj.Field(i)` where Field is an ARRAY is an index, not a method call. The
-                // array-index branch below covers only an IdentifierExpressionNode callee, so a
-                // FIELD receiver fell through to the instance-call arm and emitted `b->Cells(0)`
-                // — calling a std::vector. Same test as that branch, same lowering (GEP + load);
-                // the receiver is the field access rather than a bare variable.
-                var memberArrayType = _semanticAnalyzer.GetNodeType(memberExpr);
-                if (node.Arguments.Count > 0
-                    && memberArrayType != null
-                    && memberArrayType.Kind == TypeKind.Array
-                    // §8.5: a handle-represented .NET array owns no native storage to index —
-                    // the marker is tested before the array branch everywhere else too.
-                    && memberArrayType.NetHandleTypeFullName == null)
-                {
-                    memberExpr.Accept(this);
-                    var arrayField = _expressionResult;
-
-                    var elementType = memberArrayType.ElementType
-                                      ?? new TypeInfo("Object", TypeKind.Class);
-                    var fieldGepTemp = _currentFunction.GetNextTempName();
-                    var fieldGep = new IRGetElementPtr(fieldGepTemp, arrayField, elementType);
-                    foreach (var index in node.Arguments)
-                    {
-                        index.Accept(this);
-                        fieldGep.Indices.Add(_expressionResult);
-                    }
-                    EmitInstruction(fieldGep);
-
-                    var fieldLoadTemp = _currentFunction.GetNextTempName();
-                    var fieldLoad = new IRLoad(fieldLoadTemp, fieldGep, elementType);
-                    EmitInstruction(fieldLoad);
-
-                    _expressionResult = fieldLoad;
                     return;
                 }
 
@@ -6991,63 +6970,9 @@ namespace BasicLang.Compiler.IR
                 bool calleeIsCallable = symbol != null &&
                     (symbol.Kind == SymbolKind.Function || symbol.Kind == SymbolKind.Subroutine);
 
-                // §8.5 FIRST, ahead of BOTH the raw-array branch and the generic-collection
-                // branch below: a handle-represented .NET array/collection has no native storage
-                // to index, so neither IRGetElementPtr nor a native IRIndexerAccess is sound.
-                if (!calleeIsCallable && node.Arguments.Count > 0
-                    && TryEmitNetIndexerAccess(calleeType, node.Callee, node.Arguments))
+                // In VB, arr(i) can be either a function call or an element read.
+                if (!calleeIsCallable && TryEmitElementRead(node, calleeType, returnType))
                 {
-                    return;
-                }
-
-                // Check if this is actually an array access, not a function call
-                // In VB, arr(i) can be either function call or array indexing
-                if (!calleeIsCallable && calleeType != null && calleeType.Kind == TypeKind.Array && node.Arguments.Count > 0)
-                {
-                    // This is array access, generate array element access
-                    node.Callee.Accept(this);
-                    var array = _expressionResult;
-                    
-                    var elementType = calleeType.ElementType ?? new TypeInfo("Object", TypeKind.Class);
-                    var gepTemp = _currentFunction.GetNextTempName();
-                    var gep = new IRGetElementPtr(gepTemp, array, elementType);
-                    
-                    foreach (var index in node.Arguments)
-                    {
-                        index.Accept(this);
-                        gep.Indices.Add(_expressionResult);
-                    }
-                    
-                    EmitInstruction(gep);
-                    
-                    // Load from array element
-                    var loadTemp = _currentFunction.GetNextTempName();
-                    var load = new IRLoad(loadTemp, gep, elementType);
-                    EmitInstruction(load);
-
-                    _expressionResult = load;
-                    return;
-                }
-
-                // Check if this is a generic collection indexer access (List<T>, Dictionary<K,V>, etc.)
-                if (!calleeIsCallable && calleeType != null && node.Arguments.Count > 0 && IsIndexableGenericType(calleeType))
-                {
-                    // This is collection indexer access, generate IRIndexerAccess
-                    node.Callee.Accept(this);
-                    var collection = _expressionResult;
-
-                    var elementType = returnType ?? new TypeInfo("Object", TypeKind.Class);
-                    var indexerTemp = _currentFunction.GetNextTempName();
-                    var indexerAccess = new IRIndexerAccess(indexerTemp, collection, elementType);
-
-                    foreach (var index in node.Arguments)
-                    {
-                        index.Accept(this);
-                        indexerAccess.Indices.Add(_expressionResult);
-                    }
-
-                    EmitInstruction(indexerAccess);
-                    _expressionResult = indexerAccess;
                     return;
                 }
 
@@ -7065,6 +6990,63 @@ namespace BasicLang.Compiler.IR
                 EmitDelegateValueInvocation(node.Callee, node.Arguments, tempName, returnType,
                     delegateSymbol: null);
             }
+        }
+
+        /// <summary>
+        /// An element READ in VB's paren spelling, whichever way its callee is spelled: bare
+        /// (<c>a(i)</c>, <c>l(i)</c>, <c>d(k)</c>) or through a receiver (<c>b.Items(i)</c>,
+        /// <c>Make().Arr(i)</c>, <c>Me.Box.Items(i)</c> — #204). The callee is evaluated ONCE, as
+        /// the value it names, then indexed: §8.5's .NET indexer for a handle-represented
+        /// array/collection (FIRST — it has no native storage, so neither GEP nor a native indexer
+        /// is sound), GEP + load for a native array, <see cref="IRIndexerAccess"/> for a
+        /// List/Dictionary. Returns false, having emitted nothing, when the callee's type is none of
+        /// those. The CALLER has already decided the callee is a value and not a procedure.
+        /// </summary>
+        private bool TryEmitElementRead(CallExpressionNode node, TypeInfo calleeType, TypeInfo returnType)
+        {
+            if (node.Arguments.Count == 0) return false;
+
+            if (TryEmitNetIndexerAccess(calleeType, node.Callee, node.Arguments))
+                return true;
+
+            if (calleeType != null && calleeType.Kind == TypeKind.Array)
+            {
+                node.Callee.Accept(this);
+                var array = _expressionResult;
+
+                var elementType = calleeType.ElementType ?? new TypeInfo("Object", TypeKind.Class);
+                var gep = new IRGetElementPtr(_currentFunction.GetNextTempName(), array, elementType);
+                foreach (var index in node.Arguments)
+                {
+                    index.Accept(this);
+                    gep.Indices.Add(_expressionResult);
+                }
+                EmitInstruction(gep);
+
+                var load = new IRLoad(_currentFunction.GetNextTempName(), gep, elementType);
+                EmitInstruction(load);
+                _expressionResult = load;
+                return true;
+            }
+
+            if (calleeType != null && IsIndexableGenericType(calleeType))
+            {
+                node.Callee.Accept(this);
+                var collection = _expressionResult;
+
+                var elementType = returnType ?? new TypeInfo("Object", TypeKind.Class);
+                var indexerAccess = new IRIndexerAccess(_currentFunction.GetNextTempName(), collection, elementType);
+                foreach (var index in node.Arguments)
+                {
+                    index.Accept(this);
+                    indexerAccess.Indices.Add(_expressionResult);
+                }
+                EmitInstruction(indexerAccess);
+                _expressionResult = indexerAccess;
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
