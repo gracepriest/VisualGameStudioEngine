@@ -873,6 +873,7 @@ namespace BasicLang.Compiler.IR.Optimization
                 if (cls == null) continue;
                 foreach (var method in cls.Methods ?? new List<IRMethod>()) Own(method?.Implementation, cls);
                 foreach (var ctor in cls.Constructors ?? new List<IRConstructor>()) Own(ctor?.Implementation, cls);
+                Own(cls.TypeInitializer, cls);
                 foreach (var prop in cls.Properties ?? new List<IRProperty>())
                 {
                     Own(prop?.Getter, cls);

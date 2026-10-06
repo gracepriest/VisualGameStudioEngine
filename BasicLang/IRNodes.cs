@@ -2066,6 +2066,7 @@ namespace BasicLang.Compiler.IR
                     if (m?.Implementation != null) members.Add(m.Implementation);
                 foreach (var c in cls.Constructors)
                     if (c?.Implementation != null) members.Add(c.Implementation);
+                if (cls.TypeInitializer != null) members.Add(cls.TypeInitializer);
                 foreach (var p in cls.Properties)
                 {
                     if (p?.Getter != null) members.Add(p.Getter);
@@ -2291,6 +2292,23 @@ namespace BasicLang.Compiler.IR
         public List<IRMethod> Methods { get; set; }
         public List<IRProperty> Properties { get; set; }
         public List<IRConstructor> Constructors { get; set; }
+
+        /// <summary>
+        /// ⭐ #208: the class's <c>Shared Sub New</c> — its TYPE INITIALIZER — or null. A
+        /// parameterless static body, run ONCE, before the first access to a Shared member of the
+        /// class or the first instance created, after the Shared field initializers.
+        ///
+        /// <para>⛔ Never one of <see cref="Constructors"/>, which are instance constructors only.
+        /// It used to be: every backend emitted it as a parameterless INSTANCE constructor, so it
+        /// ran on each <c>New</c> and never on a Shared access — <c>C.F</c> read 0 — and beside an
+        /// instance <c>Sub New()</c> it was a duplicate (CS0111, two JS <c>constructor</c>s).</para>
+        ///
+        /// <para>Its function is a member implementation like a method's (still in
+        /// <c>IRModule.Functions</c>), so every "is this a class member?" walk must count it, or a
+        /// backend emits it a second time as a free function.</para>
+        /// </summary>
+        public IRFunction TypeInitializer { get; set; }
+
         public List<IREvent> Events { get; set; }
         public List<string> GenericParameters { get; set; }
         public List<GenericTypeParameter> GenericTypeParams { get; set; }  // With constraints

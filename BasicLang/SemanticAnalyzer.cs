@@ -918,7 +918,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
                     }
 
-                    case ConstructorNode ctor when includeConstructors:
+                    // A `Shared Sub New` is the type initializer, never callable by `New` (#208).
+                    case ConstructorNode ctor when includeConstructors && !ctor.IsShared:
                     {
                         var ctorSymbol = new Symbol(".ctor", SymbolKind.Function, classType, 0, 0)
                         {
@@ -6299,6 +6300,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private void RegisterConstructorSignature(ConstructorNode node, ClassNode owner)
         {
+            // A `Shared Sub New` is the type initializer — no `New` binds to it (#208).
+            if (node.IsShared) return;
+
             var classType = _typeManager.GetType(owner.Name);
             if (classType?.Members == null) return;
 
@@ -6764,7 +6768,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // `MissingMethodException: Void Base..ctor()`, C# was CS7036 and JavaScript printed
             // `base:undefined`. None of them can invent the arguments, so this is the front end's
             // to catch — VB reports BC30387 here.
-            if (classType.BaseType != null && !node.Members.Any(m => m is ConstructorNode))
+            // ⚠ An INSTANCE constructor (#208): a `Shared Sub New` constructs nothing, so a class
+            // declaring only that one still has VB's implicit instance constructor.
+            if (classType.BaseType != null && !node.Members.Any(m => m is ConstructorNode { IsShared: false }))
             {
                 var implicitBase = ResolveImplicitBaseConstructor(
                     classType.BaseType, out var baseNeedsArgs);
@@ -6786,6 +6792,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         + $"'{classType.BaseType.Name}' does not have an accessible 'Sub New' that "
                         + "can be called with no arguments", node.Line, node.Column);
                 }
+            }
+
+            // #208: a class has ONE type initializer (IRClass.TypeInitializer holds one), and a
+            // second used to be emitted as a second constructor. VB: BC30269.
+            var typeInitializers = node.Members.OfType<ConstructorNode>().Where(c => c.IsShared).ToList();
+            if (typeInitializers.Count > 1)
+            {
+                VbCodedError("BC30269",
+                    $"'Shared Sub New()' has multiple definitions with identical signatures in class '{node.Name}'.",
+                    typeInitializers[1]);
             }
 
             ExitScope();
@@ -7948,6 +7964,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void VisitConstructorBody(ConstructorNode node)
         {
+            if (node.IsShared)
+            {
+                VisitTypeInitializerBody(node);
+                return;
+            }
+
             // Register parameters
             var parameterSymbols = new List<Symbol>();
             foreach (var param in node.Parameters)
@@ -8076,6 +8098,41 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             // Analyze body
+            if (node.Body != null)
+            {
+                node.Body.Accept(this);
+            }
+
+            ExitScope();
+        }
+
+        /// <summary>
+        /// ⭐ #208: a <c>Shared Sub New</c> — the class's TYPE INITIALIZER. It is not a constructor
+        /// anything calls: no <c>.ctorN</c> is registered for it (a <c>New C()</c> binding to it was
+        /// how an instance <c>Sub New(x)</c> beside it let <c>New C()</c> through, where VB reports
+        /// BC30455), and it calls no base constructor, so no implicit base binding is recorded
+        /// either — before, a derived class's type initializer was told it "must call MyBase.New".
+        /// <para>Refused as VB refuses them, because every backend's type initializer is
+        /// parameterless and static: parameters (BC30479) and <c>MyBase.New(…)</c> (BC30043). ⚠ A
+        /// bare <c>MyBase.New()</c> is indistinguishable from none in the parse (no arguments are
+        /// recorded either way), so only one WITH arguments can be named.</para>
+        /// </summary>
+        private void VisitTypeInitializerBody(ConstructorNode node)
+        {
+            if (node.Parameters.Count > 0)
+            {
+                VbCodedError("BC30479", "Shared 'Sub New' cannot have any parameters.", node);
+            }
+            foreach (var param in node.Parameters)
+            {
+                param.Accept(this);
+            }
+
+            if (node.BaseConstructorArgs.Count > 0)
+            {
+                VbCodedError("BC30043", "'MyBase' is valid only within an instance method.", node);
+            }
+
             if (node.Body != null)
             {
                 node.Body.Accept(this);

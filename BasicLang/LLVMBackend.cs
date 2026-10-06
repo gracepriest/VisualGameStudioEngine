@@ -243,6 +243,8 @@ namespace BasicLang.Compiler.CodeGen.LLVM
                     return true;
                 if (irClass.Constructors.Any(c => c.Implementation == function))
                     return true;
+                if (function != null && irClass.TypeInitializer == function)
+                    return true;
                 if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
                     return true;
             }

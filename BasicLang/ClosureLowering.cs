@@ -369,6 +369,7 @@ namespace BasicLang.Compiler.IR
             {
                 foreach (var m in cls.Methods) Add(m?.Implementation);
                 foreach (var c in cls.Constructors) Add(c?.Implementation);
+                Add(cls.TypeInitializer);
                 foreach (var p in cls.Properties) { Add(p?.Getter); Add(p?.Setter); }
             }
             foreach (var iface in module.Interfaces.Values)
@@ -386,6 +387,7 @@ namespace BasicLang.Compiler.IR
                 var method = cls.Methods.FirstOrDefault(m => ReferenceEquals(m?.Implementation, function));
                 if (method != null) { isInstance = !method.IsStatic; return cls; }
                 if (cls.Constructors.Any(c => ReferenceEquals(c?.Implementation, function))) { isInstance = true; return cls; }
+                if (ReferenceEquals(cls.TypeInitializer, function)) return cls;   // #208: static, no Me
                 var prop = cls.Properties.FirstOrDefault(p => ReferenceEquals(p?.Getter, function) || ReferenceEquals(p?.Setter, function));
                 if (prop != null) { isInstance = !prop.IsStatic; return cls; }
             }
@@ -748,6 +750,7 @@ namespace BasicLang.Compiler.IR
                         ctor.Implementation = F(c.Implementation);
                         return ctor;
                     }).ToList();
+                    cc.TypeInitializer = F(cls.TypeInitializer);   // #208
                     clone.Classes[kv.Key] = cc;
                 }
 
