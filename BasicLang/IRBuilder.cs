@@ -109,6 +109,7 @@ namespace BasicLang.Compiler.IR
             _bodyLocalSites.Clear();
             _lambdaCreator.Clear();
             _pendingReservations.Clear();
+            _storageMemberReads.Clear();
 
             CollectSharedModuleGlobalNames(program);
 
@@ -4958,6 +4959,9 @@ namespace BasicLang.Compiler.IR
             IList<ExpressionNode> written, Symbol methodSymbol,
             List<IRValue> arguments, List<bool> byRefFlags, bool packParamArray)
         {
+            // #203: each argument's value is taken before a later one runs (reads[i] is arguments[i]).
+            var reads = new List<OperandRead>();
+            for (int i = 0; i < arguments.Count; i++) reads.Add(default);
             foreach (var arg in written)
             {
                 arg.Accept(this);
@@ -4967,7 +4971,9 @@ namespace BasicLang.Compiler.IR
                 byRefFlags.Add(
                     methodParams != null && arguments.Count - 1 < methodParams.Count
                     && methodParams[arguments.Count - 1].IsByRef);
+                reads.Add(ReadOperand(arg, arguments[arguments.Count - 1], byRefFlags[byRefFlags.Count - 1]));
             }
+            ReadOperandsInOrder(arguments, reads);
 
             if (packParamArray)
                 PackParamArrayArguments(arguments, byRefFlags, methodSymbol, written);
@@ -5745,6 +5751,224 @@ namespace BasicLang.Compiler.IR
         /// read across a fold by <see cref="TryFoldInitializerToConstant"/>.</summary>
         private int _conditionalLowerings;
 
+        // ====================================================================
+        // #203 — operands are READ left to right
+        // ====================================================================
+
+        /// <summary>
+        /// What a LATER operand of the same expression can do to the storage an earlier operand
+        /// read (<see cref="OperandRead"/>): a member or a module global — or a <c>ByRef</c>
+        /// parameter, which aliases one — is written by any call (<see cref="Reachable"/>, the
+        /// call-visibility rule's "storage a callee can reach"); a by-value local or parameter
+        /// only by a write that NAMES it, a <c>ByRef</c> argument (<see cref="Frame"/>).
+        /// </summary>
+        private enum OperandStorage { None, Frame, Reachable }
+
+        /// <summary>
+        /// ⭐ #203: an operand that READ storage — a bare variable, which every backend but C#
+        /// renders by name at the instruction that CONSUMES it — recorded right after it was built,
+        /// where its value has to be taken if a later operand turns out to write that storage.
+        /// The default value records nothing.
+        /// </summary>
+        private readonly struct OperandRead
+        {
+            public OperandRead(IRVariable variable, OperandStorage storage, IRFunction function,
+                BasicBlock block, int index, int blockCount, int sourceLine)
+            {
+                Variable = variable;
+                Storage = storage;
+                Function = function;
+                Block = block;
+                Index = index;
+                BlockCount = blockCount;
+                SourceLine = sourceLine;
+            }
+
+            /// <summary>The storage read, or null when there is nothing to protect.</summary>
+            public IRVariable Variable { get; }
+            public OperandStorage Storage { get; }
+            public IRFunction Function { get; }
+            /// <summary>The block and position the read happened at: everything emitted from here
+            /// on — here, and in every block created after <see cref="BlockCount"/> — is LATER.</summary>
+            public BasicBlock Block { get; }
+            public int Index { get; }
+            public int BlockCount { get; }
+            public int SourceLine { get; }
+        }
+
+        /// <summary>Numbers the <c>__snap{n}</c> carriers of <see cref="ValueBeforeLaterOperands"/>.</summary>
+        private int _operandSnapshotCounter;
+
+        /// <summary>
+        /// The member reads (<see cref="IRFieldAccess"/>) the analyzer resolved to a FIELD, so the
+        /// read runs no code and cannot write what an earlier operand read. Asked by <see cref="LaterInstructionWrites"/>
+        /// only: the kill vocabulary must keep treating every member read as a possible Property
+        /// Get (the node does not say which it is), and this builder-side record changes nothing it
+        /// sees.
+        /// </summary>
+        private readonly HashSet<IRInstruction> _storageMemberReads = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// ⭐ #203 — records <paramref name="value"/>, the operand just built from
+        /// <paramref name="source"/>, as a READ of storage that a later operand of the same
+        /// expression might write. Paired with <see cref="ValueBeforeLaterOperands"/> (or
+        /// <see cref="ReadOperandsInOrder"/> for a list), called once every later operand is built.
+        ///
+        /// <para>Only a bare VARIABLE is recorded. Every other operand is an instruction — a
+        /// <c>Me.K</c> (<see cref="IRFieldAccess"/>), a call, an arithmetic temp — already
+        /// evaluated where it stands, which is why the qualified spellings were never wrong.
+        /// <paramref name="passedByRef"/> is never recorded: a <c>ByRef</c> argument passes the
+        /// STORAGE, and a copy would lose the write back. Nor is anything in a <c>When</c> guard,
+        /// which every backend renders as one inline expression.</para>
+        /// </summary>
+        private OperandRead ReadOperand(ExpressionNode source, IRValue value, bool passedByRef = false)
+        {
+            if (passedByRef || _suppressEmit || _currentFunction == null || _currentBlock == null) return default;
+            if (value is not IRVariable variable || variable.IsConst) return default;
+            // A carrier has to be DECLARED: an untyped value has no type to declare it with, and a
+            // foreign C++ type is opaque (no declarable temp — see TryRenameToVariable).
+            if (variable.Type == null || variable.Type.Kind == TypeKind.Foreign) return default;
+
+            var storage = OperandStorageOf(source, variable);
+            if (storage == OperandStorage.None) return default;
+
+            return new OperandRead(variable, storage, _currentFunction, _currentBlock,
+                _currentBlock.Instructions.Count, _currentFunction.Blocks.Count, _currentSourceLine);
+        }
+
+        /// <summary>
+        /// Which storage a bare operand names, by the ANALYZER's binding (ADR-0013) — never by the
+        /// variable's spelling or flags: a field read bare is an <see cref="IRVariable"/> with no
+        /// flag at all, exactly like a local.
+        /// </summary>
+        private OperandStorage OperandStorageOf(ExpressionNode source, IRVariable variable)
+        {
+            switch (source)
+            {
+                case IdentifierExpressionNode { Binding: { } binding }:
+                    switch (binding.Kind)
+                    {
+                        case NameBindingKind.Field:
+                        case NameBindingKind.Property:
+                        case NameBindingKind.ModuleGlobal:
+                            return OperandStorage.Reachable;
+                        case NameBindingKind.Local:
+                        case NameBindingKind.Parameter:
+                        case NameBindingKind.LambdaParameter:
+                            return variable.IsByRef || variable.IsGlobal ? OperandStorage.Reachable : OperandStorage.Frame;
+                        default:
+                            return OperandStorage.None;
+                    }
+
+                // `Helpers.Value`: a Module's variable, qualified — the same global, the same read.
+                case MemberAccessExpressionNode member when ModuleMemberSymbolOf(member) != null:
+                    return OperandStorage.Reachable;
+
+                default:
+                    return OperandStorage.None;
+            }
+        }
+
+        /// <summary>
+        /// ⭐ #203 — VB reads operands LEFT TO RIGHT: in <c>K + Bump()</c>, <c>F(K, Bump())</c> and
+        /// <c>Handler(Swap(1))</c> the value of <c>K</c> / <c>Handler</c> is taken BEFORE the call
+        /// runs, so a call that writes it is not observed. A bare field or global is an
+        /// <see cref="IRVariable"/> that C++, JavaScript and MSIL read by name at the CONSUMING
+        /// instruction — after every later operand's call has run — so they printed
+        /// <c>K</c>'s NEW value (C# renders the expression inline, in source order, and was right).
+        ///
+        /// <para>So when an instruction emitted since <paramref name="read"/> may write the storage
+        /// it read (<see cref="LaterInstructionWrites"/>), the value is copied into a carrier AT the
+        /// read's own position — the snapshot <c>Me.K</c>'s <see cref="IRFieldAccess"/> already is —
+        /// and the carrier is returned to stand in for <paramref name="value"/>. Otherwise
+        /// <paramref name="value"/> comes back untouched and nothing is emitted: <c>K + 1</c>,
+        /// <c>K + L</c> and every expression with no later write are byte-identical.</para>
+        ///
+        /// <para>The carrier is declared exactly as the <c>AndAlso</c> and <c>++</c> carriers are
+        /// (<c>__sc</c>, <c>__inc</c> — the second is this same snapshot for <c>x++ + x++</c>):
+        /// pushed, so the name is reserved (ADR-0018), and in <see cref="IRFunction.LocalVariables"/>,
+        /// so every backend declares it. ⛔ Not a minted <c>tN</c>: a minted name is safe only once
+        /// the reservations are published, after the walk (ADR-0018 E1), and an
+        /// <see cref="IRVariable"/> is never renamed by <see cref="SeparateTempsFromUserNames"/>.
+        /// The bare name itself still lowers to its <see cref="IRVariable"/> (ADR-0007): it is the
+        /// copy's source.</para>
+        /// </summary>
+        private IRValue ValueBeforeLaterOperands(OperandRead read, IRValue value)
+        {
+            if (read.Variable == null || !ReferenceEquals(read.Function, _currentFunction)
+                || !LaterInstructionWrites(read))
+                return value;
+
+            var carrier = CreateVariable($"__snap{_operandSnapshotCounter++}", read.Variable.Type, _nextVersion++);
+            PushVariableVersion(carrier.Name, carrier);
+            _currentFunction.LocalVariables.Add(carrier);
+
+            var copy = new IRAssignment(carrier, read.Variable);
+            if (read.SourceLine > 0) copy.SourceLine = read.SourceLine;
+            read.Block.Instructions.Insert(read.Index, copy);
+            copy.ParentBlock = read.Block;
+            return carrier;
+        }
+
+        /// <summary>
+        /// <see cref="ValueBeforeLaterOperands"/> over an operand LIST — call arguments — with
+        /// <paramref name="reads"/>[i] recorded for <paramref name="values"/>[i]; each value that
+        /// needs it is replaced in place. Right to left, so that two reads recorded at the same
+        /// position (<c>F(K, L, Bump())</c>) keep their source order once both copies are in.
+        /// </summary>
+        private void ReadOperandsInOrder(IList<IRValue> values, IReadOnlyList<OperandRead> reads)
+        {
+            for (int i = Math.Min(values.Count, reads.Count) - 1; i >= 0; i--)
+                values[i] = ValueBeforeLaterOperands(reads[i], values[i]);
+        }
+
+        /// <summary>
+        /// Whether anything emitted since <paramref name="read"/> — the later operands — may write
+        /// the storage it read, by the ONE kill vocabulary (<see cref="Optimization.OptimizationPass.NamesWrittenBy"/>):
+        /// a write that names it (a <c>ByRef</c> argument), anything Universal, and — for storage a
+        /// callee can reach — any call. A member read the analyzer resolved to plain storage
+        /// (<see cref="_storageMemberReads"/>) is the one refinement: <c>X + o.X</c> reads a field,
+        /// runs no code and is left as it was.
+        /// </summary>
+        private bool LaterInstructionWrites(OperandRead read)
+        {
+            var block = read.Block;
+            for (int i = read.Index; i < block.Instructions.Count; i++)
+                if (InstructionWrites(block.Instructions[i], read)) return true;
+
+            var blocks = read.Function.Blocks;
+            for (int b = read.BlockCount; b < blocks.Count; b++)
+                foreach (var instruction in blocks[b].Instructions)
+                    if (InstructionWrites(instruction, read)) return true;
+            return false;
+        }
+
+        private bool InstructionWrites(IRInstruction instruction, OperandRead read)
+        {
+            if (instruction is IRFieldAccess && _storageMemberReads.Contains(instruction)) return false;
+
+            var writes = Optimization.OptimizationPass.NamesWrittenBy(instruction, read.Function);
+            if (writes.IsUniversal) return true;
+            if (writes.IsCall && read.Storage == OperandStorage.Reachable) return true;
+            foreach (var name in writes.Names)
+                if (string.Equals(name, read.Variable.Name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Whether the analyzer resolved this member READ to a FIELD — a BasicLang one, or a .NET
+        /// one — so reading it runs no code. Anything else, every property included, answers
+        /// false: a possible call.
+        /// </summary>
+        private bool ReadsPlainStorage(MemberAccessExpressionNode node)
+        {
+            if (_semanticAnalyzer == null) return false;
+            if (_semanticAnalyzer.NetMemberAnnotations.TryGetValue(node, out var net))
+                return net.Member.Kind == BasicLang.Net.NetMemberCategory.Field;
+
+            return _semanticAnalyzer.GetNodeSymbol(node) is Symbol { Kind: SymbolKind.Variable };
+        }
+
         public void Visit(BinaryExpressionNode node)
         {
             // `Is` / `IsNot`: reference identity, its OWN node (ADR-0011 D5) — never an
@@ -5755,8 +5979,10 @@ namespace BasicLang.Compiler.IR
             {
                 node.Left.Accept(this);
                 var identityLeft = _expressionResult;
+                var identityLeftRead = ReadOperand(node.Left, identityLeft);
                 node.Right.Accept(this);
                 var identityRight = _expressionResult;
+                identityLeft = ValueBeforeLaterOperands(identityLeftRead, identityLeft);
 
                 var identity = new IRIdentityCompare(_currentFunction.GetNextTempName(),
                     identityLeft, identityRight, negated,
@@ -5773,8 +5999,10 @@ namespace BasicLang.Compiler.IR
             {
                 node.Left.Accept(this);
                 var operatorLeft = _expressionResult;
+                var operatorLeftRead = ReadOperand(node.Left, operatorLeft);
                 node.Right.Accept(this);
                 var operatorRight = _expressionResult;
+                operatorLeft = ValueBeforeLaterOperands(operatorLeftRead, operatorLeft);
 
                 var operatorCall = new IRCall(_currentFunction.GetNextTempName(),
                     $"{node.UserOperatorClass}.op_{GetOperatorMethodName(node.UserOperatorSymbol)}",
@@ -5812,9 +6040,13 @@ namespace BasicLang.Compiler.IR
 
             node.Left.Accept(this);
             var left = _expressionResult;
+            var leftRead = ReadOperand(node.Left, left);
 
             node.Right.Accept(this);
             var right = _expressionResult;
+
+            // #203: the left operand's value is taken BEFORE the right one runs.
+            left = ValueBeforeLaterOperands(leftRead, left);
 
             var resultType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
@@ -6570,6 +6802,7 @@ namespace BasicLang.Compiler.IR
             }
 
             EmitInstruction(fieldAccess);
+            if (ReadsPlainStorage(node)) _storageMemberReads.Add(fieldAccess);
 
             _expressionResult = fieldAccess;
         }
@@ -6870,6 +7103,7 @@ namespace BasicLang.Compiler.IR
                     // analyzer resolved for this member access, the same one the instance arm
                     // reads ByRef from.
                     var staticCalleeSymbol = _semanticAnalyzer.GetNodeSymbol(memberExpr);
+                    var staticReads = new List<OperandRead>(node.Arguments.Count);
                     foreach (var arg in node.Arguments)
                     {
                         arg.Accept(this);
@@ -6907,7 +7141,10 @@ namespace BasicLang.Compiler.IR
 
                         call.ByRefArguments.Add(refKind != BasicLang.Net.NetRefKind.None || userByRef);
                         call.NetArgumentRefKinds.Add(refKind);
+                        staticReads.Add(ReadOperand(arg, call.Arguments[call.Arguments.Count - 1],
+                            call.ByRefArguments[call.ByRefArguments.Count - 1]));
                     }
+                    ReadOperandsInOrder(call.Arguments, staticReads);   // #203
 
                     // ⚠ USER callees only, deliberately. This arm also serves .NET targets the
                     // analyzer resolved, whose arguments are marshalled against the descriptor
@@ -7067,18 +7304,29 @@ namespace BasicLang.Compiler.IR
         {
             callee.Accept(this);
             var value = _expressionResult;
+            var calleeRead = ReadOperand(callee, value);
+
+            var argumentValues = new List<IRValue>(arguments.Count);
+            var reads = new List<OperandRead>(arguments.Count);
+            foreach (var arg in arguments)
+            {
+                arg.Accept(this);
+                argumentValues.Add(delegateSymbol != null
+                    ? CoerceToParameterType(_expressionResult, delegateSymbol, argumentValues.Count)
+                    : _expressionResult);
+                reads.Add(ReadOperand(arg, argumentValues[argumentValues.Count - 1]));
+            }
+
+            // #203: the callee's VALUE is taken before its arguments run (`Handler(Swap(1))`, where
+            // Swap reassigns the field), and each argument before the next.
+            ReadOperandsInOrder(argumentValues, reads);
+            value = ValueBeforeLaterOperands(calleeRead, value);
+
             var call = new IRCall(tempName, value?.Name ?? "unknown", returnType)
             {
                 CalleeValue = value
             };
-
-            foreach (var arg in arguments)
-            {
-                arg.Accept(this);
-                call.Arguments.Add(delegateSymbol != null
-                    ? CoerceToParameterType(_expressionResult, delegateSymbol, call.Arguments.Count)
-                    : _expressionResult);
-            }
+            call.Arguments.AddRange(argumentValues);
 
             EmitInstruction(call);
             _expressionResult = call;
@@ -7099,6 +7347,7 @@ namespace BasicLang.Compiler.IR
             var call = new IRCall(tempName, functionName, returnType) { CalleeModule = calleeModule };
             call.GenericArguments.AddRange(BuildGenericArgTypes(node.GenericArguments));
 
+            var reads = new List<OperandRead>(node.Arguments.Count);
             for (int i = 0; i < node.Arguments.Count; i++)
             {
                 node.Arguments[i].Accept(this);
@@ -7110,7 +7359,9 @@ namespace BasicLang.Compiler.IR
                     isByRef = funcSymbol.Parameters[i].IsByRef;
                 }
                 call.ByRefArguments.Add(isByRef);
+                reads.Add(ReadOperand(node.Arguments[i], call.Arguments[i], isByRef));
             }
+            ReadOperandsInOrder(call.Arguments, reads);   // #203
 
             PackParamArrayArguments(call.Arguments, call.ByRefArguments, funcSymbol, node.Arguments);
             AppendOmittedOptionalArguments(call.Arguments, call.ByRefArguments, funcSymbol);
