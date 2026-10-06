@@ -4086,6 +4086,9 @@ namespace BasicLang.Compiler
 
         private StatementNode ParseAssignmentOrExpressionStatement()
         {
+            // #267: read before the parentheses vanish into the expression they enclose.
+            var beginsWithParenthesis = Check(TokenType.LeftParen);
+
             // Parse the left-hand side WITHOUT treating '=' as equality
             // This is the assignment target or the start of an expression
             var target = ParseAssignmentTarget();
@@ -4119,6 +4122,7 @@ namespace BasicLang.Compiler
 
                 var exprStmt = new ExpressionStatementNode(callExpr.Line, callExpr.Column);
                 exprStmt.Expression = callExpr;
+                exprStmt.BeginsWithParenthesis = beginsWithParenthesis;
                 return exprStmt;
             }
 
@@ -4129,6 +4133,7 @@ namespace BasicLang.Compiler
             // Expression statement
             var exprStmt2 = new ExpressionStatementNode(expr.Line, expr.Column);
             exprStmt2.Expression = expr;
+            exprStmt2.BeginsWithParenthesis = beginsWithParenthesis;
             return exprStmt2;
         }
 

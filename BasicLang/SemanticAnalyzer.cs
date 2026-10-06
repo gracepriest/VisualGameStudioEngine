@@ -210,6 +210,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new HashSet<CallExpressionNode>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// #267: the calls <see cref="Visit(CallExpressionNode)"/> typed as an ELEMENT READ rather than
+        /// an invocation — an array element or a collection indexer (<c>a(5)</c>, <c>l(i)</c>,
+        /// <c>d("k")</c>), value false; the explicit default property <c>l.Item(i)</c>, value true.
+        /// Recorded where the call is typed, so the statement check (<see cref="NonInvocationStatement"/>)
+        /// reads the analyzer's own decision instead of re-deriving it.
+        /// </summary>
+        private readonly Dictionary<CallExpressionNode, bool> _elementReadCalls =
+            new Dictionary<CallExpressionNode, bool>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #267: VB's conversion OPERATORS among the registered intrinsics (<c>CInt</c>, <c>CStr</c>, …),
+        /// by symbol. In VB they are casts, not calls, so one standing alone is BC30454 as
+        /// <c>CType</c> is. Filled by <see cref="RecordConversionOperators"/> on every analysis.
+        /// </summary>
+        private readonly HashSet<Symbol> _conversionOperators =
+            new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
         /// P2a-2 Task 2/7a — the .NET members the probes resolved, keyed by AST node (reference
         /// identity), each carrying the Task-7a exactness bit. <see cref="IRBuilder"/> reads
         /// this while lowering and stamps <c>ResolvedNetTarget</c>/<c>NetCategory</c>/
@@ -1450,6 +1468,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _sharedMemberNames.Clear();
             _synthesizedSymbols.Clear();
             _delegateMemberInvocations.Clear();
+            _elementReadCalls.Clear();
             _netNamespaces.Clear();
             _moduleMembers.Clear();
 
@@ -1458,6 +1477,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             // Register standard library functions
             RegisterStdLibFunctions();
+            RecordConversionOperators();
 
             // Make sibling project files' public symbols visible (implicit
             // project-wide imports) before registering this unit's declarations.
@@ -11031,6 +11051,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (IsValueOnlyExpression(node.Expression))
                 Error("Expression is not a statement: its value would be discarded. " +
                       "Assign it, pass it to a call, or remove it.", node.Line, node.Column);
+            else if (NonInvocationStatement(node) is { } refusal)
+                VbCodedError(refusal.Code, refusal.Message, node.Expression);   // #267
         }
 
         /// <summary>
@@ -11046,6 +11068,155 @@ namespace BasicLang.Compiler.SemanticAnalysis
             UnaryExpressionNode unary => unary.Operator is not ("++" or "--"),
             _ => false,
         };
+
+        private const string DiscardedValueHint =
+            " Only a call can stand alone as a statement: assign the value, or pass it to a call.";
+
+        /// <summary>
+        /// ⭐ #267 — VB accepts an expression as a statement only when it is an INVOCATION, and
+        /// refuses the rest with three numbers, each matched here (vbc, measured):
+        /// <list type="bullet">
+        /// <item>BC30035 "Syntax error." — a statement that begins with <c>New</c> or <c>(</c>,
+        /// whatever follows: <c>New C()</c>, <c>New C(F())</c>, <c>New C().M()</c>, <c>(F())</c>.</item>
+        /// <item>BC30545 "Property access must assign to the property or use its value." — a property
+        /// read: <c>b.P</c>, <c>Me.P</c>, <c>MyBase.P</c>, a bare <c>P</c>, <c>b.P()</c>,
+        /// <c>l.Item(0)</c>; BC30057 when arguments go to a property that takes none
+        /// (<c>b.Items(0)</c>). A WriteOnly property is left to BC30524, which vbc reports alone.</item>
+        /// <item>BC30454 "Expression is not a method." — any other value: a field, local, parameter
+        /// or constant (<c>b.K</c>, <c>Make().K</c>, <c>x</c>), an array element or indexer
+        /// (<c>a(5)</c>, <c>l(F())</c>, <c>d("k")</c>), a cast (<c>CType</c>, <c>DirectCast</c>,
+        /// <c>TryCast</c>, <c>CInt(x)</c>).</item>
+        /// </list>
+        /// <para>⛔ Before, only literals and operator expressions were refused, and the backends
+        /// disagreed about the rest: C# DROPPED the statement, any call inside it included
+        /// (<c>New Box(Tag())</c> never called <c>Tag</c>), JavaScript dropped more of them, C++ and
+        /// MSIL ran them.</para>
+        /// <para>Decided by what the expression was ANALYZED as — its node kind and the symbol it
+        /// bound — never by its spelling. ⚠ Permissive wherever the analyzer does not know: a .NET
+        /// member binds no symbol here (<c>sb.Clear</c> and <c>l.Clear</c> are calls in VB; the
+        /// property <c>l.Count</c>, which vbc refuses, stays accepted), and an unresolved name binds
+        /// none. ⚠ VB INVOKES a delegate-typed variable, parameter or field named alone (<c>f</c>,
+        /// <c>b.Cb</c>, <c>Make().Cb</c> run the delegate; measured), so that one shape is never
+        /// refused — and ONLY that shape: a delegate-typed property is still BC30545 and a delegate
+        /// element (<c>fs(0)</c>, <c>dd("k")</c>) still BC30454, as vbc reports them.</para>
+        /// </summary>
+        private (string Code, string Message)? NonInvocationStatement(ExpressionStatementNode statement)
+        {
+            var expression = statement.Expression;
+            if (statement.BeginsWithParenthesis || LeftmostOperand(expression) is NewExpressionNode)
+                return ("BC30035", "Syntax error. A statement cannot begin with 'New' or '(':" +
+                                   " assign the value to a variable, or call a method on one.");
+
+            const string notAMethod = "Expression is not a method." + DiscardedValueHint;
+            const string propertyAccess = "Property access must assign to the property or use its value.";
+            switch (expression)
+            {
+                case CastExpressionNode { IsTypeOfTest: false }:
+                    return ("BC30454", notAMethod);
+
+                case ArrayAccessExpressionNode:
+                    return ("BC30454", notAMethod);
+
+                case IdentifierExpressionNode or MemberAccessExpressionNode:
+                {
+                    var symbol = GetNodeSymbol(expression);
+                    if (symbol == null) return null;
+                    // A property is read, never invoked — a delegate-typed one too (vbc: `b.CbP` is BC30545).
+                    if (symbol.Kind == SymbolKind.Property)
+                        return symbol.IsWriteOnly ? null : ("BC30545", propertyAccess);
+                    if (!IsValueSymbol(symbol)) return null;
+                    // The ONE shape VB invokes: a delegate-typed variable, parameter or field named alone.
+                    return MayBeDelegateValue(GetNodeType(expression)) ? null : ("BC30454", notAMethod);
+                }
+
+                case CallExpressionNode call:
+                {
+                    var callee = call.Callee is IdentifierExpressionNode or MemberAccessExpressionNode
+                        ? GetNodeSymbol(call.Callee)
+                        : null;
+                    if (callee != null && _conversionOperators.Contains(callee))
+                        return ("BC30454", notAMethod);
+                    if (_delegateMemberInvocations.Contains(call))
+                        return null;
+                    if (callee?.Kind == SymbolKind.Property)
+                    {
+                        if (callee.IsWriteOnly) return null;
+                        return call.Arguments.Count > (callee.Parameters?.Count ?? 0)
+                            ? ("BC30057", $"Too many arguments to '{callee.Name}'.")
+                            : ("BC30545", propertyAccess);
+                    }
+                    // An element is read, never invoked — a delegate element too (vbc: `fs(0)`,
+                    // `fl(0)`, `dd("k")` are BC30454; `fl.Item(0)` is BC30545).
+                    if (_elementReadCalls.TryGetValue(call, out var viaItemProperty))
+                        return viaItemProperty ? ("BC30545", propertyAccess) : ("BC30454", notAMethod);
+                    return callee != null && IsValueSymbol(callee) && !MayBeDelegateValue(GetNodeType(call.Callee))
+                        ? ("BC30454", notAMethod)
+                        : null;
+                }
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>#267: a symbol that names a stored VALUE — a field, local, parameter or constant.</summary>
+        private static bool IsValueSymbol(Symbol symbol) =>
+            symbol.Kind is SymbolKind.Variable or SymbolKind.Parameter or SymbolKind.Constant;
+
+        /// <summary>
+        /// #267: the operand an expression's receiver chain starts from — <c>New C()</c> for
+        /// <c>New C().M()(0)</c> — which is where the statement begins.
+        /// </summary>
+        private static ExpressionNode LeftmostOperand(ExpressionNode expression)
+        {
+            while (true)
+            {
+                switch (expression)
+                {
+                    case CallExpressionNode call when call.Callee != null: expression = call.Callee; break;
+                    case MemberAccessExpressionNode access when access.Object != null: expression = access.Object; break;
+                    case ArrayAccessExpressionNode element when element.Array != null: expression = element.Array; break;
+                    default: return expression;
+                }
+            }
+        }
+
+        /// <summary>
+        /// #267: whether a value of <paramref name="type"/> may be a DELEGATE — which VB invokes when a
+        /// VARIABLE, parameter or field of that type stands alone as a statement (<c>f</c>, <c>b.Cb</c>;
+        /// measured; never a property or an element), so such a statement is never refused. True for a
+        /// delegate and for whatever this analyzer cannot rule out: no type,
+        /// a foreign type, and a .NET class (one <see cref="IsNetDelegateType"/> cannot resolve may
+        /// still be a delegate). Object, a BasicLang type, a primitive, an array, an Enum or Structure
+        /// and the collections BasicLang models are not.
+        /// </summary>
+        private bool MayBeDelegateValue(TypeInfo type) =>
+            type == null
+            || type.Kind is TypeKind.Foreign or TypeKind.Delegate
+            || IsDelegateForIdentity(type)
+            || (type.Kind == TypeKind.Class
+                && !ReferenceEquals(type, _typeManager.ObjectType)
+                && !IsUserDefinedTypeName(type.Name)
+                && !IsIndexableGenericType(type));
+
+        /// <summary>
+        /// #267: VB's conversion operators among the intrinsics <see cref="RegisterStdLibFunctions"/>
+        /// just registered — named once, here where they are defined; every use is judged by the
+        /// SYMBOL, so a user's own <c>Function CInt</c> shadows these and is a call. <c>Asc</c>,
+        /// <c>Chr</c>, <c>Str</c> and <c>Val</c> are library functions in VB and stay calls. ⚠ VB's
+        /// <c>CDec</c>, <c>CChar</c>, <c>CObj</c> and <c>CDate</c> are conversion operators too (vbc:
+        /// BC30454 alone), but nothing registers them as intrinsics, so they bind no symbol and stay
+        /// accepted until they are registered.
+        /// </summary>
+        private void RecordConversionOperators()
+        {
+            _conversionOperators.Clear();
+            foreach (var name in new[] { "CBool", "CByte", "CDbl", "CInt", "CLng", "CSByte", "CShort", "CSng",
+                                         "CStr", "CUInt", "CULng", "CUShort" })
+            {
+                if (GlobalScope.Resolve(name) is { } conversion) _conversionOperators.Add(conversion);
+            }
+        }
 
         // ====================================================================
         // Expressions
@@ -12385,6 +12556,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(CallExpressionNode node)
         {
+            _elementReadCalls.Remove(node);   // #267: recorded afresh on every pass, below
+
             // A ::-qualified foreign C++ free-function call (mathlib::freeAdd(3, 4),
             // ::globalFn(x), ns::sub::compute()). The whole call is opaque foreign: type its
             // result Foreign so the C++ backend renders it verbatim & inline, evaluate the
@@ -12466,6 +12639,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     foreach (var index in node.Arguments)
                         index.Accept(this);
                     SetNodeType(node, GetGenericCollectionElementType(itemReceiver));
+                    _elementReadCalls[node] = true;
                     return;
                 }
             }
@@ -12494,6 +12668,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           node.Line, node.Column);
                 }
                 SetNodeType(node, calleeType.ElementType ?? _typeManager.ObjectType);
+                _elementReadCalls[node] = false;
                 return;
             }
 
@@ -12506,6 +12681,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 var elementType = GetGenericCollectionElementType(calleeType);
                 SetNodeType(node, elementType);
+                _elementReadCalls[node] = false;
                 return;
             }
 
