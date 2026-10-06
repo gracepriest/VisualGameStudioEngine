@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #216 TESTED — C#: an Object `Optional` with a non-Nothing default compiles, as VB's own `[Optional, DefaultParameterValue]` encoding (`CSharpBackend.JoinParameters` / `VbOptionalEncoding`; `git log --grep '#216'`)
+- **Tests (12 new, 1 moved):** `OptionalObjectDefaultExecutionTests` (Integration, 11 vbc-answered rows on C# x CLI / `--optimize` / `CompileProjectFiles`: `= 5` `"x"` `True` `2.5` `"a"c` `5000000000L`, a class / Shared / interface method, an `= value` Optional BEFORE the Object one (CS1737), narrowing + Decimal, Object first) + `OptionalObjectDefaultShapeTests` (fast, 1: the metadata defaults are vbc's value AND type, `= 5L` an Int64; the no-Object-Optional control keeps the old `= value`). MOVED: `MsilObjectBoxingExecutionTests.E16_…` is a positive C# run. C#-only, so it is in `NotJavaScriptExecution` and the JS roster stays 126. Mutants M1-M4 killed (M4 only by reflection).
+- **Gates (Linux):** fast 0 failed / 12,730 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 11, `Optional` 63, `MsilObjectBoxing` 99, `Object` 256, `CSharp` 1,321, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): `Optional ByRef … = 5` is broken on every backend (C# CS1741 / CS1620); `5L` boxed into an Object reads as Int32 on C#; a constructor's Optionals carry no default in C# metadata; a top-level Enum default and a Delegate/lambda Optional are refused; C++ has no Object.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #214 TESTED — copy propagation no longer erases an Object comparison operand, so C# and MSIL print vbc's answer for `Dim s As Object = "20" : s = 20` (ADR-0012; `CopyPropagationPass.KeepsLateBinding`; `git log --grep '#214'`)
 - **Tests (14 new, 1 moved):** `ObjectComparisonUnderOptimizerExecutionTests` (Integration, 13: vbc-answered Object-vs-constant rows on C# + MSIL x CLI / `--optimize` / `CompileProjectFiles` + the in-process emitters, the constant on either side, `If o = 20`, `"abc" = 20` THROWS InvalidCast, three controls; two JS rows via `RunOptimized`, which spawns Node, so it joined the JS roster: now 126 = master 125 + 1) + `ObjectComparisonUnderOptimizerShapeTests` (fast, 1). MOVED: `MsilObjectBoxingExecutionTests.L11b_…` is a positive pin on C# + MSIL, JS a NAMED #215 pin. Mutants M1-M5 killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,725 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `ConstantFold` 7, `Optimizer` 340, `MixedNumeric` 79, `Object` 230, `CSharpLateBoundComparison` 14, `CopyPropagation` 62, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -34,7 +41,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 ## ⚡ NEWEST — 2026-10-06: #211 TESTED — C#: an Object comparison is VB's late-bound comparison, `Operators.ConditionalCompareObject*` (ADR-0012; `CSharpBackend.IsLateBoundComparison` / `LateBoundCaseTest`, `case var _caseN when …`; `git log --grep '#211'`)
 - **Tests (14 new, 10 moved, 2 harness-fixed):** `CSharpLateBoundComparisonExecutionTests` (Integration, 12: vbc-answered probes on C# x CLI / `--optimize` / `CompileProjectFiles`: Object = Object, `o = Nothing` on a 0, `Is` / `Case Is Nothing` stay identity, `Case 1 To 5` on 3.5, a run-time String, a class instance `=` THROWS InvalidCast (as vbc), `<>` / `<`, a `When` guard, `Case Nothing`, nested Select + Or pattern, a String subject, the Object on the right + loop conditions; C# only, so under `NotJavaScriptExecution`: roster still 124) + `CSharpLateBoundComparisonShapeTests` (fast, 2: typed comparisons emit no late-bound call; the Nothing literal never makes one). MOVED: `MsilObjectBoxingExecutionTests.ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211` (10) is now `…_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. Mutants M1-M5 killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,723 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Object` 216, `SelectCase` 83, `LateBound` 28, `CSharp` 1,297, `JsExecutionTierRoster` 5. Full suite NOT run.
-- ⛔ **Traps / gaps** (fixture header): ⚠ the in-process Roslyn compile needs `Microsoft.VisualBasic.Core` among its references or the product's right output is CS0234 — `FourBackends.EmittedCSharpReferences` is the one list (`CompileEmittedCSharp`, `CSharpProcessRunner`, `MsilObjectBoxing.CSharpDiagnostics`); SEVEN other test files still build their own from the loaded assemblies alone (`ReturnCoercionTests`, `NameBindingResolution…`, `FloatingIntegerDivision`, `LambdaBoundaryDiagnostics…`, `LoopConditionEmissionShape`, `LambdaBodyEmissionShape`, `MyBaseMethodCallStatementShape`). Gaps, no test: L11b is the #214 fold (wrong on every backend); an analyzer-mistyped operand (an Enum member, #277) also goes late-bound, as on MSIL; JS `= Nothing` (#215); C++ has no Object.
+- ⛔ **Traps / gaps** (fixture header): ⚠ the in-process Roslyn compile needs `Microsoft.VisualBasic.Core` among its references or the product's right output is CS0234 — `FourBackends.EmittedCSharpReferences` is the one list (`CompileEmittedCSharp`, `CSharpProcessRunner`; `MsilObjectBoxing.CSharpDiagnostics` was the third reader until #216 removed it); SEVEN other test files still build their own from the loaded assemblies alone (`ReturnCoercionTests`, `NameBindingResolution…`, `FloatingIntegerDivision`, `LambdaBoundaryDiagnostics…`, `LoopConditionEmissionShape`, `LambdaBodyEmissionShape`, `MyBaseMethodCallStatementShape`). Gaps, no test: L11b is the #214 fold (wrong on every backend); an analyzer-mistyped operand (an Enum member, #277) also goes late-bound, as on MSIL; JS `= Nothing` (#215); C++ has no Object.
 
 ---
 
@@ -6822,8 +6829,11 @@ single new failure against the 170-name baseline.
       declaration is a ilasm syntax error), independent of anything #177 touches. (E05, E17)
     - **#136** — a `Sub` lambda's write to a captured Object variable is lost on C# (the '99' line
       never prints). (E07)
-    - **#216** — an `Optional` parameter typed Object with a non-`Nothing` default refuses to
-      compile on C# (CS1763: a reference-typed default other than `string`/`null`). (E16)
+    - **#216** — FIXED 2026-10-06 (was: an `Optional` parameter typed Object with a non-`Nothing`
+      default refused to compile on C#, CS1763: a reference-typed default other than `string`/`null`).
+      `CSharpBackend.JoinParameters` writes VB's own `[Optional, DefaultParameterValue(v)]` encoding
+      for it; E16's pin became `E16_OptionalObjectDefault_CompilesAndRunsOnCSharp_AsVbcPrints_Task216`
+      and `OptionalObjectDefaultExecutionTests` is the fixture. (E16)
     - **#211** — FIXED 2026-10-06 (was: a comparison with a statically Object operand refused to
       compile on C# at all, CS0019, or CS8781 for a string relational `Case` pattern). C# now emits
       ADR-0012's late-bound comparison (`CSharpBackend.IsLateBoundComparison`) and runs E02, C1,

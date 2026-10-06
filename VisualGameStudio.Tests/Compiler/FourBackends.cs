@@ -164,8 +164,8 @@ internal static class FourBackends
     /// <para>⛔ #211. The VB runtime (<c>Microsoft.VisualBasic.Core</c>) is NOT necessarily loaded by the time a test compiles, and the C# backend
     /// emits a call into it for an Object comparison (<c>Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*</c>), as it
     /// already did for a String-to-number conversion (<c>Conversions.ToInteger</c>). A list built from the loaded assemblies alone made that program
-    /// CS0234 here while the product's own output ran right, so the reference is added by TYPE, as <c>SampleProgramBuildTests</c> does. Both
-    /// <see cref="CompileEmittedCSharp"/> (and so <see cref="CSharpProcessRunner"/>) and <c>MsilObjectBoxingExecutionTests.CSharpDiagnostics</c> read it.</para>
+    /// CS0234 here while the product's own output ran right, so the reference is added by TYPE, as <c>SampleProgramBuildTests</c> does.
+    /// <see cref="CompileEmittedCSharp"/> (and so <see cref="CSharpProcessRunner"/>) reads it. (<c>MsilObjectBoxingExecutionTests.CSharpDiagnostics</c> was the other reader until #216 moved the pin that used it and removed it.)</para>
     /// </summary>
     internal static ImmutableArray<MetadataReference> EmittedCSharpReferences()
         => AppDomain.CurrentDomain.GetAssemblies()

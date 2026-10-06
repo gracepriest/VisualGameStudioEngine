@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using NUnit.Framework;
 using VisualGameStudio.Tests.Compiler;
 using VisualGameStudio.Tests.Native;
@@ -807,8 +804,9 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void E16_OptionalObjectParameter_JsAndMsilAgree()
     {
-        // Pinned separately below: C# refuses to compile this shape at all (#216), unrelated to
-        // #177's own boxing fix.
+        // C# runs this shape too, since #216 (it emitted `object o = 5` and refused with CS1763): the
+        // positive assertion is E16_OptionalObjectDefault_CompilesAndRunsOnCSharp_AsVbcPrints_Task216
+        // below, and OptionalObjectDefaultExecutionTests is the C# fixture for the rest.
         Assert.Multiple(() =>
         {
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(E16)), Is.EqualTo(E16Expected), "JavaScript");
@@ -1389,24 +1387,9 @@ public class MsilObjectBoxingExecutionTests
     // ====================================================================================
     // 4. Pins for follow-up tasks this fix's own probes surfaced. Each is a fact about a
     //    DIFFERENT area (the C#/JS backends, or the optimizer's constant folding), not a defect
-    //    in #177's own MSIL work — do not fix here. (#211 is the one that moved: it is FIXED, and
-    //    its group is now a positive assertion that C# runs the programs.)
+    //    in #177's own MSIL work — do not fix here. (#211 and #216 are the ones that moved: both are
+    //    FIXED, and each group is now a positive assertion that C# runs the programs.)
     // ====================================================================================
-
-    /// <summary>Compiles <paramref name="source"/> to C# and returns the Roslyn diagnostics,
-    /// without asserting success — the pin below wants the FAILURE, not a thrown exception.</summary>
-    private static ImmutableArray<Diagnostic> CSharpDiagnostics(string source)
-    {
-        var csharp = ReturnCoercionTests.EmitCSharpForTest(source);
-        // #211: the shared list, which carries the VB runtime an Object comparison calls into.
-        var references = FourBackends.EmittedCSharpReferences();
-        var compilation = CSharpCompilation.Create(
-            "MsilObjectBoxingCSharpProbe_" + Guid.NewGuid().ToString("N"),
-            new[] { CSharpSyntaxTree.ParseText(csharp) },
-            references,
-            new CSharpCompilationOptions(OutputKind.ConsoleApplication));
-        return compilation.GetDiagnostics();
-    }
 
     // #211, FIXED — a comparison with a statically Object operand used to refuse to compile on C#
     // at all (CS0019 for the ordinary operators; CS8781 for L10's string relational pattern). C# now
@@ -1566,17 +1549,27 @@ public class MsilObjectBoxingExecutionTests
             + $"'{vb.Replace("\n", " | ")}') means #215 moved — update this pin, do not just delete it.");
     }
 
-    // #216 — an Optional parameter typed Object with a non-null default refuses to compile on
-    // C# at all (CS1763: a reference-typed default other than string/null).
+    // #216, FIXED — an Optional parameter typed Object with a non-Nothing default used to refuse to compile on C#
+    // at all (CS1763: C# allows only null as the default of a reference-typed parameter other than string, and the
+    // backend emitted `object o = 5`). C# now writes VB's own encoding, `[Optional, DefaultParameterValue(5)] object o`,
+    // so the program compiles AND RUNS and prints what vbc prints — the same expectation the JavaScript and MSIL
+    // legs above assert, never what C# printed. This was E16_OptionalObjectDefault_RefusesToCompileOnCSharp_PinnedForTask216:
+    // the pin moved to a positive assertion rather than being deleted. OptionalObjectDefaultExecutionTests is the
+    // fixture for the other literal kinds, the class / Shared / interface shapes and the mixed parameter lists, through
+    // the CLI, --optimize and CompileProjectFiles.
+    //
+    // The standard and the AGGRESSIVE passes through the in-process emitters, every run in a child process
+    // (CSharpProcessRunner, hang-safe).
     [Test]
-    public void E16_OptionalObjectDefault_RefusesToCompileOnCSharp_PinnedForTask216()
+    public void E16_OptionalObjectDefault_CompilesAndRunsOnCSharp_AsVbcPrints_Task216()
     {
-        var diagnostics = CSharpDiagnostics(E16);
-        Assert.That(diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error && d.Id == "CS1763"),
-            "task #216 (pre-existing, unrelated to #177): `Optional o As Object = 5` must still "
-            + "refuse with CS1763 on C#. A different diagnostic set (including none, meaning C# "
-            + "now compiles this) means #216 moved — update this pin, do not just delete it.\n"
-            + string.Join("\n", diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(E16))),
+                Is.EqualTo(E16Expected), "C#");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(E16))),
+                Is.EqualTo(E16Expected), "C# (aggressive passes)");
+        });
     }
 
     // #213 — MyBase.Show(5) into a Base method typed `o As Object` once threw MissingMethodException

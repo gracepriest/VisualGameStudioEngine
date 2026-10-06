@@ -658,6 +658,8 @@ public class JsExecutionTierRosterTests
         "CSharpLateBoundComparisonExecutionTests",
         // Task #212: a VB conversion intrinsic of an Object operand (CInt, CBool, CByte, ...) is VB's Conversions.ToXxx(object), run against vbc on C# and MSIL through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript's Object conversions disagree with VB and are a known gap.
         "ObjectConversionIntrinsicExecutionTests",
+        // Task #216: an Optional parameter typed Object with a non-Nothing default (`= 5`, `= "x"`, `= True`, `= 2.5`, `= "a"c`, `= 5000000000L`) is VB's [Optional, DefaultParameterValue] encoding on C#, run against vbc through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript and MSIL already ran these programs.
+        "OptionalObjectDefaultExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
