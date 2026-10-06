@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #208 TESTED — a `Shared Sub New` runs as the type initializer, once, on first use: C# `static C()`, MSIL the one `.cctor`, JS lazy `$typeInit`, C++ `blTypeInit_()` + `(C::blTypeInit_(), C::F)` at a Shared field access (`IRClass.TypeInitializer`; BC30479 / BC30043 / BC30269 refused; `git log --grep '#208'`)
+- **Tests (14 new, 0 moved):** `SharedConstructorExecutionTests` (Integration, 12 groups of 25 vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 124 = master 123 + 1) + `SharedConstructorDiagnosticsAndEmissionTests` (fast, 2: the refusals at vbc's sites; a class with no `Shared Sub New` emits no type-init text). Mutants M1-M12 killed (fixture headers). ⚠ P15: `New Derived()` runs Derived's initializer FIRST, then Base's (vbc's order, not base-first).
+- **Gates (Linux, ilasm / g++ / Node present):** fast 0 failed / 12,721 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `Shared` 214 (+1 skipped), `Constructor` 337, `PropertyAccess` 74, `Initializer` 191, `CppCollection` 103, `OperandEvaluationOrder` 14, `JavaScriptBoundsCheck` 15, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): a generic class's JS initializer runs once in total; LLVM emits no body; `Public Shared Sub New` (BC30480) and a bare `MyBase.New()` in a Shared ctor are accepted; #295 (C++ `C->F` for a ByRef / indexed Shared field with NO Shared ctor; JS / MSIL refuse a Shared field ByRef); #270 (MSIL drops a bare write to an inherited Shared field). A Structure cannot declare a Shared member at all.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #207 TESTED — JavaScript bounds-checks List / array element access and Dictionary reads, throwing .NET's exception with .NET's message (`JavaScriptBackend.cs` `ElementCheck` + five `__bl…Get/Set` prelude helpers, `JsExceptionTypes.CollectRequired`; `git log --grep '#207'`)
 - **Tests (15 new, 1 moved):** `JavaScriptBoundsCheckExecutionTests` (Integration, 14 rows over 26 programs, JS only x CLI / `--optimize` / `CompileProjectFiles`: a List read past the end typed / catch-all / at `Count` / negative / `.Item`; a List write that never grows; array read + write incl. 2-D; Dictionary missing key; .NET's message text; `+=` / `++`; a `When` guard; field / lambda / constructor / property / Shared; `List(Of Integer())`; a loop ended by the exception; an UNCAUGHT read dying with AOORE; an unused read still throwing; controls) + `JavaScriptBoundsCheckEmissionTests` (fast, 1: a program that never indexes emits none of the helpers, the prelude is shared with web forms). MOVED: `NothingStringTextExecutionTests.E10_JavaScript_…_Against207` is now `…_ThrowsAndPrintsSameTrue_Issue207Fixed`. Mutants M1-M5 killed; no fix at all fails 14 of 15.
 - **Gates (Linux, on the fix 4fe79e38):** fast 12,717 passed / 94 skipped, the one failure being `RosterIsPinned` on a tree without #203 (pin 123 = #203's 122 + this one; green once merged after #203, as it was); Integration, one filter each: the fixtures 15, `JavaScript` 1,333 (+2 skipped), `NothingStringText` 34, `Collection` 199, `Array` 333 (+2), `TryCatch` 20 (+1), all 0 failed; `JsExecutionTierRoster` 4 passed + that same pin; `Exception` 136 passed + 1 FAILED, `TerminalService` cancellation (#287, a Linux race, not #207's). Full suite NOT run.
@@ -6800,7 +6807,7 @@ single new failure against the 170-name baseline.
       `-1` (`True` widens to Integer as all bits set, which `Convert.ToInt32(object)` does not do
       for a boxed Boolean).
     - #208-#210 were filed while briefing #178 (ReadOnly/WriteOnly diagnostics), not by #177:
-      **#208** `Shared Sub New` never runs on any backend (a Shared field it sets reads 0);
+      **#208** `Shared Sub New` never ran on any backend (a Shared field it sets read 0) — FIXED 2026-10-06, see the #208 section at the top;
       **#209** a property passed ByRef loses VB's copy-back (C++ silently, C# CS0206, MSIL
       refuses); **#210** an auto-property initializer (`Property P As Integer = 7`) does not
       parse.

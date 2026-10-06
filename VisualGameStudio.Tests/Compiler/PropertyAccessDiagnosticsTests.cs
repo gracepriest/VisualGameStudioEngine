@@ -557,8 +557,10 @@ public class PropertyAccessDiagnosticsTests
         End Class
         """);
 
-    /// <summary>Legal even though it never actually RUNS on any backend (#208) — the front end's
-    /// job here is only whether the WRITE is refused, and VB accepts it.</summary>
+    /// <summary>Legal, and since #208 it RUNS on every backend: the Shared Sub New is the class's type initializer, so
+    /// `S` is 11 at its first read (`SharedConstructorExecutionTests` P10). It used to be emitted as an instance
+    /// constructor that never ran on a Shared access. The front end's job here is only whether the WRITE is refused,
+    /// and VB accepts it.</summary>
     [Test]
     public void Legal_SharedReadOnlyAutoProperty_AssignedInSharedSubNew() => AssertNoPropertyAccessDiagnostic("""
         Class C
