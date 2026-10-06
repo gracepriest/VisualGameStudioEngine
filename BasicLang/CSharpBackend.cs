@@ -274,7 +274,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 };
             }
 
-            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase))
+            // ⛔ An OBJECT source (#212) converts by the same runtime: VB's CInt(o) is
+            // Conversions.ToInteger(object), which looks at what the box HOLDS and converts it by
+            // VB's rules — a boxed True is -1 (Convert.ToInt32 answered 1), a boxed "0" parses
+            // (Convert.ToBoolean threw), a boxed Char refuses (Convert.ToInt32 gave its code). The
+            // Nothing literal is cast to object: bare `null` binds the (string) overload, and
+            // ToBoolean((string)null) throws where CBool(Nothing) is False.
+            // ⚠ CStr is NOT here: VB's CStr(o) of Nothing is Nothing, where Convert.ToString gives
+            // "" — and Len lowers to `.Length`, and `&` lowers through CStr, so adopting it turns a
+            // running `Len(CStr(o))` into a NullReferenceException. That is its own task.
+            var objectSource = string.Equals(source, "Object", StringComparison.OrdinalIgnoreCase);
+            if (objectSource && call.Arguments[0] is IRConstant { Value: null })
+                value = "(object)null";
+
+            if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase) || objectSource)
             {
                 return call.FunctionName switch
                 {

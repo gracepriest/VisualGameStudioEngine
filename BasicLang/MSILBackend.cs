@@ -7531,21 +7531,62 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// that accident into the same wrong answer, which is why the two directions ship
         /// together.</para>
         ///
-        /// <para>⚠ <c>Convert.ToXxx(object)</c> is the C# backend's own text for these six
-        /// (<c>CSharpStdLibProvider.EmitCInt</c> and friends, and <c>CType(o, T)</c> to the same six
-        /// types lowers to the same intrinsics), so MSIL answers what C# answers: a boxed Double
-        /// through CInt ROUNDS half-to-even, a boxed String PARSES, <c>CStr(Nothing)</c> is "" —
-        /// and a value that cannot convert THROWS (FormatException, InvalidCastException), never
-        /// reads bits. <c>CType(o, Short)</c> and <c>DirectCast</c> are not conversions but
-        /// unboxings — see <see cref="EmitCastConversion"/>.</para>
+        /// <para>⚠ The call is VB's own <c>Conversions.ToXxx(object)</c> (#212,
+        /// <see cref="VbObjectConversions"/>), which the C# backend also calls
+        /// (<c>CSharpBackend.VbConversionText</c>, and <c>CType(o, T)</c> to the same six types
+        /// lowers to the same intrinsics), so MSIL answers what C# and vbc answer: a boxed Double
+        /// through CInt ROUNDS half-to-even, a boxed True is -1, a boxed String PARSES by VB's
+        /// parser — and a value that cannot convert THROWS InvalidCastException, never reads bits.
+        /// To String it is still <c>Convert.ToString(object)</c>, so <c>CStr(Nothing)</c> is "".
+        /// <c>CType(o, Short)</c> and <c>DirectCast</c> are not conversions but unboxings — see
+        /// <see cref="EmitCastConversion"/>.</para>
         /// </summary>
         private bool EmitConvertFromObject(IRValue argument, string convertMethod, string resultSpec)
         {
             if (!IsObjectOperand(argument?.Type)) return false;
 
+            // ⛔ #212: to a NUMBER or a BOOLEAN it is VB's runtime, not System.Convert — what vbc
+            // calls for CInt(o). Convert answered with .NET's rules: a boxed True through CInt was
+            // 1 (VB: -1), CBool of a boxed "0" threw FormatException (VB: False), and a boxed " 3.5 "
+            // through CInt threw (VB parses it: 4). The C# backend calls the same methods
+            // (CSharpBackend.VbConversionText). ToString stays on Convert — see VbObjectConversions.
+            if (VbObjectConversions.TryGetValue(convertMethod, out var vbMethod))
+            {
+                _usesVbRuntime = true;
+                WriteLine($"    call {resultSpec} {VbConversionsToken}::{vbMethod}(object)");
+                return true;
+            }
+
             WriteLine($"    call {resultSpec} [mscorlib]System.Convert::{convertMethod}(object)");
             return true;
         }
+
+        /// <summary>The type token of VB's conversion helpers, in the VB runtime assembly.</summary>
+        private const string VbConversionsToken =
+            "[Microsoft.VisualBasic.Core]Microsoft.VisualBasic.CompilerServices.Conversions";
+
+        /// <summary>
+        /// #212: each <c>System.Convert</c> method <see cref="EmitConvertFromObject"/> is asked for,
+        /// as the <c>Conversions</c> method VB itself calls for the same intrinsic over an Object.
+        /// <para>⚠ <c>ToString</c> is deliberately absent and stays <c>Convert.ToString(object)</c>:
+        /// VB's CStr of Nothing is Nothing where Convert gives "", and CStr is also how
+        /// <c>&amp;</c> converts an Object operand, so adopting it reaches far past the
+        /// conversions; the C# backend keeps Convert.ToString for CStr too.</para>
+        /// </summary>
+        private static readonly Dictionary<string, string> VbObjectConversions = new(StringComparer.Ordinal)
+        {
+            ["ToInt32"] = "ToInteger",
+            ["ToInt64"] = "ToLong",
+            ["ToDouble"] = "ToDouble",
+            ["ToSingle"] = "ToSingle",
+            ["ToBoolean"] = "ToBoolean",
+            ["ToByte"] = "ToByte",
+            ["ToInt16"] = "ToShort",
+            ["ToSByte"] = "ToSByte",
+            ["ToUInt16"] = "ToUShort",
+            ["ToUInt32"] = "ToUInteger",
+            ["ToUInt64"] = "ToULong",
+        };
 
         /// <summary>
         /// <see cref="EmitConvertFromObject"/>'s sibling for a DECIMAL argument (task #129), already
@@ -8025,7 +8066,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         /// <summary>
         /// True once this module has emitted a call into the VB runtime
-        /// (<see cref="EmitLateBoundCompareOpcodes"/>). <see cref="Generate"/> then declares the
+        /// (<see cref="EmitLateBoundCompareOpcodes"/>, and since #212 <see cref="EmitConvertFromObject"/>).
+        /// <see cref="Generate"/> then declares the
         /// assembly at <see cref="_vbRuntimeExternAt"/>. It is reset for every module.
         /// </summary>
         private bool _usesVbRuntime;
