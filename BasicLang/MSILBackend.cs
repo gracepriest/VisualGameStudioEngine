@@ -1441,7 +1441,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             // Same rule as the module class: `beforefieldinit` is dropped when a type initializer
             // exists, as the C# compiler does for a class with a static constructor.
-            var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization);
+            var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization)
+                                   || irClass.TypeInitializer != null;   // #208: `Shared Sub New`
 
             // A closure environment nested in its creator's class (ADR-0010) is DECLARED by its own
             // simple name and `nested public`; every reference to it spells the full 'Outer'/'Env'
@@ -2417,6 +2418,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             {
                 if (irClass.Methods.Any(m => m.Implementation == function)) return true;
                 if (irClass.Constructors.Any(c => c.Implementation == function)) return true;
+                if (function != null && irClass.TypeInitializer == function) return true;
                 if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function)) return true;
             }
 
@@ -2576,23 +2578,41 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// </summary>
         private void GenerateClassStaticConstructor(IRClass irClass, string className)
         {
-            _localIndices.Clear();
-            _paramIndices.Clear();
-            _byRefParams.Clear();
-            _byRefStoreScratch.Clear();
-            _tempIndices.Clear();
-            _tempNameIndices.Clear();
-            _declaredIdentifiers.Clear();
-            _localSlotSpecs.Clear();
-            _currentMethodIsInstance = false;
-            _currentClassFields.Clear();
-            _maxStack = 8;
-            _currentStack = 0;
+            // ⭐ #208: the class's `Shared Sub New`, when it has one, is the BODY of this same
+            // .cctor — after the Shared field initializers, as vbc orders them. One type
+            // initializer per type: a second .cctor would be a duplicate method ilasm refuses.
+            var typeInitializer = irClass.TypeInitializer;
+            if (typeInitializer != null)
+            {
+                _currentFunction = typeInitializer;
+                InitializeMethodContext(typeInitializer, isInstance: false, owner: irClass);
+                _maxStack = Math.Max(8, _localIndices.Count + _tempIndices.Count + 4);
+            }
+            else
+            {
+                _localIndices.Clear();
+                _paramIndices.Clear();
+                _byRefParams.Clear();
+                _byRefStoreScratch.Clear();
+                _tempIndices.Clear();
+                _tempNameIndices.Clear();
+                _declaredIdentifiers.Clear();
+                _localSlotSpecs.Clear();
+                _currentMethodIsInstance = false;
+                _currentClassFields.Clear();
+                _maxStack = 8;
+                _currentStack = 0;
+            }
 
             WriteLine("  .method private hidebysig specialname rtspecialname");
             WriteLine("          static void .cctor() cil managed");
             WriteLine("  {");
-            WriteLine("    .maxstack 8");
+            WriteLine($"    .maxstack {_maxStack}");
+
+            if (typeInitializer != null && (_localIndices.Count > 0 || _tempIndices.Count > 0))
+            {
+                GenerateLocalsDeclaration(typeInitializer);
+            }
 
             foreach (var field in irClass.Fields)
             {
@@ -2619,7 +2639,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 _currentStack--;
             }
 
-            WriteLine("    ret");
+            if (typeInitializer?.EntryBlock != null)
+            {
+                // _visitedBlocks for the same reason GenerateClassMethod uses it (a Try's region).
+                _visitedBlocks = new HashSet<BasicBlock>();
+                GenerateBasicBlock(typeInitializer.EntryBlock, _visitedBlocks, isEntry: true);
+                EmitLoweredReturnExit();
+                _currentFunction = null;
+                if (!EndsWithRet())
+                    WriteLine("    ret");
+            }
+            else
+            {
+                WriteLine("    ret");
+            }
             WriteLine("  } // end of method .cctor");
         }
 

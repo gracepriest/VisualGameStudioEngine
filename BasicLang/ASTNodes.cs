@@ -641,12 +641,15 @@ namespace BasicLang.Compiler.AST
         public List<ExpressionNode> BaseConstructorArgs { get; set; }  // For MyBase.New(args)
 
         /// <summary>
-        /// Declared <c>Shared Sub New</c>. The parser used to read the modifier and drop it.
+        /// Declared <c>Shared Sub New</c> — the class's TYPE INITIALIZER. The parser used to read
+        /// the modifier and drop it.
         ///
-        /// <para>⚠ Read ONLY by the analyzer's BC30526 exception (task #178): a Shared ReadOnly
+        /// <para>Read by the analyzer's BC30526 exception (task #178): a Shared ReadOnly
         /// auto-property may be assigned in a <c>Shared Sub New</c> of its class, an instance one
-        /// in an instance <c>Sub New</c>, and not the other way round. No backend reads it yet,
-        /// so a <c>Shared Sub New</c> is still emitted as an instance constructor (task #208).</para>
+        /// in an instance <c>Sub New</c>, and not the other way round. And (task #208) it is never
+        /// an instance constructor: the analyzer registers no <c>.ctorN</c> and no base binding for
+        /// it, and IRBuilder lowers it to <c>IRClass.TypeInitializer</c>, not
+        /// <c>IRClass.Constructors</c>.</para>
         /// </summary>
         public bool IsShared { get; set; }
 

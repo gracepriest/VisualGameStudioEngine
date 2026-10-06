@@ -961,6 +961,67 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>The class whose body is being emitted, else null — see <see cref="ReadOnlyAutoPropertySlot"/>.</summary>
         private IRClass _emittingClass;
 
+        /// <summary>
+        /// ⭐ #208: <c>C.$typeInit();</c> while emitting a class that has a <c>Shared Sub New</c>,
+        /// else null — the statement every entry into the class's code begins with.
+        ///
+        /// <para>VB runs a type initializer LAZILY: once, at the first Shared member access or
+        /// instance creation — not at program start. A JS <c>static { }</c> block would run it at
+        /// class DEFINITION, before <c>Main</c>'s first statement, and (measured) that is not only
+        /// a timing difference: a program that today prints <c>start | init | end</c> through a
+        /// <c>New</c> would print <c>init | start | end</c>, and one whose initializer reads state
+        /// <c>Main</c> sets first would read it too early (P16/P17 of #208). A static block can
+        /// also hit the temporal dead zone of a class declared after it.</para>
+        ///
+        /// <para>So the class GUARDS ITSELF, and no access site changes: every Shared field,
+        /// auto-property and event of the class becomes a static accessor pair over a <c>$</c>
+        /// slot (<see cref="EmitGuardedStatic"/>), and every constructor, Shared method and Shared
+        /// accessor body starts with the guard. Instance members need none — they are reachable
+        /// only through an instance, whose constructor ran it. ⚠ A <c>$</c> cannot occur in a
+        /// BasicLang identifier, so neither the slots nor <c>$typeInit</c> can collide with a
+        /// user member. ⚠ One guard per JS class: a GENERIC class's initializer runs once, where
+        /// .NET runs it once per closed type — JS erases the type arguments.</para>
+        /// </summary>
+        private string _typeInitGuard;
+
+        /// <summary>#208: a Shared member of a class with a type initializer — storage in a
+        /// <c>$Class$Name</c> slot, reached only through accessors that run the guard first (see
+        /// <see cref="_typeInitGuard"/>). The slot's own initializer is a constant (IRBuilder
+        /// refuses any other), so its running at definition rather than in the type initializer is
+        /// unobservable.</summary>
+        private void EmitGuardedStatic(string jsName, string init)
+        {
+            var slot = $"${_currentClassName}${jsName}";
+            Line($"static {slot} = {init};");
+            Line($"static get {jsName}() {{ {_typeInitGuard} return {_currentClassName}.{slot}; }}");
+            Line($"static set {jsName}(value) {{ {_typeInitGuard} {_currentClassName}.{slot} = value; }}");
+        }
+
+        /// <summary>
+        /// #208: the type initializer as <c>static $typeInit()</c>, run once through its own flag.
+        /// The flag is set BEFORE the body, as the CLR marks a type initialized before running it:
+        /// the body's own Shared accesses go through the guarded accessors and must not re-enter.
+        /// A class with no declared constructor gets one here, because JS's implicit constructor
+        /// would run no guard and <c>New C()</c> would not trigger the initializer.
+        /// </summary>
+        private void EmitTypeInitializer(IRClass irClass, HashSet<string> members)
+        {
+            Line($"static $typeInitRan = false;");
+            EmitMemberBody("static $typeInit()", irClass.TypeInitializer, members,
+                new List<string> { $"if ({_currentClassName}.$typeInitRan) return;", $"{_currentClassName}.$typeInitRan = true;" },
+                isStatic: true, guard: null);
+
+            if ((irClass.Constructors?.Count ?? 0) == 0)
+            {
+                Line("constructor() {");
+                _indentLevel++;
+                Line(_typeInitGuard);
+                if (!string.IsNullOrEmpty(irClass.BaseClass)) Line("super();");
+                _indentLevel--;
+                Line("}");
+            }
+        }
+
         private void EmitClass(IRClass irClass, IRModule module)
         {
             _emittingClass = irClass;
@@ -1011,6 +1072,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var members = MemberNames(irClass, module);
             _staticMemberOwners = StaticMemberOwners(irClass, module);
+            _typeInitGuard = irClass.TypeInitializer != null ? $"{_currentClassName}.$typeInit();" : null;
 
             foreach (var field in irClass.Fields ?? new List<IRField>())
             {
@@ -1020,7 +1082,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var init = field.Initializer != null
                     ? Expr(field.Initializer)
                     : ArrayInitializer(field.Type) ?? TypeMapper.GetDefaultValue(field.Type);
-                Line($"{(field.IsStatic ? "static " : "")}{SanitizeName(field.Name)} = {init};");
+                if (field.IsStatic && _typeInitGuard != null)
+                    EmitGuardedStatic(SanitizeName(field.Name), init);
+                else
+                    Line($"{(field.IsStatic ? "static " : "")}{SanitizeName(field.Name)} = {init};");
             }
 
             // An event is a Set of handlers on the INSTANCE: AddHandler is `add`, RemoveHandler
@@ -1028,7 +1093,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // the class have separate subscribers, and a Set so a handler added twice fires once
             // — the closest JS reading of a multicast delegate.
             foreach (var evt in irClass.Events ?? new List<IREvent>())
-                Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
+            {
+                if (evt.IsStatic && _typeInitGuard != null)
+                    EmitGuardedStatic(SanitizeName(evt.Name), "new Set()");
+                else
+                    Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = new Set();");
+            }
 
             foreach (var prop in irClass.Properties ?? new List<IRProperty>())
                 EmitProperty(irClass, prop, members);
@@ -1036,8 +1106,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var ctor in irClass.Constructors ?? new List<IRConstructor>())
                 EmitConstructor(irClass, ctor, members);
 
+            if (irClass.TypeInitializer != null)
+                EmitTypeInitializer(irClass, members);
+
             foreach (var method in irClass.Methods ?? new List<IRMethod>())
                 EmitMethod(irClass, method, members);
+
+            _typeInitGuard = null;
 
             _indentLevel--;
             Line("}");
@@ -1185,7 +1260,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return;
                 }
 
-                Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {TypeMapper.GetDefaultValue(prop.Type)};");
+                if (prop.IsStatic && _typeInitGuard != null)
+                    EmitGuardedStatic(SanitizeName(prop.Name), TypeMapper.GetDefaultValue(prop.Type));
+                else
+                    Line($"{(prop.IsStatic ? "static " : "")}{SanitizeName(prop.Name)} = {TypeMapper.GetDefaultValue(prop.Type)};");
                 return;
             }
 
@@ -1201,16 +1279,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `7|0` where every other backend gives `14|14`. Only a setter with an observable
             // effect can tell the two apart, which is why the tests use one.
             var modifier = prop.IsStatic ? "static " : "";
+            var guard = prop.IsStatic ? _typeInitGuard : null;   // #208
 
             if (prop.Getter != null && !prop.IsWriteOnly)
                 EmitMemberBody($"{modifier}get {SanitizeName(prop.Name)}()", prop.Getter, members,
-                    isStatic: prop.IsStatic);
+                    isStatic: prop.IsStatic, guard: guard);
 
             // The setter's implementation already has a parameter named `value`, so the JS
             // accessor's parameter name matches for free.
             if (prop.Setter != null && !prop.IsReadOnly)
                 EmitMemberBody($"{modifier}set {SanitizeName(prop.Name)}(value)", prop.Setter, members,
-                    isStatic: prop.IsStatic);
+                    isStatic: prop.IsStatic, guard: guard);
         }
 
         private void EmitConstructor(IRClass irClass, IRConstructor ctor, HashSet<string> members)
@@ -1240,7 +1319,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     superFirst = baseCall;
             }
 
-            EmitMemberBody($"constructor({parameters})", impl, members, prologue, superFirst: superFirst);
+            // #208: the guard runs FIRST, before super() — VB runs a derived class's type
+            // initializer before the base constructor triggers the base's (P15). Legal before
+            // super(): it never touches `this`.
+            EmitMemberBody($"constructor({parameters})", impl, members, prologue, superFirst: superFirst,
+                guard: _typeInitGuard);
         }
 
         /// <summary>The first instruction of <paramref name="impl"/>'s entry block, or null.</summary>
@@ -1291,7 +1374,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
             EmitMemberBody($"{(method.IsStatic ? "static " : "")}{SanitizeName(method.Name)}({parameters})",
-                impl, members, isStatic: method.IsStatic);
+                impl, members, isStatic: method.IsStatic, guard: method.IsStatic ? _typeInitGuard : null);
         }
 
         /// <summary>
@@ -1304,7 +1387,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>this.</c> call for it would hide the gap rather than leave it visible.</para>
         /// </summary>
         private void EmitMemberBody(string signature, IRFunction impl, HashSet<string> members,
-            List<string> prologue = null, bool isStatic = false, IRBaseConstructorCall superFirst = null)
+            List<string> prologue = null, bool isStatic = false, IRBaseConstructorCall superFirst = null,
+            string guard = null)
         {
             var savedMembers = _memberNames;
             _memberNames = members;
@@ -1323,6 +1407,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             Line(signature + " {");
             _indentLevel++;
+
+            // #208: the type-initializer guard, first — before an iterator's wrapper (calling a
+            // Shared iterator triggers the initializer, not its first MoveNext) and before super().
+            if (guard != null) Line(guard);
 
             // An Iterator member returns a re-iterable wrapper around its body, as a free Iterator
             // Function does (see OpenIteratorBody) — before this it emitted a plain method holding

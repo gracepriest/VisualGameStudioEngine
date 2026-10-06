@@ -353,6 +353,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     return true;
                 if (irClass.Constructors != null && irClass.Constructors.Any(c => c.Implementation == function))
                     return true;
+                if (function != null && irClass.TypeInitializer == function)
+                    return true;
                 if (irClass.Properties != null && irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
                     return true;
             }
@@ -923,6 +925,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 && foreignGlobal.Name != null && foreignGlobal.Name.Contains("::"))
                 return foreignGlobal.Name;
 
+            // #208: a bare name that is an INHERITED Shared field of a base with a type initializer
+            // (see InheritedStaticGuard) — as a value and as a destination alike.
+            if (value is not IRConstant && !string.IsNullOrEmpty(value?.Name)
+                && (value is IRVariable || _declaredIdentifiers.Contains(value.Name))
+                && InheritedStaticGuard(value.Name) is string guardedBare)
+                return guardedBare;
+
             // The IRBuilder names result values after their assignment target (an IRAwait
             // named "x" for `Dim x = Await ...`, an IRBinaryOp named "total" for
             // `total = total + i`). The base implementation ignores .Name for
@@ -1055,6 +1064,85 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             var owner = DeclaringClassOfStaticMember(v.Name, memberName);
             return owner == null ? null : $"{SanitizeName(owner)}::";
+        }
+
+        // =========================================================================================
+        // ⭐ #208: VB's type-initializer timing at a Shared FIELD access. C++ cannot attach code to a
+        // static data member, so the ACCESS runs the owning class's once-guarded `blTypeInit_()`
+        // first: `(C::blTypeInit_(), C::F)`. The built-in comma operator yields its right operand
+        // as an LVALUE (and a `void` left operand rules out any overloaded comma), so the same
+        // spelling serves a read, a store, `C.F += 1`, a ByRef argument and an array element. A
+        // store `(…, C::F) = v` evaluates `v` FIRST (C++17 sequences an assignment's right side
+        // before its left), as .NET runs the initializer at the store itself.
+        //
+        // ⚠ Only a class WITH a type initializer is affected — every other access is spelled
+        // exactly as before. The class's own members are not guarded here: each of its entry
+        // points (ctor_, Shared method, Shared accessor) already ran the initializer, which is why
+        // a bare own-field reference needs nothing; an INHERITED one does (InheritedStaticGuard).
+        // =========================================================================================
+
+        /// <summary>#208: <paramref name="access"/> (a qualified Shared member) through its owner's
+        /// type-initializer guard, or unchanged when that owner has none.</summary>
+        private string TypeInitGuarded(IRValue receiver, string memberName, string access) =>
+            StaticOwnerWithTypeInitializer(receiver, memberName) is { } owner
+                ? $"({SanitizeName(owner.Name)}::blTypeInit_(), {access})"
+                : access;
+
+        /// <summary>#208: the guarded lvalue of a qualified Shared field whose owner has a type
+        /// initializer, else null (the caller's own spelling stands).</summary>
+        private string GuardedStaticLValue(IRValue receiver, string memberName) =>
+            StaticOwnerWithTypeInitializer(receiver, memberName) is { } owner
+                ? $"({SanitizeName(owner.Name)}::blTypeInit_(), {SanitizeName(owner.Name)}::{SanitizeName(memberName)})"
+                : null;
+
+        /// <summary>#208: the class DECLARING the Shared member that <c>receiver.member</c> names
+        /// through a class name (<see cref="StaticMemberQualifier"/>'s resolution), when that class
+        /// has a type initializer; else null.</summary>
+        private IRClass StaticOwnerWithTypeInitializer(IRValue receiver, string memberName)
+        {
+            if (StaticMemberQualifier(receiver, memberName) == null) return null;
+            var ownerName = DeclaringClassOfStaticMember(((IRVariable)receiver).Name, memberName);
+            return ownerName != null && _module.Classes.TryGetValue(ownerName, out var owner)
+                   && owner?.TypeInitializer != null
+                ? owner
+                : null;
+        }
+
+        /// <summary>
+        /// #208: a BARE name inside a member of the class being emitted that resolves to a Shared
+        /// field (or auto-property) declared by a BASE class with a type initializer — guarded, as
+        /// <c>(Base::blTypeInit_(), Base::B)</c>; else null. The emitting class's entry points ran
+        /// only its OWN initializer, so a derived Shared method reading <c>B</c> would otherwise see
+        /// the base's field before the base's initializer ran. The first declaration of the name
+        /// walking up from the emitting class decides; a parameter or local of that name wins.
+        /// </summary>
+        private string InheritedStaticGuard(string rawName)
+        {
+            var emitting = _emittingClass;
+            if (emitting == null || _module?.Classes == null || string.IsNullOrEmpty(rawName)) return null;
+            if (_currentFunction != null
+                && ((_currentFunction.Parameters?.Any(p => string.Equals(p.Name, rawName, StringComparison.OrdinalIgnoreCase)) ?? false)
+                    || (_currentFunction.LocalVariables?.Any(l => string.Equals(l.Name, rawName, StringComparison.OrdinalIgnoreCase)) ?? false)))
+                return null;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var cls = emitting; cls != null && seen.Add(cls.Name); )
+            {
+                var field = cls.Fields?.FirstOrDefault(f => string.Equals(f?.Name, rawName, StringComparison.OrdinalIgnoreCase));
+                var prop = cls.Properties?.FirstOrDefault(p => string.Equals(p?.Name, rawName, StringComparison.OrdinalIgnoreCase));
+                if (field != null || prop != null)
+                {
+                    var isStaticStorage = field != null ? field.IsStatic : prop.IsStatic && !prop.IsAccessorBacked;
+                    if (!isStaticStorage || ReferenceEquals(cls, emitting) || cls.TypeInitializer == null) return null;
+                    var owner = SanitizeName(cls.Name);
+                    return $"({owner}::blTypeInit_(), {owner}::{SanitizeName(rawName)})";
+                }
+                if (string.IsNullOrEmpty(cls.BaseClass) || !_module.Classes.TryGetValue(cls.BaseClass, out var next)
+                    || ReferenceEquals(next, cls))
+                    break;
+                cls = next;
+            }
+            return null;
         }
 
         /// <summary>
@@ -1535,6 +1623,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 GenerateTwoPhaseConstruction(irClass);
             }
 
+            if (irClass.TypeInitializer != null)
+            {
+                GenerateTypeInitializer(irClass);
+            }
+
             // Destructor - virtual if has base class, interfaces, or virtual methods
             bool needsVirtualDestructor = !string.IsNullOrEmpty(irClass.BaseClass) ||
                                          irClass.Interfaces.Count > 0 ||
@@ -1670,6 +1763,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{className}({paramList}){initList}");
             WriteLine("{");
             Indent();
+            WriteTypeInitGuard(irClass);   // #208
 
             // Generate body from implementation
             if (ctor.Implementation != null)
@@ -1829,6 +1923,53 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         }
 
         /// <summary>
+        /// ⭐ #208: <c>Shared Sub New</c> as <c>static void blTypeInit_()</c>, run once through a
+        /// function-local flag — set BEFORE the body, as the CLR marks a type initialized before
+        /// running it, so the body's own uses of the class do not re-enter. In a class TEMPLATE the
+        /// flag is per instantiation, which is .NET's once-per-closed-type.
+        ///
+        /// <para>It runs at the class's OWN entry points — every <c>ctor_</c> (before the base's, so
+        /// a derived initializer runs first, as VB's does), a Structure's constructors, and every
+        /// Shared method and Shared accessor body (<see cref="WriteTypeInitGuard"/>) — and at every
+        /// Shared FIELD access from outside them (<see cref="TypeInitGuarded"/>,
+        /// <see cref="InheritedStaticGuard"/>), because C++ cannot attach code to a static data
+        /// member. ⛔ NOT eagerly before <c>main</c>: measured, that breaks programs that run right
+        /// today — one whose <c>Main</c> changes the state the initializer reads before its first
+        /// <c>New</c>, and one whose initializer prints (#208 P16, P17).</para>
+        /// </summary>
+        private void GenerateTypeInitializer(IRClass irClass)
+        {
+            var implementation = irClass.TypeInitializer;
+            WriteLine("static void blTypeInit_()");
+            WriteLine("{");
+            Indent();
+            WriteLine("static bool blRan = false;");
+            WriteLine("if (blRan) return;");
+            WriteLine("blRan = true;");
+
+            _currentFunction = implementation;
+            _lastEmittedSourceLine = -1;
+            _lastEmittedSourceFile = null;
+            InitializeFunctionContext(implementation);
+            DeclareLocalsAndTemporaries(implementation);
+            GenerateFunctionBody(implementation);
+            _currentFunction = null;
+
+            Unindent();
+            WriteLine("}");
+            WriteLine();
+        }
+
+        /// <summary>#208: the call that runs <paramref name="irClass"/>'s type initializer, at the
+        /// top of one of its entry points; nothing for a class without one. Qualified, so a derived
+        /// class never runs its base's through the inherited name.</summary>
+        private void WriteTypeInitGuard(IRClass irClass)
+        {
+            if (irClass?.TypeInitializer != null)
+                WriteLine($"{SanitizeName(irClass.Name)}::blTypeInit_();");
+        }
+
+        /// <summary>
         /// One <c>ctor_</c> overload (see <see cref="GenerateTwoPhaseConstruction"/>). Steps 1 and 2
         /// are a PROLOGUE written where the IR places the base call — the constructor's
         /// <see cref="IRBaseConstructorCall"/>, right after the instructions that evaluate its
@@ -1841,6 +1982,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"void ctor_({ConstructorParameterList(implementation)})");
             WriteLine("{");
             Indent();
+            WriteTypeInitGuard(irClass);   // #208: before the base's ctor_, as VB orders them
 
             // ⭐ ADR-0016: the arguments are the base call's live operands, so no plan is needed —
             // what E11's PlanBaseArguments used to reconstruct (where the evaluation ends, which
@@ -2129,6 +2271,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine(getterSignature);
                 WriteLine("{");
                 Indent();
+                if (prop.IsStatic) WriteTypeInitGuard(irClass);   // #208
 
                 _currentFunction = prop.Getter;
                 _lastEmittedSourceLine = -1;
@@ -2149,6 +2292,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 WriteLine(setterSignature);
                 WriteLine("{");
                 Indent();
+                if (prop.IsStatic) WriteTypeInitGuard(irClass);   // #208
 
                 _currentFunction = prop.Setter;
                 _lastEmittedSourceLine = -1;
@@ -2226,6 +2370,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine($"{virtualMod}{staticMod}{returnType} {methodName}({paramList}){overrideMod}");
             WriteLine("{");
             Indent();
+            if (method.IsStatic) WriteTypeInitGuard(irClass);   // #208
 
             // Generate body
             if (method.Implementation != null)
@@ -3821,6 +3966,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A property read is a getter CALL, not storage — there is nothing to bind to.
             if (AccessorPropertyOf(field.Object, field.FieldName) != null) return null;
 
+            // #208: a Shared field of a class with a type initializer binds through the guard.
+            if (GuardedStaticLValue(field.Object, field.FieldName) is string guarded) return guarded;
+
             var obj = ElementLValueOfArrayRead(field.Object) ?? ReceiverName(field.Object);
             return $"{obj}{MemberAccessOp(field.Object)}{SanitizeName(field.FieldName)}";
         }
@@ -5254,7 +5402,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             basePointer is IRFieldAccess fieldAccess
             && fieldAccess.Type?.Kind == TypeKind.Array
             && fieldAccess.Type.NetHandleTypeFullName == null
-                ? $"{ReceiverName(fieldAccess.Object)}{MemberAccessOp(fieldAccess.Object)}"
+                ? GuardedStaticLValue(fieldAccess.Object, fieldAccess.FieldName)   // #208
+                  ?? $"{ReceiverName(fieldAccess.Object)}{MemberAccessOp(fieldAccess.Object)}"
                   + SanitizeName(fieldAccess.FieldName)
                 : GetValueName(basePointer);
 
@@ -5868,6 +6017,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     if (irClass.Methods.Any(m => m.Implementation == _currentFunction) ||
                         irClass.Constructors.Any(c => c.Implementation == _currentFunction) ||
+                        irClass.TypeInitializer == _currentFunction ||
                         irClass.Properties.Any(p => p.Getter == _currentFunction || p.Setter == _currentFunction))
                     {
                         if (!string.IsNullOrEmpty(irClass.BaseClass))
@@ -6061,7 +6211,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // A `Shared` READ through the class name: `Box.K` is `Box::K`, not `Box->K`.
             if (StaticMemberQualifier(fieldAccess.Object, fieldAccess.FieldName) is string readQualifier)
             {
-                return $"{readQualifier}{fieldName}";
+                return TypeInitGuarded(fieldAccess.Object, fieldAccess.FieldName, $"{readQualifier}{fieldName}");
             }
 
             var obj = ReceiverName(fieldAccess.Object);
@@ -6107,7 +6257,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // two cannot disagree about where the member lives.
             if (StaticMemberQualifier(fieldStore.Object, fieldStore.FieldName) is string writeQualifier)
             {
-                WriteLine($"{writeQualifier}{fieldName} = {value};");
+                WriteLine($"{TypeInitGuarded(fieldStore.Object, fieldStore.FieldName, $"{writeQualifier}{fieldName}")} = {value};");
                 return;
             }
 

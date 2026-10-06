@@ -738,6 +738,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     return true;
                 if (irClass.Constructors.Any(c => c.Implementation == function))
                     return true;
+                if (irClass.TypeInitializer == function && function != null)
+                    return true;
                 if (irClass.Properties.Any(p => p.Getter == function || p.Setter == function))
                     return true;
             }
@@ -768,6 +770,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     if (ctor.Implementation != null)
                         CollectStdLibImportsFromFunction(ctor.Implementation);
                 }
+                if (irClass.TypeInitializer != null)
+                    CollectStdLibImportsFromFunction(irClass.TypeInitializer);
             }
         }
 
@@ -1253,6 +1257,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 WriteLine();
             }
 
+            if (irClass.TypeInitializer != null)
+            {
+                GenerateTypeInitializer(irClass, irClass.TypeInitializer);
+                WriteLine();
+            }
+
             // Properties
             foreach (var prop in irClass.Properties)
             {
@@ -1326,6 +1336,36 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 _currentFunction = null;
             }
             _constructorPrologue.Clear();
+
+            Unindent();
+            WriteLine("}");
+        }
+
+        /// <summary>
+        /// ⭐ #208: <c>Shared Sub New</c> as a C# STATIC constructor — .NET's own type initializer,
+        /// so the timing is VB's exactly: once, before the first Shared member access or instance
+        /// creation, after the Shared field initializers (which C# runs at the head of it). C# then
+        /// marks the class not-<c>beforefieldinit</c>, as vbc does, so the first access is the
+        /// trigger. No access modifier and no parameters: C# allows neither, and the analyzer has
+        /// refused parameters (BC30479).
+        /// </summary>
+        private void GenerateTypeInitializer(IRClass irClass, IRFunction implementation)
+        {
+            WriteLine($"static {SanitizeName(irClass.Name)}()");
+            WriteLine("{");
+            Indent();
+
+            if (implementation.EntryBlock != null)
+            {
+                _currentFunction = implementation;
+                InitializeFunctionContext(implementation);
+                _processedBlocks = new HashSet<BasicBlock>();
+                _loopEndBlocks = new Stack<BasicBlock>();
+                ResetLoopExitState();
+                DeclareLocals(implementation, sizedArrays: false);
+                GenerateStructuredBlock(implementation.EntryBlock);
+                _currentFunction = null;
+            }
 
             Unindent();
             WriteLine("}");

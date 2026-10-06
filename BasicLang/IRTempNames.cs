@@ -33,6 +33,7 @@ namespace BasicLang.Compiler.IR
             {
                 functions.AddRange(cls.Methods.Select(m => m.Implementation));
                 functions.AddRange(cls.Constructors.Select(c => c.Implementation));
+                functions.Add(cls.TypeInitializer);
                 functions.AddRange(cls.Properties.SelectMany(p => new[] { p.Getter, p.Setter }));
             }
             return functions.Where(f => f != null).Distinct().ToList();

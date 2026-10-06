@@ -1827,6 +1827,15 @@ namespace BasicLang.Compiler.IR
                     var declaredAt = _module.Functions.Count;
                     member.Accept(this);
 
+                    // ⭐ #208: `Shared Sub New` is the TYPE INITIALIZER, never an instance
+                    // constructor — see IRClass.TypeInitializer. The analyzer refuses a second one
+                    // (BC30269), so there is nothing here to overwrite.
+                    if (ctorNode.IsShared)
+                    {
+                        irClass.TypeInitializer = MemberFunctionAt(declaredAt);
+                        continue;
+                    }
+
                     var ctor = new IRConstructor
                     {
                         Access = MapAccessModifier(ctorNode.Access),
@@ -2502,8 +2511,11 @@ namespace BasicLang.Compiler.IR
         public void Visit(ConstructorNode node)
         {
             TrackSourceLine(node);
-            // Generate constructor as a special method
-            var constructorName = _currentClassName != null ? $"{_currentClassName}__ctor" : "Constructor";
+            // Generate constructor as a special method. A `Shared Sub New` is the type initializer
+            // (#208): its own name, and no base call — it has no instance to construct.
+            var constructorName = _currentClassName != null
+                ? $"{_currentClassName}{(node.IsShared ? "__cctor" : "__ctor")}"
+                : "Constructor";
             var returnType = new TypeInfo("Void", TypeKind.Void);
 
             // ⛔ This path never popped its parameters, so a constructor's `n` bound every later
@@ -2530,7 +2542,12 @@ namespace BasicLang.Compiler.IR
             // IRBaseConstructorCall before any of the body (ADR-0016 D1).
             var baseArgs = new List<IRValue>();
             var baseByRef = new List<bool>();
-            if (node.BaseConstructorArgs.Count > 0)
+            if (node.IsShared)
+            {
+                // A type initializer calls no base constructor: the analyzer refuses MyBase.New in
+                // it (BC30043) and records no implicit binding for it, so nothing is filled here.
+            }
+            else if (node.BaseConstructorArgs.Count > 0)
             {
                 // The base constructor the analyzer bound this `MyBase.New(…)` to — the third
                 // construction site, and it needs the same coercion and the same Optional fill as
