@@ -2604,14 +2604,16 @@ namespace BasicLang.Compiler.IR.Optimization
             }
             else if (inst is IRCompare compare)
             {
-                if (compare.Left is IRVariable leftVar && copies.ContainsKey(leftVar))
+                if (compare.Left is IRVariable leftVar && copies.TryGetValue(leftVar, out var leftCopy)
+                    && KeepsLateBinding(leftVar, leftCopy))
                 {
-                    compare.Left = copies[leftVar];
+                    compare.Left = leftCopy;
                     ReportModification();
                 }
-                if (compare.Right is IRVariable rightVar && copies.ContainsKey(rightVar))
+                if (compare.Right is IRVariable rightVar && copies.TryGetValue(rightVar, out var rightCopy)
+                    && KeepsLateBinding(rightVar, rightCopy))
                 {
-                    compare.Right = copies[rightVar];
+                    compare.Right = rightCopy;
                     ReportModification();
                 }
             }
@@ -2639,6 +2641,46 @@ namespace BasicLang.Compiler.IR.Optimization
 
         private static bool IsLambdaReferenceValue(IRValue value) =>
             value is IRVariable { Name: { } name } && name.StartsWith("__lambda_", StringComparison.Ordinal);
+
+        /// <summary>
+        /// #214 — whether <paramref name="copy"/> may replace <paramref name="variable"/> as an operand
+        /// of a COMPARISON. Not when that would take away the comparison's only Object operand.
+        ///
+        /// <para>⛔ ADR-0012: a comparison with an operand statically typed Object is VB's
+        /// LATE-BOUND comparison, and every backend decides that from the operand's IR type
+        /// (<c>MSILBackend.IsLateBoundComparison</c>, <c>CSharpBackend.IsLateBoundComparison</c>).
+        /// An Object variable's recorded copy carries its OWN type — <c>Dim s As Object = "20"</c>
+        /// stores the String constant as it is — so propagating it turned <c>s = 20</c> into
+        /// <c>"20" = 20</c>: a String against an Integer, which no backend compares the way VB
+        /// does, and which <see cref="ConstantFoldingPass"/> then answered with <c>Equals</c>,
+        /// "unequal". VB converts the String to Double and answers True. Measured before this:
+        /// False on C#, JavaScript and MSIL, at the CLI, <c>--optimize</c> and a Release project
+        /// alike; and <c>"abc" = 20</c>, which throws InvalidCastException in VB, printed False.
+        /// With the variable left in place each backend's own late-bound comparison answers.</para>
+        ///
+        /// <para>⚠ Not fixed in the fold. Declining the fold there was measured, and it is worse:
+        /// the operand is already typed String, so C# refused the program (CS0019) and MSIL still
+        /// compared a String with an Integer; and a typed <c>Boolean = 1</c>, which the fold
+        /// answers right by luck, turned wrong on C++ and MSIL.</para>
+        ///
+        /// <para>⚠ The <c>Nothing</c> literal still propagates. It is Object-typed already, VB
+        /// converts it to the other operand's type exactly as the late-bound comparison converts a
+        /// Nothing-holding Object, and <see cref="ConstantFoldingPass"/>'s String-equality arm
+        /// answers <c>Nothing = ""</c> True, which JavaScript's own <c>===</c> would not (#215).</para>
+        /// </summary>
+        private static bool KeepsLateBinding(IRVariable variable, IRValue copy) =>
+            !IsObjectComparand(variable) || IsObjectComparand(copy) || copy is IRConstant { Value: null };
+
+        /// <summary>
+        /// An operand that makes a comparison late-bound under ADR-0012: statically typed (scalar)
+        /// Object, and not the <c>Nothing</c> literal — the rule both backends' own
+        /// <c>IsObjectComparand</c> apply.
+        /// </summary>
+        private static bool IsObjectComparand(IRValue value) =>
+            value?.Type is { } type && type.Kind != TypeKind.Array && type.ArrayRank == 0
+            && (string.Equals(type.Name, "Object", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(type.Name, "System.Object", StringComparison.OrdinalIgnoreCase))
+            && value is not IRConstant { Value: null };
     }
     
     /// <summary>
