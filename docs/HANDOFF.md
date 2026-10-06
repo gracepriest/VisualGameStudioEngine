@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #215 TESTED — JavaScript: an Object comparison is VB's late-bound comparison, the `__blCompareObject` prelude helper (ADR-0012; `JavaScriptBackend.IsLateBoundComparison` / `UsesObjectComparison`; `git log --grep '#215'`)
+- **Tests (14 new, 3 moved):** `JavaScriptLateBoundComparisonExecutionTests` (Integration, 13 vbc-answered programs under Node x CLI / `--optimize` / `CompileProjectFiles` + `RunJs` + `RunOptimized`; joined the JS roster: now 127 = master 126 + 1) + `JavaScriptLateBoundComparisonShapeTests` (fast, 1: no helper without an Object comparison, exactly one with). MOVED: `MsilObjectBoxing…L05` / `L08` JS pins are positive (`…_JavaScript_AgreesWithVb`), `L11b_…` is positive on JS (`…OnCSharpMsilAndJavaScript`), `L09_…Against215` STAYS a named gap pin. Mutants M1-M5 (+M6) killed (fixture header); ⚠ #214's M2 is now killed by NO test (its `n = 0` shape is the fix's own gap; `ObjectComparisonUnderOptimizerExecutionTests` header).
+- **Gates (Linux):** fast 0 failed / 12,730 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `JavaScript` 1,351 (+2 skipped), `Object` 254, `SelectCase` 85, `LateBound` 43, `ObjectComparisonUnderOptimizer` 14, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): a boxed `Is` (JS primitives have no box identity; L09's named pin); Char refused (BL7004); non-primitive InvalidCastException wording; currency symbol; `&H`/`&O` past 64 bits is InvalidCast (VB: Overflow); `Dim n As Object = Nothing : n = 0` is False on JS (the Nothing-literal exemption in `KeepsLateBinding`); C++ has no Object.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #216 TESTED — C#: an Object `Optional` with a non-Nothing default compiles, as VB's own `[Optional, DefaultParameterValue]` encoding (`CSharpBackend.JoinParameters` / `VbOptionalEncoding`; `git log --grep '#216'`)
 - **Tests (12 new, 1 moved):** `OptionalObjectDefaultExecutionTests` (Integration, 11 vbc-answered rows on C# x CLI / `--optimize` / `CompileProjectFiles`: `= 5` `"x"` `True` `2.5` `"a"c` `5000000000L`, a class / Shared / interface method, an `= value` Optional BEFORE the Object one (CS1737), narrowing + Decimal, Object first) + `OptionalObjectDefaultShapeTests` (fast, 1: the metadata defaults are vbc's value AND type, `= 5L` an Int64; the no-Object-Optional control keeps the old `= value`). MOVED: `MsilObjectBoxingExecutionTests.E16_…` is a positive C# run. C#-only, so it is in `NotJavaScriptExecution` and the JS roster stays 126. Mutants M1-M4 killed (M4 only by reflection).
 - **Gates (Linux):** fast 0 failed / 12,730 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 11, `Optional` 63, `MsilObjectBoxing` 99, `Object` 256, `CSharp` 1,321, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -25,9 +32,9 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 ---
 
 ## ⚡ NEWEST — 2026-10-06: #214 TESTED — copy propagation no longer erases an Object comparison operand, so C# and MSIL print vbc's answer for `Dim s As Object = "20" : s = 20` (ADR-0012; `CopyPropagationPass.KeepsLateBinding`; `git log --grep '#214'`)
-- **Tests (14 new, 1 moved):** `ObjectComparisonUnderOptimizerExecutionTests` (Integration, 13: vbc-answered Object-vs-constant rows on C# + MSIL x CLI / `--optimize` / `CompileProjectFiles` + the in-process emitters, the constant on either side, `If o = 20`, `"abc" = 20` THROWS InvalidCast, three controls; two JS rows via `RunOptimized`, which spawns Node, so it joined the JS roster: now 126 = master 125 + 1) + `ObjectComparisonUnderOptimizerShapeTests` (fast, 1). MOVED: `MsilObjectBoxingExecutionTests.L11b_…` is a positive pin on C# + MSIL, JS a NAMED #215 pin. Mutants M1-M5 killed (fixture header).
+- **Tests (14 new, 1 moved):** `ObjectComparisonUnderOptimizerExecutionTests` (Integration, 13: vbc-answered Object-vs-constant rows on C# + MSIL x CLI / `--optimize` / `CompileProjectFiles` + the in-process emitters, the constant on either side, `If o = 20`, `"abc" = 20` THROWS InvalidCast, three controls; two JS rows via `RunOptimized`, which spawns Node, so it joined the JS roster: now 126 = master 125 + 1) + `ObjectComparisonUnderOptimizerShapeTests` (fast, 1). MOVED: `MsilObjectBoxingExecutionTests.L11b_…` is a positive pin on C# + MSIL, JS a NAMED #215 pin (positive on JS too since #215). Mutants M1-M5 killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,725 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `ConstantFold` 7, `Optimizer` 340, `MixedNumeric` 79, `Object` 230, `CSharpLateBoundComparison` 14, `CopyPropagation` 62, `JsExecutionTierRoster` 5. Full suite NOT run.
-- ⛔ **Gaps, NO test pins them** (fixture header): JS `===` on an Object (#215); an Object holding Nothing vs a number (`n = 0` False everywhere); a TYPED String/Boolean vs a number (`"20" = 20`, `s = i`) is wrong on all four backends (no front-end VB conversion); Object arithmetic is refused; C++ has no Object; LLVM.
+- ⛔ **Gaps, NO test pins them** (fixture header): JS `===` on an Object (was #215: FIXED, see the #215 section above); an Object holding Nothing vs a number (`n = 0` False everywhere); a TYPED String/Boolean vs a number (`"20" = 20`, `s = i`) is wrong on all four backends (no front-end VB conversion); Object arithmetic is refused; C++ has no Object; LLVM.
 
 ---
 
@@ -41,7 +48,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 ## ⚡ NEWEST — 2026-10-06: #211 TESTED — C#: an Object comparison is VB's late-bound comparison, `Operators.ConditionalCompareObject*` (ADR-0012; `CSharpBackend.IsLateBoundComparison` / `LateBoundCaseTest`, `case var _caseN when …`; `git log --grep '#211'`)
 - **Tests (14 new, 10 moved, 2 harness-fixed):** `CSharpLateBoundComparisonExecutionTests` (Integration, 12: vbc-answered probes on C# x CLI / `--optimize` / `CompileProjectFiles`: Object = Object, `o = Nothing` on a 0, `Is` / `Case Is Nothing` stay identity, `Case 1 To 5` on 3.5, a run-time String, a class instance `=` THROWS InvalidCast (as vbc), `<>` / `<`, a `When` guard, `Case Nothing`, nested Select + Or pattern, a String subject, the Object on the right + loop conditions; C# only, so under `NotJavaScriptExecution`: roster still 124) + `CSharpLateBoundComparisonShapeTests` (fast, 2: typed comparisons emit no late-bound call; the Nothing literal never makes one). MOVED: `MsilObjectBoxingExecutionTests.ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211` (10) is now `…_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. Mutants M1-M5 killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,723 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Object` 216, `SelectCase` 83, `LateBound` 28, `CSharp` 1,297, `JsExecutionTierRoster` 5. Full suite NOT run.
-- ⛔ **Traps / gaps** (fixture header): ⚠ the in-process Roslyn compile needs `Microsoft.VisualBasic.Core` among its references or the product's right output is CS0234 — `FourBackends.EmittedCSharpReferences` is the one list (`CompileEmittedCSharp`, `CSharpProcessRunner`; `MsilObjectBoxing.CSharpDiagnostics` was the third reader until #216 removed it); SEVEN other test files still build their own from the loaded assemblies alone (`ReturnCoercionTests`, `NameBindingResolution…`, `FloatingIntegerDivision`, `LambdaBoundaryDiagnostics…`, `LoopConditionEmissionShape`, `LambdaBodyEmissionShape`, `MyBaseMethodCallStatementShape`). Gaps, no test: L11b is the #214 fold (wrong on every backend); an analyzer-mistyped operand (an Enum member, #277) also goes late-bound, as on MSIL; JS `= Nothing` (#215); C++ has no Object.
+- ⛔ **Traps / gaps** (fixture header): ⚠ the in-process Roslyn compile needs `Microsoft.VisualBasic.Core` among its references or the product's right output is CS0234 — `FourBackends.EmittedCSharpReferences` is the one list (`CompileEmittedCSharp`, `CSharpProcessRunner`; `MsilObjectBoxing.CSharpDiagnostics` was the third reader until #216 removed it); SEVEN other test files still build their own from the loaded assemblies alone (`ReturnCoercionTests`, `NameBindingResolution…`, `FloatingIntegerDivision`, `LambdaBoundaryDiagnostics…`, `LoopConditionEmissionShape`, `LambdaBodyEmissionShape`, `MyBaseMethodCallStatementShape`). Gaps, no test: L11b is the #214 fold (wrong on every backend); an analyzer-mistyped operand (an Enum member, #277) also goes late-bound, as on MSIL; JS `= Nothing` (was #215: FIXED); C++ has no Object.
 
 ---
 
@@ -6843,10 +6850,14 @@ single new failure against the 170-name baseline.
       JavaScript and MSIL where vbc prints `True`). Not the fold: `CopyPropagationPass` replaced the
       Object variable with its String constant, taking away the type the late-bound comparison keys
       on. `CopyPropagationPass.KeepsLateBinding` keeps an Object comparand in place; C# and MSIL print
-      vbc's answer at every entry point. JavaScript's own `===` on an Object is still #215. L11b's pin
-      is now `L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpAndMsil_JavaScriptPinsAgainst215`.
+      vbc's answer at every entry point. JavaScript's own `===` on an Object was #215 (FIXED, below). L11b's pin
+      is now `L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpMsilAndJavaScript`.
       (L11, L11b)
-    - **#215** — JavaScript disagrees with VB on `= Nothing`, `Case Nothing` and a boxed `Is`.
+    - **#215** — FIXED 2026-10-06 (was: JavaScript's own `===` disagreed with VB on `= Nothing`, `Case Nothing`, an
+      Object `= 20` and more). An Object comparison is VB's late-bound comparison on JavaScript now
+      (`__blCompareObject`); L05 and L08 print vbc's answer (`L05_…_JavaScript_AgreesWithVb`,
+      `L08_…_JavaScript_AgreesWithVb`). **STILL OPEN:** a boxed `Is` (L09 — JavaScript primitives have no box
+      identity), pinned by name in `L09_IsIdentity_JavaScript_PinsPreExistingDisagreement_Against215`.
       (L05, L08, L09)
     - **#213** — `MyBase.Show(5)` into a Base method typed `o As Object` names the WRONG call-site
       signature on MSIL (`Show(int32)` where `Show` is declared `(object)`) — the boxing coercion

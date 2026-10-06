@@ -50,6 +50,18 @@ Integer stays an Integer comparison.
   `CSharpLateBoundComparisonExecutionTests`. The text above is left as it was written.*
 - JavaScript diverges from this ruling on `= Nothing`, `Case Nothing`, and a boxed `Is` — filed as
   #215.
+  *Update 2026-10-06: task #215 implements this ruling on JavaScript. `JavaScriptBackend.IsLateBoundComparison`
+  (the same rule: either operand statically Object, the `Nothing` literal excluded) makes `RenderCompare`
+  call one prelude helper, `__blCompareObject(a, b, op)` — VB's `ConditionalCompareObject*` with
+  `Option Compare Binary`, for the JavaScript runtime types — and a Select Case label with such a comparison
+  (value, range bound, `Case Is op`, an Or alternative, `Case Nothing` on an Object subject) goes through
+  the same predicate. `Is` / `IsNot` and `Case Is Nothing` stay reference identity. The helper is emitted
+  only when `UsesObjectComparison` finds a use (blocks, Select Case labels and `When` guards), so a program
+  without one is unchanged. **Still a gap:** a boxed `Is` (`a Is b` over two separate Object locals holding
+  5) is True on JavaScript where VB says False — JavaScript primitives have no box identity — and a Char
+  never reaches the helper (BL7004). Tests: `JavaScriptLateBoundComparisonExecutionTests`; the boxed-`Is`
+  gap is pinned by name in `MsilObjectBoxingExecutionTests.L09_…Against215`. The text above is left as it
+  was written.*
 - C++ has no `Object` mapping at all, so this ruling does not reach it.
 - The optimizer's mixed-type constant fold (an Object holding one type compared against a literal
   of another) computes the wrong value on every backend that reaches it, independent of this
