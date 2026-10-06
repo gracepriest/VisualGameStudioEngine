@@ -651,6 +651,8 @@ public class JsExecutionTierRosterTests
         "PropertyByRefCopyOutExecutionTests",
         // Task #211: an Object comparison on C# is VB's late-bound comparison (ADR-0012), run against vbc on C# only, through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was.
         "CSharpLateBoundComparisonExecutionTests",
+        // Task #212: a VB conversion intrinsic of an Object operand (CInt, CBool, CByte, ...) is VB's Conversions.ToXxx(object), run against vbc on C# and MSIL through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript's Object conversions disagree with VB and are a known gap.
+        "ObjectConversionIntrinsicExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

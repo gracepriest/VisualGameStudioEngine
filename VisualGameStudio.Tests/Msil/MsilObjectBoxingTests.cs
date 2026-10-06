@@ -213,25 +213,67 @@ public class MsilObjectBoxingTests
     }
 
     // ====================================================================================
-    // 5. Conversion OUT of an Object: CInt/CLng/CDbl/CSng/CStr/CBool call Convert.To*(object).
+    // 5. Conversion OUT of an Object: CInt/CLng/CDbl/CSng/CBool call VB's own
+    //    Conversions.ToXxx(object) (#212) — and so declare the VB runtime extern. CStr stays
+    //    Convert.ToString(object).
+    //    (This was ConversionIntrinsic_OfAnObjectOperand_CallsConvertToXxx, pinned to System.Convert
+    //    for all six. #212 moved five of them to VB's runtime: Convert answers by .NET's rules, so a
+    //    boxed True through CInt was 1 where vbc prints -1, and CBool of a boxed "0" threw.)
     // ====================================================================================
 
-    [TestCase("CInt", "ToInt32", "int32")]
-    [TestCase("CLng", "ToInt64", "int64")]
+    private const string VbConversionsToken =
+        "[Microsoft.VisualBasic.Core]Microsoft.VisualBasic.CompilerServices.Conversions";
+
+    // ⛔ The extern line is half of this pin. ilasm on Linux INFERS the reference to a type it can
+    // find, so a module that calls into Microsoft.VisualBasic.Core without declaring it still
+    // assembles and RUNS there (and is rejected by a stricter assembler): only this text shows a
+    // dropped `.assembly extern` — the #212 mutant M4. The table's whole width is
+    // ObjectConversionIntrinsicShapeTests'.
+    [TestCase("CInt", "ToInteger", "int32")]
+    [TestCase("CLng", "ToLong", "int64")]
     [TestCase("CDbl", "ToDouble", "float64")]
     [TestCase("CSng", "ToSingle", "float32")]
-    [TestCase("CStr", "ToString", "string")]
     [TestCase("CBool", "ToBoolean", "bool")]
-    public void ConversionIntrinsic_OfAnObjectOperand_CallsConvertToXxx(
-        string intrinsic, string convertMethod, string resultSpec)
+    public void ConversionIntrinsic_OfAnObjectOperand_CallsVbConversionsToXxx_AndDeclaresTheVbRuntimeExtern(
+        string intrinsic, string vbMethod, string resultSpec)
     {
         var program =
             "Function MakeO() As Object\n Return 5\nEnd Function\n" +
             $"Sub Main()\n Dim o As Object = MakeO()\n Console.WriteLine({intrinsic}(o))\nEnd Sub\n";
         OnBothPipelines(program, (il, pipeline) =>
-            Assert.That(il,
-                Does.Contain($"call {resultSpec} [mscorlib]System.Convert::{convertMethod}(object)"),
-                $"{intrinsic}(o) ({pipeline}):\n{il}"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(il,
+                    Does.Contain($"call {resultSpec} {VbConversionsToken}::{vbMethod}(object)"),
+                    $"{intrinsic}(o) ({pipeline}):\n{il}");
+                Assert.That(il, Does.Not.Contain("System.Convert::"),
+                    $"{intrinsic}(o) must no longer go through System.Convert ({pipeline}):\n{il}");
+                Assert.That(il, Does.Contain(VbRuntimeExternMarker),
+                    $"{intrinsic}(o) calls the VB runtime, so the module must declare it ({pipeline}):\n{il}");
+            }));
+    }
+
+    // CStr is the one conversion #212 left on System.Convert: VB's CStr of Nothing is Nothing where
+    // Convert.ToString gives "", and Len lowers to `.Length` (and `&` converts an Object operand
+    // through CStr), so adopting VB's would turn a running `Len(CStr(o))` into a
+    // NullReferenceException. It was the sixth row of the test above; it is its own case now
+    // because it asserts the opposite.
+    [Test]
+    public void CStrOfAnObjectOperand_StaysConvertToString_AndNeverReachesTheVbRuntime()
+    {
+        const string program =
+            "Function MakeO() As Object\n Return 5\nEnd Function\n" +
+            "Sub Main()\n Dim o As Object = MakeO()\n Console.WriteLine(CStr(o))\nEnd Sub\n";
+        OnBothPipelines(program, (il, pipeline) =>
+            Assert.Multiple(() =>
+            {
+                Assert.That(il, Does.Contain("call string [mscorlib]System.Convert::ToString(object)"),
+                    $"CStr(o) ({pipeline}):\n{il}");
+                Assert.That(il, Does.Not.Contain("Conversions::ToString"),
+                    $"CStr(o) must not adopt VB's Conversions.ToString ({pipeline}):\n{il}");
+                Assert.That(il, Does.Not.Contain(VbRuntimeExternMarker),
+                    $"a CStr-only module has no VB runtime call to declare ({pipeline}):\n{il}");
+            }));
     }
 
     // ====================================================================================
