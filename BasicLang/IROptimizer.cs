@@ -2663,13 +2663,17 @@ namespace BasicLang.Compiler.IR.Optimization
         /// compared a String with an Integer; and a typed <c>Boolean = 1</c>, which the fold
         /// answers right by luck, turned wrong on C++ and MSIL.</para>
         ///
-        /// <para>⚠ The <c>Nothing</c> literal still propagates. It is Object-typed already, VB
-        /// converts it to the other operand's type exactly as the late-bound comparison converts a
-        /// Nothing-holding Object, and <see cref="ConstantFoldingPass"/>'s String-equality arm
-        /// answers <c>Nothing = ""</c> True, which JavaScript's own <c>===</c> would not (#215).</para>
+        /// <para>⚠ The <c>Nothing</c> literal is held back too (#300). It is no Object comparand
+        /// (<see cref="IsObjectComparand"/>): once propagated, <c>Dim n As Object = Nothing : n = 0</c>
+        /// became the constant pair <c>Nothing = 0</c>, which <see cref="ConstantFoldingPass"/>
+        /// answered at compile time, so <c>n = 0</c>, <c>n &lt; 1</c> and <c>n = False</c> printed
+        /// False on C#, JavaScript and MSIL at the CLI, <c>--optimize</c> and a Release project
+        /// alike. vbc converts Nothing to the other operand's default and prints True. Left in
+        /// place, the variable keeps the comparison late-bound, and each backend's late-bound
+        /// comparison (JavaScript's <c>__blCompareObject</c> since #215) answers as vbc does.</para>
         /// </summary>
         private static bool KeepsLateBinding(IRVariable variable, IRValue copy) =>
-            !IsObjectComparand(variable) || IsObjectComparand(copy) || copy is IRConstant { Value: null };
+            !IsObjectComparand(variable) || IsObjectComparand(copy);
 
         /// <summary>
         /// An operand that makes a comparison late-bound under ADR-0012: statically typed (scalar)
