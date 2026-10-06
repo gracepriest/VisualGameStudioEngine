@@ -1733,7 +1733,14 @@ namespace BasicLang.Compiler.IR
             // `Me` typed as nothing — MeOfCurrentMember's one answer is only as good as this name.
             var enclosingClassName = _currentClassName;
             var enclosingClassMethodNames = _currentClassMethodNames;
+            var enclosingPropertyInitializers = _currentClassPropertyInitializers;
             _currentClassName = node.Name;
+
+            // #210: every auto-property initializer of THIS class, folded once, in declaration
+            // order, before the member loop — a constructor declared above the property it
+            // initializes needs it first. Saved and restored with the class name, for the same
+            // nested-class reason.
+            _currentClassPropertyInitializers = FoldPropertyInitializers(node);
 
             // ⛔ Taken from the AST, BEFORE the loop below, and not from irClass.Methods — that list
             // is filled as each member is PROCESSED, so a constructor declared above the method it
@@ -1858,7 +1865,13 @@ namespace BasicLang.Compiler.IR
                         IsReadOnly = propNode.IsReadOnly,
                         IsWriteOnly = propNode.IsWriteOnly,
                         IsVirtual = propNode.IsVirtual,
-                        IsOverride = propNode.IsOverride
+                        IsOverride = propNode.IsOverride,
+                        // #210: a SHARED initializer is placed by each backend beside the
+                        // property's storage, as a Shared field's is; an instance one never lands
+                        // here — it is a store in every constructor (EmitPropertyInitializers).
+                        Initializer = propNode.IsStatic
+                            ? _currentClassPropertyInitializers.FirstOrDefault(i => i.Property == propNode).Value
+                            : null
                     };
 
                     // Generate getter/setter methods
@@ -1911,6 +1924,75 @@ namespace BasicLang.Compiler.IR
 
             _currentClassName = enclosingClassName;
             _currentClassMethodNames = enclosingClassMethodNames;
+            _currentClassPropertyInitializers = enclosingPropertyInitializers;
+        }
+
+        /// <summary>
+        /// #210: the auto-property initializers of the class being built (<see cref="FoldPropertyInitializers"/>),
+        /// or empty outside a class.
+        /// </summary>
+        private List<(PropertyNode Property, IRConstant Value)> _currentClassPropertyInitializers = new();
+
+        /// <summary>
+        /// #210: each <c>Property P As T = value</c> of <paramref name="node"/>, its value folded to a
+        /// constant by the SAME helper a field initializer goes through
+        /// (<see cref="BuildConstantFieldInitializer"/>) — so a property and the field written in its
+        /// place agree about what is constant, including refusing the same shapes (<c>Twice(3)</c>,
+        /// <c>New List(Of Integer)</c>), with the same message naming the property.
+        /// Only auto-properties: the analyzer refuses the rest (BC36714) before the IR is built.
+        /// </summary>
+        private List<(PropertyNode Property, IRConstant Value)> FoldPropertyInitializers(ClassNode node)
+        {
+            var folded = new List<(PropertyNode Property, IRConstant Value)>();
+            foreach (var member in node.Members)
+            {
+                if (member is not PropertyNode { IsAuto: true, Initializer: not null } prop) continue;
+                var type = prop.PropertyType != null
+                    ? _semanticAnalyzer.GetNodeType(prop) ?? new TypeInfo("Object", TypeKind.Class)
+                    : new TypeInfo("Object", TypeKind.Class);
+                folded.Add((prop, BuildConstantFieldInitializer(prop.Initializer, type, prop.Name, "property")));
+            }
+            return folded;
+        }
+
+        /// <summary>
+        /// #210: runs the INSTANCE auto-property initializers of the class being built, in declaration
+        /// order, as the stores <c>Me.P = value</c> — at the current point of a constructor, which its
+        /// two callers make the point right after the base call: <see cref="Visit(ConstructorNode)"/>
+        /// and <see cref="SynthesizeImplicitConstructor"/>.
+        ///
+        /// <para>⭐ That is VB's rule, measured against vbc: an instance initializer runs in every
+        /// constructor, after the base constructor, and it is an assignment THROUGH THE PROPERTY —
+        /// `Overridable Property V As Integer = 1` in a base reaches a derived class's Set ("derived
+        /// set 1"), and a base constructor reading V afterwards sees 1. The node is exactly the one the
+        /// qualified spelling <c>Me.P = value</c> lowers to, so every backend already knows it: a setter
+        /// call for an accessor-backed property, the member itself for a plain one, the backing storage
+        /// for a ReadOnly one (VB's constructor exception, task #178). No backend reads anything new.</para>
+        ///
+        /// <para>⚠ Not through the backends' field-initializer placement. That placement is BEFORE the
+        /// base call on C# (a C# initializer) and after <c>super()</c> as a class field on JavaScript —
+        /// measured with a FIELD read from a base constructor through an Overridable method (P07f):
+        /// vbc says 0, C# 5, JavaScript undefined — and it stores storage, never a setter. A property
+        /// initializer placed there would inherit both.</para>
+        ///
+        /// <para>⚠ The field initializers of the same class run first (each backend's prologue), so a
+        /// property and a field interleaved in the source run fields-then-properties. With constant
+        /// initializers that order is observable only through a derived Set that reads a field of the
+        /// same object — stated, not handled.</para>
+        /// </summary>
+        private void EmitPropertyInitializers()
+        {
+            foreach (var (property, value) in _currentClassPropertyInitializers)
+            {
+                if (property.IsStatic) continue;   // the type's, not this instance's: IRProperty.Initializer
+                // A fresh constant per constructor: an IR value is never shared between functions.
+                // Stamped with the DECLARATION's line, where a debugger steps for it (as vbc's
+                // sequence point does) — the constructor's own line is not where it is written.
+                EmitInstruction(new IRFieldStore(MeOfCurrentMember(), property.Name, new IRConstant(value.Value, value.Type))
+                {
+                    SourceLine = property.Line
+                });
+            }
         }
 
         /// <summary>
@@ -1968,9 +2050,16 @@ namespace BasicLang.Compiler.IR
             // mutation: with the fill emptied, every test still passed, because an empty
             // synthesized constructor behaves exactly like the default each backend invents. A
             // guard protecting nothing observable is a guard no test can hold.
+            //
+            // #210: the other thing a class with no constructor can need one for is an INSTANCE
+            // auto-property initializer — VB runs it in the implicit constructor, after the base
+            // call, and there is no other place to put the store (EmitPropertyInitializers). Such a
+            // class is synthesized a constructor whether or not there is a base call to fill; with
+            // nothing to fill, the base call stays the implicit one each backend emits itself.
+            var initializesProperties = _currentClassPropertyInitializers.Any(i => !i.Property.IsStatic);
             if (irClass.Constructors.Count > 0) return;
-            if (!_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase)) return;
-            if (implicitBase?.Parameters == null || implicitBase.Parameters.Count == 0) return;
+            if (!_semanticAnalyzer.ConstructorBindings.TryGetValue(node, out var implicitBase) && !initializesProperties) return;
+            if ((implicitBase?.Parameters == null || implicitBase.Parameters.Count == 0) && !initializesProperties) return;
 
             var scope = EnterProcedureScope();
             _currentFunction = _module.CreateFunction(
@@ -1983,6 +2072,7 @@ namespace BasicLang.Compiler.IR
             AppendOmittedOptionalArguments(baseArgs, baseByRef, implicitBase);
             CopyInByRefArguments(baseArgs, baseByRef, implicitBase);
             EmitBaseConstructorCall(baseArgs, baseByRef);
+            EmitPropertyInitializers();
 
             if (!_currentBlock.IsTerminated())
             {
@@ -2429,8 +2519,10 @@ namespace BasicLang.Compiler.IR
         /// name but found Assignment"), which keeps the structure call site unreachable for
         /// initializers. PRE-EXISTING and measured.</para>
         /// </summary>
+        /// <param name="kind">"field", or "property" for an auto-property's (#210) — only to word the
+        /// refusal.</param>
         private IRConstant BuildConstantFieldInitializer(
-            ExpressionNode initializer, TypeInfo fieldType, string fieldName)
+            ExpressionNode initializer, TypeInfo fieldType, string fieldName, string kind = "field")
         {
             if (initializer == null) return null;
 
@@ -2440,7 +2532,7 @@ namespace BasicLang.Compiler.IR
             }
 
             throw new Exception(
-                $"Line {(initializer.Line > 0 ? initializer.Line : _currentSourceLine)}: the field "
+                $"Line {(initializer.Line > 0 ? initializer.Line : _currentSourceLine)}: the {kind} "
                 + $"'{fieldName}' has an initializer that cannot be computed at compile time. Only "
                 + "a constant expression is supported here; assign it in a constructor instead.");
         }
@@ -2832,6 +2924,14 @@ namespace BasicLang.Compiler.IR
             }
             EmitBaseConstructorCall(baseArgs, baseByRef);
             CompletePropertyCopyOuts(null, baseCopyOuts);   // #209: after the base call, before the body
+
+            // #210: the instance auto-property initializers, after the base call and before the
+            // body — every instance constructor runs them. A `Shared Sub New` is the type's, not
+            // an instance's, and runs none.
+            if (!node.IsShared)
+            {
+                EmitPropertyInitializers();
+            }
 
             // Generate body
             if (node.Body != null)

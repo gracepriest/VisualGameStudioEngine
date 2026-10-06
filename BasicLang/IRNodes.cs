@@ -2415,6 +2415,21 @@ namespace BasicLang.Compiler.IR
         public IRFunction Setter { get; set; }
 
         /// <summary>
+        /// #210: a SHARED auto-property's initializer (<c>Public Shared Property S As Integer = 3</c>),
+        /// folded to a constant exactly as a Shared field's <see cref="IRField.Initializer"/> is, and
+        /// placed by each backend exactly where it places that field's — beside the storage it keeps
+        /// for the property (C# auto-property initializer, C++ inline static, JavaScript static field,
+        /// MSIL <c>.cctor</c>).
+        ///
+        /// <para>⛔ ALWAYS NULL FOR AN INSTANCE PROPERTY. An instance initializer is not carried here: it
+        /// is lowered by <c>IRBuilder</c> into every instance constructor as the store <c>Me.P = value</c>
+        /// right after the base call, which is where — and how — VB runs it (through the property, so an
+        /// Overridable one reaches a derived setter). A backend that also placed it from here would
+        /// initialize the property twice, the second time at the wrong moment.</para>
+        /// </summary>
+        public IRValue Initializer { get; set; }
+
+        /// <summary>
         /// ⭐ ADR-0007's "ACCESSOR-BACKED", read off the IR: using this property may run user code
         /// — it has a Get or Set accessor function, or it is Overridable/Overrides (a derived
         /// class's accessor may run in its place). A plain auto-property has neither and is

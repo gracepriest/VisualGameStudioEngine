@@ -6877,6 +6877,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
                 SetNodeType(prop, propertyType);
 
+                // #210: the parser reads `= value` on every property, interface ones included; an
+                // interface has no storage to initialize. vbc's number for it is BC36714 (measured).
+                if (prop.Initializer != null)
+                {
+                    VbCodedError("BC36714",
+                        $"Expanded Properties cannot be initialized: interface property '{prop.Name}' has no "
+                        + "storage, so it cannot take '= value'. Initialize it in the implementing class.",
+                        prop);
+                }
+
                 // ⛔ AND REGISTER IT AS A MEMBER. Without this a read through an interface-typed
                 // variable (`s.Area` with `Dim s As IShape`) found no member and typed as Object:
                 // `Dim t As String = s.Area` was refused as Object→String, and on C++ the value
@@ -7334,47 +7344,61 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Check initializer type
             if (node.Initializer != null && !node.IsAuto)
             {
-                // Let lambdas infer their parameter types from the declared type, and a lambda
-                // or AddressOf convert to a user Delegate (#187)
-                if (IsDelegateTargetedExpression(node.Initializer))
-                    _lambdaTargetType = varType;
-
-                node.Initializer.Accept(this);
-                // Spec 6.1: a Dim initializer is a Decimal context — a numeric
-                // literal converts from its source text and retypes to Decimal.
-                TryRetypeLiteralToDecimal(node.Initializer, varType);
-                TargetTypeEmptyArrayLiteral(node.Initializer, varType);
-                var initType = GetNodeType(node.Initializer);
-
-                // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
-                // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
-                // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
-                // `= Nothing` is judged on its own (#173) — a class field's and a module-level
-                // Dim's initializer come through here too.
-                if (JudgeNothingConversion(node.Initializer, varType))
-                {
-                    // admitted: a null reference, or a value type's default (#186)
-                }
-                else if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
-                    && !IsNumericLiteralAssignable(node.Initializer, varType, initType))
-                {
-                    var errorMsg = $"Cannot assign value of type '{initType.Name}' to variable of type '{varType.Name}'";
-                    var hint = GetTypeConversionHint(initType, varType);
-                    if (hint != null)
-                        errorMsg += $". {hint}";
-                    Error(errorMsg, node.Line, node.Column);
-                }
-
-                // ⛔ BC30439. The check above asks whether the TYPE converts; this one asks
-                // whether the VALUE survives it. `Dim b As Byte = 300` passes the first (a
-                // numeric literal may initialize any numeric type) and then means four different
-                // things — see CheckConstantFitsNumericTarget. Covers LOCAL and MODULE scope
-                // together: the IR builder has two separate narrowing paths for them, and this is
-                // the one node both come through.
-                CheckConstantFitsNumericTarget(
-                    node.Initializer, varType, $"the initializer for variable '{node.Name}'",
-                    node.Line, node.Column);
+                CheckDeclaredInitializer(node.Initializer, varType, "variable", node.Name, node.Line, node.Column);
             }
+        }
+
+        /// <summary>
+        /// The checks a declaration's <c>= value</c> gets against its DECLARED type: the value is
+        /// analyzed in that type's context, then judged for <c>Nothing</c>, for a type that does not
+        /// convert, and for a constant that does not fit (BC30439). One body for the two declarations
+        /// that carry one — a <c>Dim</c> (local, module-level or class field) and, #210, an
+        /// auto-property — so a property initializer is judged exactly as the field written in its
+        /// place would be. <paramref name="kind"/> ("variable" / "property") only words the messages.
+        /// </summary>
+        private void CheckDeclaredInitializer(
+            ExpressionNode initializer, TypeInfo varType, string kind, string name, int line, int column)
+        {
+            // Let lambdas infer their parameter types from the declared type, and a lambda
+            // or AddressOf convert to a user Delegate (#187)
+            if (IsDelegateTargetedExpression(initializer))
+                _lambdaTargetType = varType;
+
+            initializer.Accept(this);
+            // Spec 6.1: a Dim initializer is a Decimal context — a numeric
+            // literal converts from its source text and retypes to Decimal.
+            TryRetypeLiteralToDecimal(initializer, varType);
+            TargetTypeEmptyArrayLiteral(initializer, varType);
+            var initType = GetNodeType(initializer);
+
+            // A `::` foreign VALUE converts to whatever it is declared as — `Dim v As Integer
+            // = ::getValue()` used to die here ("Cannot assign value of type '::getValue' to
+            // variable of type 'Integer'"), the first wall a `::` user hit. Plan 2 Task 7.
+            // `= Nothing` is judged on its own (#173) — a class field's and a module-level
+            // Dim's initializer come through here too.
+            if (JudgeNothingConversion(initializer, varType))
+            {
+                // admitted: a null reference, or a value type's default (#186)
+            }
+            else if (initType != null && initType.Kind != TypeKind.Foreign && !varType.IsAssignableFrom(initType)
+                && !IsNumericLiteralAssignable(initializer, varType, initType))
+            {
+                var errorMsg = $"Cannot assign value of type '{initType.Name}' to {kind} of type '{varType.Name}'";
+                var hint = GetTypeConversionHint(initType, varType);
+                if (hint != null)
+                    errorMsg += $". {hint}";
+                Error(errorMsg, line, column);
+            }
+
+            // ⛔ BC30439. The check above asks whether the TYPE converts; this one asks
+            // whether the VALUE survives it. `Dim b As Byte = 300` passes the first (a
+            // numeric literal may initialize any numeric type) and then means four different
+            // things — see CheckConstantFitsNumericTarget. Covers LOCAL and MODULE scope
+            // together: the IR builder has two separate narrowing paths for them, and this is
+            // the one node both come through.
+            CheckConstantFitsNumericTarget(
+                initializer, varType, $"the initializer for {kind} '{name}'",
+                line, column);
         }
 
         public void Visit(TupleDeconstructionNode node)
@@ -8217,6 +8241,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (node.IsStatic)
             {
                 _inStaticContext = true;
+            }
+
+            // #210: `= value`. VB takes it on an AUTO-property only — vbc refuses it on one with a
+            // Get/Set block, BC36714 "Expanded Properties cannot be initialized" (measured) — and
+            // judges it exactly as the field written in its place: the same Nothing, conversion and
+            // constant-fit (BC30439) rules, through the same body (CheckDeclaredInitializer). A
+            // Shared one is analyzed in the static context set just above, as its accessors are.
+            if (node.Initializer != null)
+            {
+                if (node.IsAuto)
+                {
+                    CheckDeclaredInitializer(node.Initializer, propertyType, "property", node.Name, node.Line, node.Column);
+                }
+                else
+                {
+                    VbCodedError("BC36714",
+                        $"Expanded Properties cannot be initialized: '{node.Name}' has a Get or Set block, "
+                        + "and only an auto-implemented property takes '= value'. Initialize its backing field instead.",
+                        node);
+                }
             }
 
             // Analyze getter

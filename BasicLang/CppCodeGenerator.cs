@@ -2256,7 +2256,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // definition. inline (C++17, and this backend targets C++20) keeps the
                 // declaration self-contained.
                 var memberMod = prop.IsStatic ? "inline static " : "";
-                WriteLine($"{memberMod}{propType} {propName} = {GetDefaultValue(prop.Type)};");
+                // #210: a SHARED initializer, spelled as a Shared field's definition spells it
+                // (EmitStaticMemberInitializationsCore). Null for an instance property, whose
+                // initializer is a store in its ctor_ — this member keeps its zero until then.
+                var initial = prop.Initializer is IRConstant c ? EmitConstant(c) : GetDefaultValue(prop.Type);
+                WriteLine($"{memberMod}{propType} {propName} = {initial};");
                 if (!prop.IsWriteOnly)
                     WriteLine($"{getterSignature} {{ return {propName}; }}");
                 if (!prop.IsReadOnly)

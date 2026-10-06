@@ -1272,6 +1272,16 @@ namespace BasicLang.Compiler
                 node.PropertyType = ParseTypeReference();
             }
 
+            // #210: `Public Property P As Integer = 7`. Read here, before the accessor block is
+            // known, the way a field's initializer is read (`=` lexes as Assignment; Equal is
+            // accepted as the field arm accepts it); whether this property may carry one is the
+            // analyzer's call (BC36714). ⛔ Before this arm the `=` reached the class member loop
+            // as "Unexpected token in class: '='" on every backend.
+            if (Match(TokenType.Assignment) || Match(TokenType.Equal))
+            {
+                node.Initializer = ParseExpression();
+            }
+
             ConsumeNewlines();
 
             // Auto-property: `Public Property V As Integer` with no accessor block and no

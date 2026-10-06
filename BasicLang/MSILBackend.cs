@@ -1442,6 +1442,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // Same rule as the module class: `beforefieldinit` is dropped when a type initializer
             // exists, as the C# compiler does for a class with a static constructor.
             var needsInitializer = irClass.Fields.Any(NeedsStaticFieldInitialization)
+                                   || irClass.Properties.Any(NeedsStaticPropertyInitialization)   // #210
                                    || irClass.TypeInitializer != null;   // #208: `Shared Sub New`
 
             // A closure environment nested in its creator's class (ADR-0010) is DECLARED by its own
@@ -2567,6 +2568,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             && (field.Initializer != null || TryArrayAllocation(field.Type, out _, out _));
 
         /// <summary>
+        /// #210: true for a <c>Shared</c> AUTO-property with an initializer — its backing field
+        /// (<see cref="BackingFieldName"/>) is set by the type initializer, as a Shared field's is.
+        /// An instance property never carries <see cref="IRProperty.Initializer"/>.
+        /// </summary>
+        private static bool NeedsStaticPropertyInitialization(IRProperty prop) =>
+            prop.IsStatic && prop.Initializer != null && IsAutoProperty(prop);
+
+        /// <summary>
         /// A user class's type initializer, for <c>Shared</c> field initializers and sized-array
         /// storage.
         ///
@@ -2636,6 +2645,18 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 }
 
                 WriteLine($"    stsfld {IlTypeSpec(field.Type)} {className}::{SanitizeName(field.Name)}");
+                _currentStack--;
+            }
+
+            // #210: a Shared auto-property's initializer, the same three steps as a Shared field's,
+            // into the backing field GenerateProperty declares for it — with the Shared field
+            // initializers, so BEFORE a `Shared Sub New` body below (#208), as vbc orders them.
+            foreach (var prop in irClass.Properties.Where(NeedsStaticPropertyInitialization))
+            {
+                EmitInlineValue(prop.Initializer);
+                EmitNumericCoercion(prop.Initializer, prop.Type);
+                EmitCoerceToSlot(prop.Initializer.Type, IlTypeSpec(prop.Type));
+                WriteLine($"    stsfld {IlTypeSpec(prop.Type)} {className}::{BackingFieldName(RawName(prop.Name))}");
                 _currentStack--;
             }
 
