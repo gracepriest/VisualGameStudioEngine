@@ -237,6 +237,10 @@ public class NameBindingRecordingTests
     /// <summary>M5 — <see cref="IdentifierExpressionNode.Name"/> is never rewritten. The body's
     /// reference stays spelled exactly as WRITTEN ("n"), even though it binds to a parameter
     /// DECLARED "N" — <c>Name</c> and <c>Binding.DeclaredName</c> deliberately disagree in case.
+    /// <para>⭐ RESHAPED (task #217): the <c>n</c> the parameter outranks is a MODULE GLOBAL, not a local
+    /// of the same procedure — a lambda parameter that hides an enclosing local is VB's BC36641 now, and
+    /// <see cref="NameBindingProbe.Analyze"/> asserts a clean front end. A module global is not hidden
+    /// by error, so the parameter still has something of the same name to be confused with.</para>
     /// <para>⛔ MUTANT M5 (<c>SetNodeSymbol</c> also overwrites <c>reference.Name</c> to the
     /// declared spelling) kills this test directly: <c>Name</c> would read "N", not "n".</para>
     /// </summary>
@@ -244,8 +248,8 @@ public class NameBindingRecordingTests
     public void NodeName_IsNeverRewritten_StaysTheSourceSpelling()
     {
         var (ast, _) = NameBindingProbe.Analyze("""
+            Dim n As Integer = 1
             Sub Main()
-                Dim n As Integer = 1
                 Dim f = Function(N As Integer) n + 1
                 Console.WriteLine(f(2))
             End Sub
@@ -419,13 +423,15 @@ public class NameBindingRecordingTests
     /// <summary>Re-analysis leaves a FRESH <see cref="NameBinding"/>, never a stale one — the
     /// same node instance, analyzed twice, must carry the binding the SECOND pass computed, not
     /// a leftover from the first. (Here the two passes agree, since the source did not change;
-    /// what this guards is that nothing SKIPS re-setting <c>Binding</c> on the second pass.)</summary>
+    /// what this guards is that nothing SKIPS re-setting <c>Binding</c> on the second pass.)
+    /// <para>⭐ RESHAPED (task #217): the same module-global <c>n</c> as the M5 test above, not a
+    /// local — a parameter hiding a local is BC36641 and the analysis would not be clean.</para></summary>
     [Test]
     public void ReAnalysis_LeavesAFreshBinding_NeverAStaleOne()
     {
         var ast = new Parser(new Lexer("""
+            Dim n As Integer = 1
             Sub Main()
-                Dim n As Integer = 1
                 Dim f = Function(N As Integer) n + 1
                 Console.WriteLine(f(2))
             End Sub
@@ -471,13 +477,16 @@ public class NameBindingConsumptionTests
     /// <para>⛔ MUTANT M4 (<c>ReferencedVariable</c>'s miss falls through to
     /// <c>GetOrCreateVariable</c> instead of throwing) kills this test: it would build without
     /// throwing, silently creating the exact kind of undeclared variable D1 exists to prevent.</para>
+    /// <para>⭐ RESHAPED (task #217): the outer <c>n</c> is a module global, not a local (a parameter
+    /// hiding a local is BC36641); the reference still binds to the LAMBDA PARAMETER <c>N</c>, which is
+    /// what the tamper redirects.</para>
     /// </summary>
     [Test]
     public void BoundMiss_TamperedDeclaredName_ThrowsInternalCompilerError_NeverSilentlyCreates()
     {
         var (ast, analyzer) = NameBindingProbe.Analyze("""
+            Dim n As Integer = 1
             Sub Main()
-                Dim n As Integer = 1
                 Dim f = Function(N As Integer) n + 1
                 Console.WriteLine(f(2))
             End Sub
@@ -607,29 +616,38 @@ public class NameBindingCSharpTextTests
     }
 
     /// <summary>
-    /// <c>Sub(N As Integer)</c> inside a function with a local <c>n</c>: the emitted lambda
-    /// body must write the PARAMETER'S own spelling (<c>N</c>) — never the enclosing <c>n</c>,
+    /// <c>Sub(N As Integer)</c> inside a function that has a local <c>n</c>: the emitted lambda
+    /// body must write the PARAMETER'S own spelling (<c>N</c>) — never the function's <c>n</c>,
     /// which is exactly the shape that used to print 101 instead of 1 (K1).
     /// <para>⛔ MUTANT M10 (<c>_variableNameMap[param.Name] = SanitizeName(param.Name)</c> is
     /// disabled) kills this test: the body would emit <c>n = n + 100;</c>, reading and writing
-    /// the ENCLOSING variable.</para>
+    /// the function's variable.</para>
+    /// <para>⭐ RESHAPED (task #217): the function's <c>n</c> is a local of a SIBLING block (an
+    /// <c>If</c> that has closed), not of the lambda's own block. K1's own shape — a parameter
+    /// hiding a local that encloses the lambda — is VB's BC36641 now, and
+    /// <see cref="NameBindingProbe.Analyze"/> asserts a clean front end. A sibling-block local does
+    /// not enclose the lambda, vbc accepts it, and it is still in the emitter's case-insensitive
+    /// name map, which is the thing M10 disables the parameter's overwrite of. (A MODULE GLOBAL
+    /// would not do: it is not in that map, so M10 would survive.)</para>
     /// </summary>
     [Test]
     public void LambdaParameterCase_EmitsTheParametersOwnSpelling_InsideTheBody()
     {
         var cs = GenerateCSharp("""
             Sub Main()
-                Dim n As Integer = 1
+                If True Then
+                    Dim n As Integer = 1
+                    Console.WriteLine(n)
+                End If
                 Dim setp = Sub(N As Integer) n = n + 100
                 setp(5)
-                Console.WriteLine(n)
             End Sub
             """);
 
         Assert.That(cs, Does.Contain("N = N + 100"),
-            "the lambda body must write its OWN parameter N, not the enclosing n:\n" + cs);
+            "the lambda body must write its OWN parameter N, not the function's n:\n" + cs);
         Assert.That(cs, Does.Not.Contain("n = n + 100"),
-            "the enclosing n must never be written by the lambda:\n" + cs);
+            "the function's n must never be written by the lambda:\n" + cs);
     }
 
     /// <summary>

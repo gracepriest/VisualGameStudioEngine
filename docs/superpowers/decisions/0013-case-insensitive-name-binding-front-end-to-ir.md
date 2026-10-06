@@ -1,7 +1,7 @@
 # ADR 0013: Case-insensitive name binding between the front end and the IR
 
 - **Date:** 2026-09-28
-- **Status:** Accepted (D2 pending an owner decision; see D2)
+- **Status:** Accepted (D2 decided by the owner, 2026-10-05; see the amendment under D2)
 - **Decided by:** the architect role, in two rulings on the same day (D1–D4, then D5–D8 on the
   registration gap D1 and D3 left). Transcribed from the rulings; nothing below the headings is
   editorialised.
@@ -50,6 +50,14 @@ K1, K6 and K7 behave identically: inside the body the parameter is read and writ
 enclosing variable is untouched and absent from the capture set. Whether BC36641 is reported is
 language policy and goes to the owner; #169 adds NO diagnostic and implements the shadowing D1
 produces on its own. Invariant for #169: the capture set for K1 and K6 equals K7's.
+
+**Amendment (task #217, 2026-10-05):** the owner ruled the VB way. BC36641 IS reported: a lambda
+parameter named, case-insensitively, like a local or parameter declared outside its lambda within
+the procedure around it (a `Dim`, a local `Const`, a `For` / `For Each` / `Catch` variable, a
+parameter of the procedure or of an enclosing lambda, including one declared later in an enclosing
+block) is refused at the parameter, so K1, K6 and K7 no longer compile and there is no shadowing to
+bind. A class field or property, a module global, a sibling lambda's parameter and a local of a
+sibling block are not hidden-by-error; the case-insensitive binding above still decides those.
 
 ### D3: the scope boundary between #169 and #124
 

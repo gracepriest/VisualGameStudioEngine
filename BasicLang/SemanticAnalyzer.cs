@@ -329,6 +329,15 @@ namespace BasicLang.Compiler.SemanticAnalysis
             new Dictionary<string, List<(VariableDeclarationNode Local, Scope Lambda)>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// Task #217 — the same later-declaration question for a LAMBDA PARAMETER (BC36641): every
+        /// lambda parameter that hid nothing when it was declared, by name, with the lambda it
+        /// belongs to. A local declared below the lambda in an enclosing block hides it too (VB's
+        /// block scope); <see cref="ReportLambdaLocalsHiddenBy"/> asks again when one is declared.
+        /// </summary>
+        private readonly Dictionary<string, List<(ParameterNode Parameter, Scope Lambda)>> _lambdaParameters =
+            new Dictionary<string, List<(ParameterNode Parameter, Scope Lambda)>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// Task #174 — the nodes a lambda-boundary diagnostic was reported at, so a node the
         /// analyzer visits twice (an argument re-typed for overload resolution) reports once.
         /// </summary>
@@ -1385,6 +1394,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _lambdaParameterSymbols.Clear();
             _lambdaScopes.Clear();
             _lambdaLocals.Clear();
+            _lambdaParameters.Clear();
             _lambdaDiagnosticSites.Clear();
             _baseArgumentDiagnosticSites.Clear();
             _sharedMemberNames.Clear();
@@ -8217,6 +8227,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 var paramSymbol = new Symbol(param.Name, SymbolKind.Parameter, paramType, param.Line, param.Column);
                 _currentScope.Define(paramSymbol);
                 _lambdaParameterSymbols.Add(paramSymbol);
+                CheckLambdaParameterHides(param, lambdaScope);   // task #217: BC36641
                 SetNodeSymbol(param, paramSymbol);
                 SetNodeType(param, paramType);
                 paramTypes.Add(paramType);
@@ -10594,9 +10605,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// expression.": a reference, read or write, at any lambda nesting depth, to a ByRef
         /// parameter declared OUTSIDE the innermost lambda around it. Decided by the resolved
         /// SYMBOL, never by spelling (ADR-0013): a lambda parameter spelled like the ByRef one
-        /// resolves to itself, declared inside the lambda, and is not reported (R7 — whether that
-        /// shadowing is BC36641 is #217). BasicLang's lambda parameters cannot be ByRef (the parser
-        /// takes a bare name), so the parameter is always an enclosing procedure's.
+        /// resolves to itself, declared inside the lambda, and is not reported HERE (R7) — the
+        /// parameter itself is VB's BC36641 (<see cref="CheckLambdaParameterHides"/>, #217).
+        /// BasicLang's lambda parameters cannot be ByRef (the parser takes a bare name), so the
+        /// parameter is always an enclosing procedure's.
         /// </summary>
         private void CheckByRefParameterInLambda(Symbol symbol, ASTNode at)
         {
@@ -10623,14 +10635,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var lambda = InnermostLambdaScope();
             if (lambda == null) return;
 
-            for (var scope = lambda.Parent; scope != null && IsProcedureLocalScope(scope); scope = scope.Parent)
-            {
-                var hidden = scope.ResolveLocal(node.Name);
-                if (hidden == null || _synthesizedSymbols.Contains(hidden)) continue;
-
-                if (ReportLambdaLocalHiding(node, hidden)) return;
-                break;   // the nearest declaration is what the name means outside; it hides nothing we report
-            }
+            // The nearest declaration is what the name means outside; one we do not report hides nothing.
+            var hidden = NearestEnclosingProcedureLocal(lambda, node.Name);
+            if (hidden != null && ReportLambdaLocalHiding(node, hidden)) return;
 
             if (!_lambdaLocals.TryGetValue(node.Name, out var locals))
                 _lambdaLocals[node.Name] = locals = new List<(VariableDeclarationNode Local, Scope Lambda)>();
@@ -10638,21 +10645,74 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// ⭐ Task #217 — VB's BC36641: a lambda parameter named (case-insensitively) like a local
+        /// or parameter declared OUTSIDE its lambda, within the procedure around it — a
+        /// <c>Dim</c>, a local <c>Const</c>, a <c>For</c> / <c>For Each</c> / <c>Catch</c>
+        /// variable, a parameter of the procedure or of an enclosing lambda — is an error, never a
+        /// silent shadow. The same lookup as <see cref="CheckLambdaLocalHides"/>: a class member or
+        /// a module global is not in a procedure scope and may be hidden, and a sibling lambda's
+        /// parameter encloses nothing. A parameter that hides nothing yet is remembered for a
+        /// local declared later in an enclosing block (<see cref="ReportLambdaLocalsHiddenBy"/>).
+        /// </summary>
+        private void CheckLambdaParameterHides(ParameterNode parameter, Scope lambda)
+        {
+            var hidden = NearestEnclosingProcedureLocal(lambda, parameter.Name);
+            if (hidden != null && ReportLambdaParameterHiding(parameter, hidden)) return;
+
+            if (!_lambdaParameters.TryGetValue(parameter.Name, out var parameters))
+                _lambdaParameters[parameter.Name] = parameters = new List<(ParameterNode Parameter, Scope Lambda)>();
+            parameters.Add((parameter, lambda));
+        }
+
+        /// <summary>
+        /// The nearest declaration of <paramref name="name"/> OUTSIDE <paramref name="lambda"/> and
+        /// within the procedure around it (<see cref="IsProcedureLocalScope"/>), skipping what the
+        /// analyzer synthesized; null when there is none.
+        /// </summary>
+        private Symbol NearestEnclosingProcedureLocal(Scope lambda, string name)
+        {
+            for (var scope = lambda.Parent; scope != null && IsProcedureLocalScope(scope); scope = scope.Parent)
+            {
+                var hidden = scope.ResolveLocal(name);
+                if (hidden != null && !_synthesizedSymbols.Contains(hidden)) return hidden;
+            }
+            return null;
+        }
+
+        /// <summary>VB's BC36641 at <paramref name="parameter"/> when <paramref name="hidden"/> is a
+        /// local, a local <c>Const</c> or a parameter; false for anything else.</summary>
+        private bool ReportLambdaParameterHiding(ParameterNode parameter, Symbol hidden)
+        {
+            if (hidden.Kind is not (SymbolKind.Variable or SymbolKind.Constant or SymbolKind.Parameter)) return false;
+            LambdaBoundaryError(
+                "BC36641",
+                $"Lambda parameter '{parameter.Name}' hides a variable in an enclosing block, a previously defined "
+                + "range variable, or an implicitly declared variable in a query expression.",
+                parameter);
+            return true;
+        }
+
+        /// <summary>
         /// Task #174 — the later-declaration half of BC30616 (N7, N12): <paramref name="declared"/>,
         /// a local just defined, is hidden by every earlier lambda <c>Dim</c> of the same name
         /// whose lambda it ENCLOSES. VB's block scope is the whole block, so the order of the two
         /// declarations does not matter; a local of a sibling block encloses nothing and is not
-        /// reported.
+        /// reported. Task #217: the same for every earlier lambda PARAMETER (BC36641).
         /// </summary>
         private void ReportLambdaLocalsHiddenBy(Symbol declared)
         {
             var scope = declared?.DeclaringScope;
             if (scope == null || !IsProcedureLocalScope(scope)) return;
-            if (!_lambdaLocals.TryGetValue(declared.Name, out var locals)) return;
 
-            foreach (var (local, lambda) in locals)
-                if (IsStrictAncestor(scope, lambda))
-                    ReportLambdaLocalHiding(local, declared);
+            if (_lambdaLocals.TryGetValue(declared.Name, out var locals))
+                foreach (var (local, lambda) in locals)
+                    if (IsStrictAncestor(scope, lambda))
+                        ReportLambdaLocalHiding(local, declared);
+
+            if (_lambdaParameters.TryGetValue(declared.Name, out var parameters))
+                foreach (var (parameter, lambda) in parameters)
+                    if (IsStrictAncestor(scope, lambda))
+                        ReportLambdaParameterHiding(parameter, declared);
         }
 
         /// <summary>

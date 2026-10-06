@@ -239,26 +239,34 @@ public class ClosureLoweringRefusalTests
     /// instead — exactly the shape the backstop was written to catch and refuse rather than
     /// mis-emit. ADR-0013 D1 closes the hole the backstop was standing in for: the semantic
     /// analyzer now resolves <c>X</c> inside the lambda body case-insensitively to the lambda's
-    /// OWN parameter <c>x</c> (VB's shadowing rule, D2's interim), and the IR builder binds
+    /// OWN parameter <c>x</c> (the innermost declaration wins, VB's own rule), and the IR builder binds
     /// through that record — so the shape the backstop used to catch can no longer be PRODUCED by
     /// any front-end-analyzed program at all. ADR-0013's own Obligations section says exactly
     /// this: "after #169 it must never fire on a program the analyzer accepted; a firing means a
     /// reference bypassed the binding."
     ///
     /// <para>RE-MEASURED against this working tree: the program below now compiles AND RUNS on
-    /// MSIL, printing <c>2</c> (VB's own answer — the lambda's own parameter <c>x</c> = 1,
-    /// <c>X + 1</c> = 2). This fixture is compile-only by design (see its own header — no
-    /// <c>ilasm</c>, fast subset), so the RUN assertion lives in
-    /// <c>NameBindingExecutionTests.R6_NameMatchesLambdaParameterOnlyByCase_RunsEverywhere</c>
-    /// (<c>[Category("Integration")]</c>); this test only proves the backstop is no longer
+    /// MSIL, printing <c>10</c> then <c>2</c> (VB's own answer — the lambda's own parameter
+    /// <c>x</c> = 1, <c>X + 1</c> = 2). This fixture is compile-only by design (see its own header
+    /// — no <c>ilasm</c>, fast subset), so this test only proves the backstop is no longer
     /// REACHED, which needs no <c>ilasm</c>.</para>
+    ///
+    /// <para>⭐ RESHAPED (task #217). The original program had the creator's <c>Dim X</c> in the
+    /// lambda's own enclosing block, so the parameter <c>x</c> hid it — VB's BC36641, which the front
+    /// end now reports, and <see cref="MsilHarness.CompileToIl"/> asserts a clean analysis. The
+    /// creator's <c>X</c> is now a local of a SIBLING block (an <c>If</c> that has closed): it does
+    /// not enclose the lambda, vbc accepts the program, and the IR builder still has an <c>X</c> to
+    /// confuse with the parameter <c>x</c>, which is what the backstop is the defence against.</para>
     /// </summary>
     [Test]
     public void R6_NameMatchesLambdaParameterOnlyByCase_Task169_NoLongerReachesTheBackstop()
     {
         const string program = """
             Sub Main()
-                Dim X As Integer = 10
+                If True Then
+                    Dim X As Integer = 10
+                    Console.WriteLine(X)
+                End If
                 Dim f = Function(x As Integer) X + 1
                 Console.WriteLine(f(1))
             End Sub

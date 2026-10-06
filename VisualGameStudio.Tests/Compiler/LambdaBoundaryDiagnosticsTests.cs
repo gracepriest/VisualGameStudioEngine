@@ -62,8 +62,11 @@ public class LambdaBoundaryDiagnosticsTests
     }
 
     /// <summary>Asserts NONE of the four lambda-boundary codes fire anywhere in the program — the
-    /// mutant-killing "legal" half of the contract (kills M4, M6; proves the #231/#217 scope
-    /// boundary is not crossed).</summary>
+    /// mutant-killing "legal" half of the contract (kills M4, M6; proves the #231 scope boundary is
+    /// not crossed). ⚠ The filter is these four codes ONLY: BC36641 (task #217, a lambda PARAMETER
+    /// that hides a local or parameter) is a fifth lambda-boundary code, reported by the same
+    /// analyzer, and is pinned by <c>LambdaParameterHidesDiagnosticsTests</c> — a program that
+    /// hides one is allowed to carry it here.</summary>
     private static void AssertNoLambdaBoundaryDiagnostic(string source)
     {
         var errors = Analyze(source);
@@ -236,10 +239,13 @@ public class LambdaBoundaryDiagnosticsTests
     public void R6_ByValParameter_IsNeverRefused() =>
         AssertNoLambdaBoundaryDiagnostic(R6);
 
-    // R7 — a LAMBDA PARAMETER spelled like the enclosing ByRef parameter SHADOWS it: decided by
-    // the resolved SYMBOL (ADR-0013), never by spelling. Whether the shadowing itself should be
-    // its own diagnostic (BC36641) is the owner's pending decision, #217 — the interim is
-    // shadowing, silently, and #174 must not touch that path (per its own STOP condition).
+    // R7 — a LAMBDA PARAMETER spelled like the enclosing ByRef parameter is not the ByRef parameter
+    // BC36639 is about: decided by the resolved SYMBOL (ADR-0013), never by spelling, so BC36639 is
+    // not reported. The program IS refused, with a different code: since task #217 the parameter
+    // hides the ByRef one and the analyzer reports VB's BC36641 at it (pinned, with its line and
+    // column, by LambdaParameterHidesDiagnosticsTests and the R7 rows of the Execution fixture).
+    // This test and the LSP one below filter on the four codes of THIS file (BC36639, BC30616,
+    // BC30734, BC36667) — they say "not BC36639", and nothing about BC36641.
     private const string R7 = """
         Sub Run(ByRef n As Integer)
             Dim f As Func(Of Integer, Integer) = Function(n) n + 1
@@ -253,8 +259,12 @@ public class LambdaBoundaryDiagnosticsTests
         """;
 
     [Test]
-    public void R7_LambdaParameterShadowsTheByRefParameter_IsNotRefused_Task217Interim() =>
+    public void R7_LambdaParameterHidingTheByRefParameter_IsNotBC36639_ItIsBC36641()
+    {
         AssertNoLambdaBoundaryDiagnostic(R7);
+        Assert.That(Analyze(R7).Select(e => e.ErrorCode), Is.EqualTo(new[] { "BC36641" }),
+            "the parameter hides the ByRef one: VB's BC36641 (task #217), and nothing else");
+    }
 
     // ====================================================================================
     // BC30616 — a lambda `Dim` hides a local of an enclosing block, of the creator, or of an
@@ -801,18 +811,20 @@ public class LambdaBoundaryDiagnosticsTests
         Assert.That(match.Line, Is.EqualTo(4), "the use line");
     }
 
-    /// <summary>R7 must surface NOTHING through the LSP either — the same shadowing-by-symbol
-    /// decision the fast in-process tests make, now checked on the path <c>DocumentManager</c>
-    /// actually serves to the editor. This is the one assertion mutant M1 (BC36639 decided by
-    /// NAME instead of symbol) would flip here: under M1 the LSP would show a spurious BC36639 on
-    /// R7's shadowed `n`.</summary>
+    /// <summary>R7 must surface none of THIS file's four codes through the LSP either — the same
+    /// by-symbol decision the fast in-process tests make (the lambda's own `n` is not the ByRef
+    /// parameter, so no BC36639), now checked on the path <c>DocumentManager</c> actually serves to
+    /// the editor. This is the one assertion mutant M1 (BC36639 decided by NAME instead of symbol)
+    /// would flip here: under M1 the LSP would show a spurious BC36639 on R7's `n`. ⚠ R7 does carry
+    /// BC36641 (task #217: the parameter hides the ByRef one); the filter is deliberately the four
+    /// codes above, and <c>LambdaParameterHidesDiagnosticsTests.Lsp_SurfacesBC36641_...</c> owns that.</summary>
     [Test]
-    public void Lsp_LambdaParameterShadowsTheByRefParameter_SurfacesNoDiagnostic()
+    public void Lsp_LambdaParameterHidingTheByRefParameter_SurfacesNoBC36639()
     {
         var state = AnalyzeViaLsp(R7);
         var stray = state.Diagnostics.Where(d => LambdaBoundaryCodes.Any(c => d.Message.Contains(c))).ToList();
         Assert.That(stray, Is.Empty,
-            "expected no lambda-boundary diagnostic over LSP for R7 (task #217 interim: shadowing, "
-            + "silently); got: " + string.Join(" | ", stray.Select(d => d.Message)));
+            "expected none of the four lambda-boundary codes over LSP for R7 (BC36639 is decided by "
+            + "symbol; the BC36641 it does get is task #217's); got: " + string.Join(" | ", stray.Select(d => d.Message)));
     }
 }
