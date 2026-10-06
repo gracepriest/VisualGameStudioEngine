@@ -757,12 +757,13 @@ public class DelegateMemberInvocationExecutionTests
     /// G2b: a delegate FIELD reassigned by one of its OWN call's arguments. C# (the oracle)
     /// evaluates the callee's VALUE before any argument — "old N" throughout, because the argument
     /// reassigns the field only after the OLD value was already captured for the call. The
-    /// <c>Me.</c>-qualified and externally-qualified spellings agree (they snapshot the field into
-    /// a temp BEFORE the arguments run); only the BARE spelling gets this backwards on C++/
-    /// JavaScript/MSIL — its callee value is an <c>IRVariable</c> read INLINE at the call site
-    /// (ADR-0007's bare-name rule), not a temp taken up front, so it observes the argument's own
-    /// reassignment. Filed as #203, not #188 — the bare form still calls the right VALUE, just at
-    /// the wrong TIME.
+    /// <c>Me.</c>-qualified and externally-qualified spellings always agreed (they snapshot the field
+    /// into a temp BEFORE the arguments run); the BARE spelling's callee value is an <c>IRVariable</c>
+    /// (ADR-0007's bare-name rule), which C++/JavaScript/MSIL read by name at the call, AFTER the
+    /// argument's reassignment, so all three printed "new 1". Filed as #203, not #188 — the bare form
+    /// still calls the right VALUE, just at the wrong TIME. #203 FIXED it in <c>IRBuilder</c>: the
+    /// callee's value is copied into a <c>__snap{n}</c> carrier before the arguments are built, and
+    /// every backend now prints the oracle's "old 1 / old 2 / old 3".
     /// </summary>
     private const string G2b = """
         Class Bus
@@ -791,18 +792,18 @@ public class DelegateMemberInvocationExecutionTests
         """;
 
     [Test]
-    public void G2b_BareSpellingEvaluatesTheCalleeAfterItsArgument_PinsTodaysWrongOrder_Against203()
+    public void G2b_BareSpellingEvaluatesTheCalleeBeforeItsArgument_EveryBackendPrintsTheOracle_Task203()
     {
-        Assert.That(Norm(FourBackends.RunEmittedCSharp(G2b)), Is.EqualTo("old 1\nold 2\nold 3"),
+        // ⛔ The C# leg goes through the time-limited child process (CSharpProcessRunner), never the in-process runner.
+        Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(G2b))), Is.EqualTo("old 1\nold 2\nold 3"),
             "the oracle: the callee's value is captured before its argument runs, every spelling");
 
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(G2b))), Is.EqualTo("new 1\nold 2\nold 3"),
-                "C++: only the BARE spelling (Send) reads the callee AFTER its argument reassigns it");
-            Assert.That(Norm(JavaScriptExecutionTests.RunJs(G2b)), Is.EqualTo("new 1\nold 2\nold 3"), "JavaScript");
-            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(G2b)), Is.EqualTo("new 1\nold 2\nold 3"),
-                "if this ever matches the C# oracle, #203 has been fixed — update this pin deliberately");
+            Assert.That(Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(G2b))), Is.EqualTo("old 1\nold 2\nold 3"),
+                "C++: the BARE spelling (Send) must read the callee BEFORE its argument reassigns it (#203)");
+            Assert.That(Norm(JavaScriptExecutionTests.RunJs(G2b)), Is.EqualTo("old 1\nold 2\nold 3"), "JavaScript");
+            Assert.That(Norm(Msil.MsilHarness.RunExpectingSuccess(G2b)), Is.EqualTo("old 1\nold 2\nold 3"), "MSIL");
         });
     }
 
