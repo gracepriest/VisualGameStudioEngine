@@ -41,10 +41,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect, or a defect that is another task's). Each is the same before and after #211:
 //    * L11b (`Dim s As Object = "20" : s = 20`) WAS a known gap here (False | True where vbc prints True | False, on every backend: copy propagation replaced the Object with its String constant, so no late-bound
 //      call was ever emitted — #214). FIXED by `CopyPropagationPass.KeepsLateBinding`: C# now prints vbc's answer, asserted by `ObjectComparisonUnderOptimizerExecutionTests` (every entry point) and the moved pin
-//      `MsilObjectBoxingExecutionTests.L11b_…`. Still open there, on JavaScript only: its own `===` on an Object (#215).
+//      `MsilObjectBoxingExecutionTests.L11b_…`. JavaScript's own `===` on an Object was the last holdout; #215 fixed it (`JavaScriptLateBoundComparisonExecutionTests`).
 //    * An operand the ANALYZER mistypes as Object also goes late-bound, exactly as on MSIL: an Enum member typed to a local (`c = Color.Red`, n19) is IR-typed Object (the front-end gap behind #277). It runs right
 //      (`Nothing_is_the_default_of_a_type_parameter_an_Enum_and_a_tuple_on_CSharp` runs it), but through the VB runtime rather than as an integer compare.
-//    * JavaScript's `= Nothing`, `Case Nothing` and boxed `Is` disagree with VB (#215); this fixture is C# only.
+//    * JavaScript's `= Nothing` and `Case Nothing` disagreed with VB until #215 (`JavaScriptLateBoundComparisonExecutionTests`); a boxed `Is` still does there (JavaScript primitives have no box identity). This fixture is C# only.
 //    * C++ has no Object at all ("Object has no C++ mapping"), so there is nothing to compare there.
 //
 //  ⚠ Named "…ExecutionTests" but it spawns no Node: it is C# only, so it is listed in JsExecutionTierRosterTests.NotJavaScriptExecution, and NOT in the roster.

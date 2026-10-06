@@ -13,7 +13,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //  InvalidCastException in VB, printed False. Both backends that implement the late-bound comparison (MSIL since #177, C# since #211) decide that from the operand's IR TYPE, and CopyPropagationPass took the type
 //  away: it replaced the Object variable with its recorded copy, the String constant "20", which carries its OWN type, so the compare became `"20" = 20` and ConstantFoldingPass answered the pair with Equals ("unequal").
 //  The fix is `CopyPropagationPass.KeepsLateBinding` (IROptimizer.cs): a comparison operand that is an Object comparand is not replaced by a copy that is not one. The Nothing literal still propagates (it is
-//  Object-typed already, and the fold's String arm answers `Nothing = ""` True, which JavaScript's own `===` would not: #215). TryFoldCompare is unchanged; declining the fold was measured and is worse (C# CS0019, MSIL still
+//  Object-typed already, and the fold's String arm answers `Nothing = ""` True, which JavaScript's own `===` would not: #215, whose late-bound helper has since made the Object-operand form answer it too, so that reason no longer separates them: see M2). TryFoldCompare is unchanged; declining the fold was measured and is worse (C# CS0019, MSIL still
 //  wrong, a typed `Boolean = 1` the fold answers right by luck turning wrong).
 //
 //  ⭐ THE ORACLE IS vbc. Every `vb` below is what the SDK's vbc prints for the program wrapped in a VB Module (S/t214/tw-programs, run through S/t136/tools/vbv2.py by the test-writer: every answer matched the
@@ -29,15 +29,24 @@ namespace VisualGameStudio.Tests.Compiler;
 //    M1 no guard (propagation as before the fix)                -> ELEVEN: `AnObjectString_AgainstAnIntegerOnTheRight` / `…OnTheLeft` / `…ADoubleAndAnInteger` / `…ABoolean`, `AnObjectBoolean_…`, `AnObjectChar_…`,
 //                                                                    `AnObjectComparison_AsAnIfCondition` (`ne`), `AnObjectStringThatIsNotANumber_…` (prints False, does not throw), `JavaScript_AnObjectString_GreaterThanAnInteger`
 //                                                                    (False), the fast `AnObjectOperand_KeepsItsLateBoundCall_…` (no call left) and the moved pin `MsilObjectBoxing…L11b_…`. The three controls and the Nothing row stay green.
-//    M2 the Nothing literal is no longer exempt                 -> `JavaScript_TheNothingLiteral_StillPropagates` ONLY (`n === ""` on null: False). C# and MSIL answer `n = ""` the same through the late-bound call, and
-//                                                                    the shape that DOES change there (`n = 0`, `n < 1`) is a known gap, so no row can see M2 on them.
+//    M2 the Nothing literal is no longer exempt                 -> when #214 landed: `JavaScript_TheNothingLiteral_StillPropagates` ONLY (`n === ""` on null: False). C# and MSIL answer `n = ""` the same through the late-bound
+//                                                                    call, and the shape that DOES change there (`n = 0`, `n < 1`) is a known gap, so no row could see M2 on them.
+//                                                                    ⚠ SINCE #215 NO COMMITTED TEST KILLS M2 (re-measured on the fix plus #215: the fast subset and the ConstantFold / Optimizer / MixedNumeric / Object /
+//                                                                    CSharpLateBound / CopyPropagation / MsilObjectBoxing / JavaScript / SelectCase / LateBound / JsExecutionTierRoster filters, 14,211 results, the same failure NAMES as
+//                                                                    the control; the full suite was not run). The JavaScript row above stopped killing it: JavaScript's `n = ""` on an Object is `__blCompareObject` now, which says True with
+//                                                                    the exemption (the fold answers `Nothing = ""`) and without it (the helper answers it). No row CAN kill it by asserting vbc's answer: the only shapes where M2 and the
+//                                                                    fix differ are the ones where the exemption leaves the Nothing literal propagated into `n = 0` / `n < 1` / `n = False`, and there the FIX is wrong and M2 is right
+//                                                                    (measured on JavaScript: `Dim n As Object = Nothing : n = 0, n < 1, n = "", n = False` prints `False | False | True | False` on the fix, vbc's `True` four times on M2).
+//                                                                    Pinning the fix's answer would pin a defect, so the row below stays a regression row for the fix's behaviour and M2 survives. On JavaScript the exemption is the whole of the known gap
+//                                                                    below ("an Object holding Nothing vs a number"); C# and MSIL were not re-measured.
 //    M3 only the LEFT operand is guarded (`20 = s` is not)      -> `AnObjectString_AgainstAnIntegerOnTheLeft` (False | False) and the fast `AnObjectOperand_KeepsItsLateBoundCall_…`. Two cases.
 //    M4 every constant is exempt, not only the Nothing literal  -> the same ELEVEN as M1 (the String "20" propagates again).
 //    M5 the VARIABLE's own type is ignored (a typed one is held back too) -> `Control_ATypedBooleanAgainstATypedOne` ONLY (`b = j` keeps both variables: C# CS0019 `bool == int`, MSIL answers True where vbc says False).
 //
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect, or a defect that is another task's). Each is the same before and after #214:
-//    * JavaScript's `===` on an Object (#215): an Object "2.5" `= 2.5`, an Object True `= 1`, an Object "True" `= True` and `If o = 20` all print False / take the wrong branch on JavaScript. The
-//      moved pin `MsilObjectBoxingExecutionTests.L11b_…` names the JavaScript answer for L11b; only `Object "2.5" > 2` (JavaScript's own coercion) is right, and is asserted below.
+//    * (WAS: JavaScript's `===` on an Object, #215.) FIXED by #215: JavaScript's Object comparison is VB's late-bound `__blCompareObject` now, so an Object "2.5" `= 2.5`, an Object True `= -1`, an Object "True" `= True`
+//      and `If o = 20` print vbc's answer on JavaScript through every entry point. Asserted by `JavaScriptLateBoundComparisonExecutionTests` and by the moved pin `MsilObjectBoxingExecutionTests.L11b_…` (positive on
+//      JavaScript too). This fixture's own two JavaScript rows are unchanged and still right. What JavaScript still owes is a BOXED `Is` (primitives have no box identity), named in that fixture's header.
 //    * An Object holding Nothing compared with a number: `Dim n As Object = Nothing : n = 0` prints False on every backend (vbc True); the fold still answers it with Equals. Declining a Nothing-against-value pair
 //      was measured and turned C#'s `n <= 1` from True to False, so it is not part of this fix.
 //    * A TYPED String or Boolean compared with a number (`"20" = 20`, `s = i`, `b = i` over -1) is wrong on all four backends: the front end inserts no VB conversion for the pair. (Its ONE line that is right,
@@ -304,8 +313,8 @@ public class ObjectComparisonUnderOptimizerExecutionTests
 
     /// <summary>
     /// (12-13) JavaScript, through the optimizer-running pipeline. `Object "2.5" > 2` is right now (JavaScript's own coercion answers it once the fold no longer sees `"2.5" > 2`), and the Nothing LITERAL still
-    /// propagates: `Object Nothing = ""` is True because the fold's String arm answers it, where JavaScript's own `===` on `null` and `""` would say False (#215). The rest of an Object comparison on JavaScript is #215 and is
-    /// not asserted (see the header).
+    /// propagates: `Object Nothing = ""` is True because the fold's String arm answers it, where JavaScript's own `===` on `null` and `""` would say False (#215). The rest of an Object comparison on JavaScript is #215's
+    /// `JavaScriptLateBoundComparisonExecutionTests` (see the header).
     /// </summary>
     [TestCase(StrDoubleGreater, "True", TestName = "JavaScript_AnObjectString_GreaterThanAnInteger")]
     [TestCase(NothingEqualsEmpty, "True", TestName = "JavaScript_TheNothingLiteral_StillPropagates")]

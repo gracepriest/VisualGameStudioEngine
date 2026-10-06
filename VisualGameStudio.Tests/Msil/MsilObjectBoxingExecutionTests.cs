@@ -1110,7 +1110,7 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void L05_NothingEqualsZero_MsilAgreesWithVb()
     {
-        // JS is pinned separately below (#215) — it disagrees with VB here.
+        // JS is asserted separately below (L05_…_JavaScript_…): it agrees since #215.
         AssertCppRefuses(L05);
         AssertMsilAllEntryPoints(L05, L05Expected);
     }
@@ -1259,8 +1259,8 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void L08_CaseNothingCaseIsNothingAndAGuard_MsilAgreesWithVb()
     {
-        // JS is pinned separately below (#215) — it disagrees with VB on `Case Nothing` and the
-        // guard. C# runs this in the #211 group below (it was CS0019 until #211).
+        // JS is asserted separately below (L08_…_JavaScript_…): it agrees since #215. C# runs this in the
+        // #211 group below (it was CS0019 until #211).
         AssertCppRefuses(L08);
         AssertMsilAllEntryPoints(L08, L08Expected);
     }
@@ -1292,7 +1292,7 @@ public class MsilObjectBoxingExecutionTests
     [Test]
     public void L09_IsIdentity_UnaffectedByBoxing_CSharpAndMsilAgree()
     {
-        // JS is pinned separately below (#215) — a boxed `Is` disagrees with VB there.
+        // JS is pinned separately below, BY NAME: a boxed `Is` still disagrees with VB there (#215's stated gap).
         Assert.Multiple(() =>
         {
             Assert.That(Norm(FourBackends.RunEmittedCSharp(L09)), Is.EqualTo(L09Expected), "C#");
@@ -1457,35 +1457,44 @@ public class MsilObjectBoxingExecutionTests
         Assert.That(failures, Is.Empty, $"task #211: {which} on C#:\n" + string.Join("\n", failures));
     }
 
-    // #215 — the JavaScript backend disagrees with VB on `= Nothing`, `Case Nothing` and a
-    // boxed `Is`, pre-existing and unrelated to #177's own MSIL fix.
+    // #215, FIXED — the JavaScript backend now answers `= Nothing` and `Case Nothing` the VB way (an Object comparison is
+    // VB's late-bound comparison, ADR-0012: JavaScriptBackend.IsLateBoundComparison / __blCompareObject). L05 and L08 used
+    // to PIN JavaScript's `===` answers ("False\nTrue\nFalse\nFalse\nTrue" and a `Case Nothing` that missed 0, "" and
+    // False); they moved to positive assertions of vbc's answer rather than being deleted. Each runs twice: RunJs, which runs
+    // NO optimizer, and RunOptimized, the standard pipeline every shipping route runs.
+    // JavaScriptLateBoundComparisonExecutionTests is the fixture for the rest, through the CLI, --optimize and CompileProjectFiles.
     [Test]
-    public void L05_NothingEqualsZero_JavaScript_PinsPreExistingDisagreement_Against215()
+    public void L05_NothingEqualsZero_JavaScript_AgreesWithVb()
     {
-        Assert.That(Norm(JavaScriptExecutionTests.RunJs(L05)), Is.EqualTo("False\nTrue\nFalse\nFalse\nTrue"),
-            "task #215 (pre-existing, unrelated to #177): JavaScript's `= Nothing` disagrees "
-            + "with VB's late-bound answer here. A different answer here (including VB's own "
-            + $"'{L05Expected}') means #215 moved — update this pin, do not just delete it.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(JavaScriptExecutionTests.RunJs(L05)), Is.EqualTo(L05Expected), "JavaScript (no optimizer)");
+            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L05)), Is.EqualTo(L05Expected), "JavaScript (optimizer-running pipeline)");
+        });
     }
 
     [Test]
-    public void L08_CaseNothingAndGuard_JavaScript_PinsPreExistingDisagreement_Against215()
+    public void L08_CaseNothingAndGuard_JavaScript_AgreesWithVb()
     {
-        Assert.That(Norm(JavaScriptExecutionTests.RunJs(L08)),
-            Is.EqualTo("something\nnothing\nsomething\nsomething\nsomething\nnot-nothing\n"
-                + "is-nothing\nnot-nothing\nnot-nothing\nin-range\nover\nnon-positive"),
-            "task #215 (pre-existing, unrelated to #177): JavaScript's `Case Nothing` and its "
-            + "guard evaluation disagree with VB here. A different answer means #215 moved — "
-            + "update this pin, do not just delete it.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Norm(JavaScriptExecutionTests.RunJs(L08)), Is.EqualTo(L08Expected), "JavaScript (no optimizer)");
+            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L08)), Is.EqualTo(L08Expected), "JavaScript (optimizer-running pipeline)");
+        });
     }
 
+    // #215's STATED GAP, still pinned BY NAME: a BOXED `Is`. `a Is b` over two separate Object locals holding 5 is True on
+    // JavaScript where vbc says False — JavaScript primitives have no box identity, and #215 invents no boxing scheme.
+    // `Is` / `IsNot` / `Case Is Nothing` themselves are identity and right (the other four lines agree with vbc, and
+    // JavaScriptLateBoundComparisonExecutionTests asserts them); only the box identity of equal primitives is out of reach.
+    // A different answer here (including vbc's own) means the gap moved: update this pin, do not just delete it.
     [Test]
     public void L09_IsIdentity_JavaScript_PinsPreExistingDisagreement_Against215()
     {
         Assert.That(Norm(JavaScriptExecutionTests.RunJs(L09)), Is.EqualTo("True\nTrue\nFalse\nTrue\nFalse\ncase-is-nothing"),
-            "task #215 (pre-existing, unrelated to #177): JavaScript's boxed `Is` disagrees with "
+            "task #215's stated gap (JavaScript primitives have no box identity): a boxed `Is` disagrees with "
             + $"VB's reference identity here. A different answer here (including VB's own "
-            + $"'{L09Expected}') means #215 moved — update this pin, do not just delete it.");
+            + $"'{L09Expected.Replace("\n", " | ")}') means the gap moved — update this pin, do not just delete it.");
     }
 
     // #214, NARROWED by #123. The optimizer used to fold this mixed-type constant compare WRONG
@@ -1522,13 +1531,13 @@ public class MsilObjectBoxingExecutionTests
     // the cause: copy propagation replaced the Object variable with its recorded String constant, so the compare
     // reached the backends as `"20" = 20` and no late-bound comparison was left to make (ADR-0012 keys it on the
     // operand's IR type). CopyPropagationPass.KeepsLateBinding now leaves an Object comparand in place.
-    // C# and MSIL print vbc's answer at every entry point. ⚠ JavaScript does NOT: its own `===` on an Object
-    // is #215 — pinned below BY NAME, so a move in #215 fails here and is updated, not deleted.
+    // C# and MSIL print vbc's answer at every entry point. JavaScript did NOT until #215 (its own `===` on an Object):
+    // it now prints vbc's answer too, and the JavaScript half is asserted below with the optimizer-running pipeline.
     private const string L11b = "Sub Main()\n Dim s As Object = \"20\"\n Console.WriteLine(s = 20)\n"
         + " Console.WriteLine(s <> 20)\nEnd Sub\n";
 
     [Test]
-    public void L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpAndMsil_JavaScriptPinsAgainst215()
+    public void L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpMsilAndJavaScript()
     {
         const string vb = "True\nFalse";   // vbc: s = 20 is True (the String converts), s <> 20 is False
         Assert.Multiple(() =>
@@ -1542,11 +1551,10 @@ public class MsilObjectBoxingExecutionTests
         });
         AssertMsilAllEntryPoints(L11b, vb);
 
-        // #215 — JavaScript's `s === 20` on a String "20" is false and `s !== 20` true, with the optimizer-running
-        // pipeline as without it. vbc prints "True | False"; this is the answer #215 still owes.
-        Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11b)), Is.EqualTo("False\nTrue"),
-            "task #215 (JavaScript's === on an Object): a different answer here (including vbc's own "
-            + $"'{vb.Replace("\n", " | ")}') means #215 moved — update this pin, do not just delete it.");
+        // #215 — JavaScript's `s === 20` on a String "20" was false and `s !== 20` true, with the optimizer-running
+        // pipeline as without it. The compare is late-bound now (`__blCompareObject`), so it prints vbc's "True | False".
+        Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11b)), Is.EqualTo(vb),
+            "JavaScript (optimizer-running pipeline): vbc's answer, since task #215");
     }
 
     // #216, FIXED — an Optional parameter typed Object with a non-Nothing default used to refuse to compile on C#
