@@ -1043,20 +1043,18 @@ public class BarePropertyLoweringExecutionTests
             Assert.That(cppEx!.Message, Does.Contain("C++ compilation failed"), "C++ — KNOWN GAP: `Inherits Exception` does not build");
         });
 
-    // ---- The MSIL ByRef ladder's "is a PROPERTY" arm — now reached ONLY by a bare PLAIN
-    //      auto-property (MsilByRefTests.BarePropertyNameArgument_IsRefused's Get/Set shape now
-    //      hits the generic temporary-value arm instead; see that test's own updated doc comment).
+    // ---- A bare PLAIN auto-property passed ByRef on MSIL: the ladder's "is a PROPERTY" arm used to refuse it
+    //      (it was the one shape that still reached that arm after ADR-0007); since task #209 it runs.
 
     /// <summary>
-    /// MSILBackend.EmitByRefArgument's "'{name}' is a PROPERTY" arm fires only for an
-    /// <c>IRVariable</c> whose name is a class property — which, since ADR-0007, a bare Get/Set
-    /// (or Overridable/Overrides) property no longer is (it is an <c>IRFieldAccess</c> before the
-    /// ladder ever sees a variable). The ONE shape that still reaches this arm is a bare PLAIN
-    /// auto-property, never accessor-backed. MEASURED against this exact working tree before being
-    /// pinned. Exists so ADR-0007's churn does not leave the arm silently untested.
+    /// A bare PLAIN auto-property (<c>Public Property X As Integer</c>, never accessor-backed) passed ByRef from inside its class, <c>Bump(X)</c>, prints <c>1</c>, vbc's answer. Since ADR-0007 a bare
+    /// Get/Set property is an <c>IRFieldAccess</c> before the MSIL ByRef ladder sees it, and a bare PLAIN auto-property was the ONE shape that stayed a variable and so still reached the ladder's
+    /// "'{name}' is a PROPERTY, and a property is an accessor call, not storage" arm, a codegen refusal. Task #209 copies EVERY property argument into a <c>__copyout</c> carrier, passes the
+    /// carrier and writes it back through the setter (an auto-property included), so the ladder now sees a local and that arm is UNREACHABLE from the front end. MEASURED against this tree before
+    /// being renamed. The all-backend matrix is <c>PropertyByRefCopyOutExecutionTests</c> (P03).
     /// </summary>
     [Test]
-    public void MsilByRefLadder_IsAPropertyArm_StillReachedByABarePlainAutoProperty()
+    public void BarePlainAutoPropertyArgument_IsCopiedInAndWrittenBack_OnMsil()
     {
         const string program = """
             Sub Bump(ByRef n As Integer)
@@ -1074,13 +1072,7 @@ public class BarePropertyLoweringExecutionTests
              PrintLine(CStr(h.X))
             End Sub
             """;
-        var r = MsilHarness.Run(program);
-        Assert.Multiple(() =>
-        {
-            Assert.That(r.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.GenerateFailed), r.Report);
-            Assert.That(r.Detail, Does.Contain("is a PROPERTY"));
-            Assert.That(r.Detail, Does.Contain("'X'"));
-        });
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(program)), Is.EqualTo("1"));
     }
 
     // ---- One CLI leg for C#, one Release .blproj leg for MSIL --------------------------------------

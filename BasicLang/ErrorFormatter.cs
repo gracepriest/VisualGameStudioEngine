@@ -87,6 +87,10 @@ namespace BasicLang.Compiler
         BL4001_UnsupportedFeature,
         BL4002_BackendError,
         BL4003_InvalidIR,
+        /// <summary>#209: a writable accessor-backed property passed ByRef inside a <c>MyBase.New(...)</c> argument
+        /// list — its write-back cannot run inside the base call (raised by the analyzer,
+        /// <c>RefusePropertyCopyOutInBaseConstructorArguments</c>, for every backend).</summary>
+        BL4004_PropertyByRefInBaseConstructorCall,
 
         // Linker/Build errors (BL5xxx)
         BL5001_FileNotFound,

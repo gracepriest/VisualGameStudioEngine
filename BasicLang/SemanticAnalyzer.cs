@@ -8095,6 +8095,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         }
                     }
                 }
+
+                // #209 BL4004: a property's ByRef write-back cannot run inside the base call.
+                RefusePropertyCopyOutInBaseConstructorArguments(node,
+                    _constructorBindings.TryGetValue(node, out var boundBaseConstructor) ? boundBaseConstructor : null);
             }
 
             // Analyze body
@@ -10629,8 +10633,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// Nothing else in the language stores into an EXISTING property: a <c>For Each</c>
         /// refuses a property as its control variable already (ADR-0009), there are no object
         /// initializers and no parameterized properties, and a ByRef argument is not a write — VB
-        /// passes a ReadOnly property's value and skips the write-back (task #209 owns making
-        /// every backend do that).
+        /// passes a ReadOnly property's value and skips the write-back (#209: IRBuilder's
+        /// <c>CopyOutPropertyArgument</c> lowers that copy-in / copy-out for every backend).
         ///
         /// <para><paramref name="alsoRead"/>: a compound assignment or <c>++</c> READS its target
         /// first, so the target is judged by <see cref="CheckPropertyRead"/> as well (BC30524 on
@@ -12216,6 +12220,168 @@ namespace BasicLang.Compiler.SemanticAnalysis
             else
                 VbCodedError("BC31095",
                     "Reference to object under construction is not valid when calling another constructor.", at);
+        }
+
+        /// <summary>
+        /// ⭐ #209 — THE ONE ANSWER to "does this ByRef argument get VB's copy-in / copy-out", asked
+        /// by IRBuilder before it copies an argument in and back out, and by
+        /// <see cref="RefusePropertyCopyOutInBaseConstructorArguments"/> — so the lowering and the
+        /// BL4004 refusal cannot disagree about which arguments they mean. True for a USER property
+        /// (<see cref="SymbolKind.Property"/>), qualified or bare; <paramref name="writable"/> is
+        /// false for a <c>ReadOnly</c> one, which VB copies in and never writes back. A field, a
+        /// module variable, an array or collection element is storage and is not one.
+        ///
+        /// <para>⚠ <paramref name="inBaseConstructorArguments"/> — anywhere in a
+        /// <c>MyBase.New(...)</c> argument list, a lambda written there excluded: only an
+        /// ACCESSOR-BACKED property (<see cref="Symbol.IsAccessorBacked"/>: a Get/Set block,
+        /// Overridable/Overrides, an interface's) is one. A plain auto-property there lowers exactly
+        /// as it did before #209 — as its storage — because its write-back has nowhere to run in the
+        /// base call (ADR-0016 D5(c)) and C++ already passes its backing field by reference and
+        /// prints VB's answer; refusing it (BL4004) would break a program that runs.</para>
+        ///
+        /// <para>⚠ A .NET member is never one, deliberately. A native-BCL-surface member
+        /// (<c>sb.Length</c>) is bound by a type-name table with no property symbol and no
+        /// settability, so it cannot be told from a field, and guessing "not writable" would turn a
+        /// loud CS0206 into a silently dropped write. A resolver-bound .NET property
+        /// (<c>ub.Port</c>, <c>a.Capacity</c>) types as Object on every path measured and is refused
+        /// as an argument before this is reached, so a copy-out for one could not be measured.</para>
+        /// </summary>
+        internal bool IsCopyOutPropertyArgument(ExpressionNode argument, bool inBaseConstructorArguments,
+            out bool writable)
+        {
+            writable = false;
+            Symbol property;
+            switch (argument)
+            {
+                case MemberAccessExpressionNode member when !NetMemberAnnotations.ContainsKey(member):
+                    property = GetNodeSymbol(member);
+                    break;
+                case IdentifierExpressionNode bare when !bare.IsForeignQualified:
+                    property = GetNodeSymbol(bare);
+                    break;
+                default:
+                    return false;
+            }
+            if (property == null || property.Kind != SymbolKind.Property) return false;
+            if (inBaseConstructorArguments && !property.IsAccessorBacked) return false;
+            writable = !property.IsReadOnly;
+            return true;
+        }
+
+        /// <summary>
+        /// ⭐ #209 BL4004 — a WRITABLE, ACCESSOR-BACKED property (a Get/Set block, Overridable /
+        /// Overrides, an interface's) passed ByRef anywhere in a <c>MyBase.New(...)</c> argument
+        /// list: to the base constructor itself (<c>MyBase.New(b.P)</c>) or to a call or <c>New</c>
+        /// nested in an argument (<c>MyBase.New(F(b.P))</c>). Refused, on every backend. Which
+        /// arguments those are is <see cref="IsCopyOutPropertyArgument"/>'s answer — the one IRBuilder
+        /// lowers by — so the two cannot disagree.
+        ///
+        /// <para>Everywhere else such an argument is copied in, passed, and written back after the
+        /// call through the setter (IRBuilder's <c>CopyOutPropertyArgument</c>). Here that
+        /// write-back cannot exist: the base constructor's arguments are evaluated by an
+        /// expression-only, CLOSED prologue (ADR-0016 D5(c)) — nothing it computes may be used
+        /// after the call, and a Set inside it is a statement — and C# has nowhere to put it at all,
+        /// because no statement can precede <c>: base(...)</c>. Measured before this refusal: C++
+        /// and MSIL ran it with the IR verifier off and broke Invariant P with it on, and C# refused
+        /// it by a route of its own.</para>
+        ///
+        /// <para>Not refused: a <c>ReadOnly</c> property — VB copies it in and writes nothing back,
+        /// so its carrier is an ordinary argument temporary; a PLAIN auto-property, which lowers as
+        /// its storage there exactly as before #209 (C++ passes the backing field and was always
+        /// right, measured); and anything in a lambda written in the arguments — its body is a
+        /// function of its own, not the prologue.</para>
+        ///
+        /// <para>The ByRef test reads the same bindings IRBuilder lowers the call with: the callee
+        /// symbol's parameter (a user procedure, method or constructor), or a static .NET target's
+        /// ref kind.</para>
+        /// </summary>
+        private void RefusePropertyCopyOutInBaseConstructorArguments(ConstructorNode node, Symbol baseConstructor)
+        {
+            void Judge(ExpressionNode argument, bool byRef)
+            {
+                if (!byRef || !IsCopyOutPropertyArgument(argument, inBaseConstructorArguments: true, out var writable)
+                    || !writable) return;
+                if (!_baseArgumentDiagnosticSites.Add(argument)) return;
+                var name = argument is MemberAccessExpressionNode m ? m.MemberName
+                    : (argument as IdentifierExpressionNode)?.Name;
+                VbCodedError("BL4004",
+                    $"Property '{name}' cannot be passed ByRef inside a 'MyBase.New' call. VB writes a ByRef "
+                    + "property back through its setter after the call, and that write-back cannot run inside "
+                    + "a base-constructor call. Copy the value to a local first (in the caller, passing it in "
+                    + "as a parameter) and pass the local.", argument);
+            }
+
+            static bool ByRefParameter(Symbol callee, int index) =>
+                callee?.Parameters != null && index < callee.Parameters.Count && callee.Parameters[index].IsByRef;
+
+            bool CallArgumentByRef(CallExpressionNode call, int index)
+            {
+                if (call.Callee is MemberAccessExpressionNode member
+                    && NetMemberAnnotations.TryGetValue(member, out var net))
+                {
+                    var parameters = net.Member.Parameters;
+                    return net.Member.IsStatic && index < parameters.Count
+                        && parameters[index].RefKind != NetRefKind.None;
+                }
+                var callee = GetNodeSymbol(call.Callee);
+                return callee != null && (callee.Kind == SymbolKind.Function || callee.Kind == SymbolKind.Subroutine)
+                    && ByRefParameter(callee, index);
+            }
+
+            void Walk(ExpressionNode expression)
+            {
+                switch (expression)
+                {
+                    case null:
+                    case LambdaExpressionNode:
+                    case LinqQueryExpressionNode:
+                        return;
+                    case CallExpressionNode call:
+                        Walk(call.Callee);
+                        for (var i = 0; i < call.Arguments.Count; i++)
+                        {
+                            Judge(call.Arguments[i], CallArgumentByRef(call, i));
+                            Walk(call.Arguments[i]);
+                        }
+                        return;
+                    case NewExpressionNode create:
+                        _constructorBindings.TryGetValue(create, out var constructor);
+                        for (var i = 0; i < create.Arguments.Count; i++)
+                        {
+                            Judge(create.Arguments[i], ByRefParameter(constructor, i));
+                            Walk(create.Arguments[i]);
+                        }
+                        return;
+                    case BinaryExpressionNode binary: Walk(binary.Left); Walk(binary.Right); return;
+                    case UnaryExpressionNode unary: Walk(unary.Operand); return;
+                    case MemberAccessExpressionNode member: Walk(member.Object); return;
+                    case ArrayAccessExpressionNode access:
+                        Walk(access.Array);
+                        foreach (var index in access.Indices) Walk(index);
+                        return;
+                    case CastExpressionNode cast: Walk(cast.Expression); return;
+                    case ConditionalExpressionNode conditional:
+                        Walk(conditional.Condition); Walk(conditional.WhenTrue); Walk(conditional.WhenFalse);
+                        return;
+                    case ArrayResizeExpressionNode resize: Walk(resize.Array); Walk(resize.Size); return;
+                    case CollectionInitializerNode collection:
+                        foreach (var element in collection.Elements) Walk(element);
+                        return;
+                    case TupleLiteralNode tuple:
+                        foreach (var element in tuple.Elements) Walk(element);
+                        return;
+                    case AwaitExpressionNode await: Walk(await.Expression); return;
+                    case InterpolatedStringNode interpolated:
+                        foreach (var part in interpolated.Parts.OfType<ExpressionNode>()) Walk(part);
+                        return;
+                }
+            }
+
+            for (var i = 0; i < node.BaseConstructorArgs.Count; i++)
+            {
+                Judge(node.BaseConstructorArgs[i], ByRefParameter(baseConstructor, i));
+                Walk(node.BaseConstructorArgs[i]);
+            }
         }
 
         /// <summary>

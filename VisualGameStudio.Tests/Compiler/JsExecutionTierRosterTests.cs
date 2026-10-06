@@ -640,6 +640,8 @@ public class JsExecutionTierRosterTests
         "CppArrayNothingExecutionTests",
         // Task #201: a C++-only fixture. AddressOf on the by-copy FALLBACK path (an instance / Shared / bare method, a Return on both arms, a Select arm, an Iterator root) through the CLI, --optimize and CompileProjectFiles with a C++ compiler - no Node.
         "CppAddressOfFallbackExecutionTests",
+        // Task #209: a property passed ByRef is copied in and written back, on C#, C++ and MSIL through the CLI, --optimize and CompileProjectFiles. JavaScript refuses a ByRef parameter by design (BL7002), so its one row only COMPILES (CLI and generator) and asserts the refusal - it never runs Node, and the roster's count stays as it was.
+        "PropertyByRefCopyOutExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
