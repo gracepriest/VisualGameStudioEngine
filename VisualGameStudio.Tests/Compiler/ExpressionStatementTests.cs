@@ -14,6 +14,9 @@ namespace VisualGameStudio.Tests.Compiler;
 /// ("Expression is not a statement"), and it is almost always a typo for an assignment or a call.
 /// The analyzer now refuses it too. A bare name or member access is still a CALL (<c>Hello</c>,
 /// <c>obj.Method</c> naming a parameterless Sub), and <c>x++</c> / <c>x--</c> keep their effect.</para>
+///
+/// <para>#267 went on to refuse every other expression VB refuses as a statement — a bare <c>New</c>, a property read, a field or element read, a cast — with vbc's own numbers
+/// (BC30035 / BC30545 / BC30057 / BC30454): see <c>ExpressionStatementVbRefusalTests</c>. A bare name that is a VALUE (a local, a field) is now BC30454; one that names a Sub is still a call.</para>
 /// </summary>
 [TestFixture]
 public class ExpressionStatementTests

@@ -46,7 +46,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⚠ Side findings of the same measurement, NOT #139's and with no row (S/t139/probes/fu): a counted `For i = 1 To F()` re-evaluates its call bound each iteration on all four backends, and a
 //  compound assignment `a(F()) += 7` evaluates the call in the index twice (C++ 2x, JavaScript 3x) — #266. A class method's `Dim a(5)` is unallocated on C# and MSIL (named in
-//  LambdaBodyEmissionExecutionTests' header). Other statement-level expressions C# drops (`New C()`, `l(Tag())`, `CType(Tag(), Object)`, a property Get) are all REJECTED by vbc; see HANDOFF.
+//  LambdaBodyEmissionExecutionTests' header). Other statement-level expressions C# drops (`New C()`, `l(Tag())`, `CType(Tag(), Object)`, a property Get) are all REJECTED by vbc and, since #267, by BasicLang too (BC30035 / BC30454 / BC30545 / BC30057; see ExpressionStatementVbRefusalTests).
 //
 //  ⭐ MUTANTS (S/t139/mut and S/t139/tw/mut: each is the fix plus ONE change, built in a detached worktree and run against a copy of the test output with its BasicLang.dll swapped; the number is how
 //  many of the 33 `…_CSharp` cells of THIS fixture fail; the FAST shape fixture kills every one of them but M4 and M6 and is the cheap kill). M1 the arm removed 23 (every row with a statement-level
