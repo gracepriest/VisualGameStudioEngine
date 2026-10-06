@@ -39,8 +39,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //    M5 a late-bound label drops its When guard                      -> `AWhenGuard_…` (X07 prints "small" for 10, 50), `CaseNothing_…` (L08's Guard) and the moved pin L08.
 //
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect, or a defect that is another task's). Each is the same before and after #211:
-//    * L11b (`Dim s As Object = "20" : s = 20`) prints False | True where vbc prints True | False, on EVERY backend: the IR optimizer's constant fold of a mixed-type pair of constants (#214). No late-bound
-//      call is ever emitted for it, because the fold has already chosen the answer.
+//    * L11b (`Dim s As Object = "20" : s = 20`) WAS a known gap here (False | True where vbc prints True | False, on every backend: copy propagation replaced the Object with its String constant, so no late-bound
+//      call was ever emitted — #214). FIXED by `CopyPropagationPass.KeepsLateBinding`: C# now prints vbc's answer, asserted by `ObjectComparisonUnderOptimizerExecutionTests` (every entry point) and the moved pin
+//      `MsilObjectBoxingExecutionTests.L11b_…`. Still open there, on JavaScript only: its own `===` on an Object (#215).
 //    * An operand the ANALYZER mistypes as Object also goes late-bound, exactly as on MSIL: an Enum member typed to a local (`c = Color.Red`, n19) is IR-typed Object (the front-end gap behind #277). It runs right
 //      (`Nothing_is_the_default_of_a_type_parameter_an_Enum_and_a_tuple_on_CSharp` runs it), but through the VB runtime rather than as an integer compare.
 //    * JavaScript's `= Nothing`, `Case Nothing` and boxed `Is` disagree with VB (#215); this fixture is C# only.

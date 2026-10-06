@@ -1422,7 +1422,8 @@ public class MsilObjectBoxingExecutionTests
     // through CSharpProcessRunner (a child process with a time limit), never the in-process runner.
     //
     // ⚠ L02, L11 and L11b are NOT here: they compiled on C# before #211 (the optimizer folds their
-    // constants), so they were never in the pin group. L11b's wrong answer is #214, on every backend.
+    // constants), so they were never in the pin group. L11b's wrong answer was #214 (copy propagation took the
+    // Object operand away; fixed in CopyPropagationPass.KeepsLateBinding) and is asserted in L11b_…, below.
     [TestCase(nameof(E02))]
     [TestCase(nameof(C1))]
     [TestCase(nameof(L01))]
@@ -1510,8 +1511,8 @@ public class MsilObjectBoxingExecutionTests
     // same-type pairs. #123 compares two numeric constants of different widths in the WIDER one,
     // as VB does — and for two NUMERIC boxes VB's late-bound compare widens the same way, so the
     // fold now gives VB's own answer here. C++ still refuses (Object has no C++ mapping).
-    // ⚠ #214 stays OPEN for what the fold cannot see: a boxed String compared with a number (VB
-    // converts the String late-bound; the fold's Equals says "unequal") — pinned as L11b.
+    // ⚠ What #123 left wrong — a boxed String compared with a number (VB converts the String late-bound; the
+    // fold's Equals said "unequal") — was #214 and is fixed since: see L11b.
     private const string L11 = "Sub Main()\n Dim o As Object = 20\n Console.WriteLine(o = 20.0)\n"
         + " Dim d As Object = 2.5\n Console.WriteLine(d > 2)\nEnd Sub\n";
 
@@ -1533,27 +1534,36 @@ public class MsilObjectBoxingExecutionTests
         AssertMsilAllEntryPoints(L11, vb);
     }
 
-    // #214 — what REMAINS after #123: a boxed String against a number is not a numeric pair, so
-    // the fold still answers with Equals ("unequal") where VB converts the String to Double
-    // late-bound. Silent wrong answer, pinned VISIBLY as today's output rather than left
-    // undiscovered.
+    // #214, FIXED — what REMAINED after #123. A boxed String against a number is not a numeric pair, so the fold
+    // answered it with Equals ("unequal") where VB converts the String to Double late-bound. The fold was never
+    // the cause: copy propagation replaced the Object variable with its recorded String constant, so the compare
+    // reached the backends as `"20" = 20` and no late-bound comparison was left to make (ADR-0012 keys it on the
+    // operand's IR type). CopyPropagationPass.KeepsLateBinding now leaves an Object comparand in place.
+    // C# and MSIL print vbc's answer at every entry point. ⚠ JavaScript does NOT: its own `===` on an Object
+    // is #215 — pinned below BY NAME, so a move in #215 fails here and is updated, not deleted.
     private const string L11b = "Sub Main()\n Dim s As Object = \"20\"\n Console.WriteLine(s = 20)\n"
         + " Console.WriteLine(s <> 20)\nEnd Sub\n";
 
     [Test]
-    public void L11b_FoldedStringVersusNumberObjectConstants_PinsWrongAnswer_Against214()
+    public void L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpAndMsil_JavaScriptPinsAgainst215()
     {
-        const string wrongToday = "False\nTrue";   // vbc: "True | False"
+        const string vb = "True\nFalse";   // vbc: s = 20 is True (the String converts), s <> 20 is False
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(L11b)), Is.EqualTo(wrongToday), "C#");
-            Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11b)), Is.EqualTo(wrongToday),
-                "JavaScript (optimizer-running pipeline)");
+            // Hang-safe (CSharpProcessRunner), standard and aggressive passes; the CLI entry points are
+            // ObjectComparisonUnderOptimizerExecutionTests'.
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(L11b))), Is.EqualTo(vb), "C#");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(L11b))), Is.EqualTo(vb),
+                "C# (aggressive passes)");
             AssertCppRefuses(L11b);
         });
-        AssertMsilAllEntryPoints(L11b, wrongToday);
-        // A change to vbc's "True | False" on every backend above means the rest of #214 is fixed;
-        // update `wrongToday` rather than deleting the test.
+        AssertMsilAllEntryPoints(L11b, vb);
+
+        // #215 — JavaScript's `s === 20` on a String "20" is false and `s !== 20` true, with the optimizer-running
+        // pipeline as without it. vbc prints "True | False"; this is the answer #215 still owes.
+        Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(L11b)), Is.EqualTo("False\nTrue"),
+            "task #215 (JavaScript's === on an Object): a different answer here (including vbc's own "
+            + $"'{vb.Replace("\n", " | ")}') means #215 moved — update this pin, do not just delete it.");
     }
 
     // #216 — an Optional parameter typed Object with a non-null default refuses to compile on
