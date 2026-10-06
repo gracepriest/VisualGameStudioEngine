@@ -585,7 +585,7 @@ public class UserDelegateConversionTests
 
     // ========================================================================
     // 2. Invocation typing — d(args) / d.Invoke(args) are typed R (Void for a Delegate Sub);
-    //    wrong argument count/type is refused; .Invoke on Func/Action is UNCHANGED (#202).
+    //    wrong argument count/type is refused; .Invoke on Func/Action is typed by its type arguments (#202).
     // ========================================================================
 
     [Test]
@@ -698,14 +698,15 @@ public class UserDelegateConversionTests
     }
 
     [Test]
-    public void DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202()
+    public void DotInvoke_OnFuncAction_IsTypedByItsTypeArguments_Task202()
     {
-        // #202: `.Invoke` is a #187 redirect ONLY for a user Delegate value
-        // (SemanticAnalyzer.cs ~10568, gated on IsUserDelegate(invokedType)). A Func/Action value
-        // never reaches it, so `.Invoke` on one falls through UNCHANGED and still types Object —
-        // measured via the CLI: `Dim r As Integer = f.Invoke(5)` is refused with "Cannot assign
-        // value of type 'Object' to variable of type 'Integer'". This must stay pinned so a future
-        // #202 fix is a deliberate, noticed change, not a silent side effect of #187.
+        // #202 (was pinned UNFIXED here as DotInvoke_OnFuncAction_StaysTypedObject_PinnedAgainst202): `f.Invoke(args)` is
+        // `f(args)` for every delegate the analyzer models, not only a user Delegate (SemanticAnalyzer.IsModeledDelegate, the
+        // gate the analyzer and the IR builder both read). So `.Invoke` on a Func is typed by the Func's LAST type argument —
+        // here Integer — and `Dim r As Integer = f.Invoke(5)` is accepted (it was refused with "Cannot assign value of type
+        // 'Object' to variable of type 'Integer'"). On C# it reads back as the plain call `f(5)`. vbc accepts the program and
+        // prints 10. UserDelegateGapsDiagnosticsTests holds the rest of the shapes (Action, Func(Of String), a user
+        // Class named Action); UserDelegateGapsExecutionTests runs them on four backends.
         var source = """
             Sub Main()
                 Dim f As Func(Of Integer, Integer) = Function(x As Integer) x * 2
@@ -716,10 +717,9 @@ public class UserDelegateConversionTests
 
         var output = CompileToCSharp(source, out var errors);
 
-        Assert.That(output, Is.Null,
-            "if this now compiles, #202 has been fixed — update this pin deliberately");
-        Assert.That(string.Join("; ", errors),
-            Does.Contain("Cannot assign value of type 'Object' to variable of type 'Integer'"));
+        Assert.That(errors, Is.Empty, string.Join("; ", errors));
+        Assert.That(output, Is.Not.Null);
+        Assert.That(output, Does.Contain("r = f(5);"), ".Invoke on a Func is lowered as the call f(5)");
     }
 
     // ========================================================================
