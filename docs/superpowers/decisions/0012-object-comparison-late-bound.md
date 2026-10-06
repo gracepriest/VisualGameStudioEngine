@@ -39,6 +39,15 @@ Integer stays an Integer comparison.
   conditional on at least one late-bound comparison being emitted.
 - C# still owes the same ruling — today it refuses an Object comparison outright (CS0019) rather
   than emitting a call into the VB runtime the way MSIL now does. Filed as #211.
+  *Update 2026-10-06: task #211 implements this ruling on C#. `CSharpBackend.IsLateBoundComparison`
+  (the mirror of MSIL's: either operand statically Object, the `Nothing` literal excluded) makes
+  `CompareText` emit `Microsoft.VisualBasic.CompilerServices.Operators.ConditionalCompareObject*(a, b,
+  false)`; a Select Case label with such a comparison (value, range bound, `Case Is op`, an Or
+  alternative, `Case Nothing` on an Object subject) is `case var _caseN when <test> [&& (guard)]:`
+  (`IsLateBoundCase` / `LateBoundCaseTest`). `Is` / `IsNot` and `Case Is Nothing` stay reference
+  identity. An Object holding a class instance compared with `=` now throws InvalidCastException, as
+  vbc and MSIL do, instead of answering by reference. Tests:
+  `CSharpLateBoundComparisonExecutionTests`. The text above is left as it was written.*
 - JavaScript diverges from this ruling on `= Nothing`, `Case Nothing`, and a boxed `Is` — filed as
   #215.
 - C++ has no `Object` mapping at all, so this ruling does not reach it.

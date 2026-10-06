@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #211 TESTED — C#: an Object comparison is VB's late-bound comparison, `Operators.ConditionalCompareObject*` (ADR-0012; `CSharpBackend.IsLateBoundComparison` / `LateBoundCaseTest`, `case var _caseN when …`; `git log --grep '#211'`)
+- **Tests (14 new, 10 moved, 2 harness-fixed):** `CSharpLateBoundComparisonExecutionTests` (Integration, 12: vbc-answered probes on C# x CLI / `--optimize` / `CompileProjectFiles`: Object = Object, `o = Nothing` on a 0, `Is` / `Case Is Nothing` stay identity, `Case 1 To 5` on 3.5, a run-time String, a class instance `=` THROWS InvalidCast (as vbc), `<>` / `<`, a `When` guard, `Case Nothing`, nested Select + Or pattern, a String subject, the Object on the right + loop conditions; C# only, so under `NotJavaScriptExecution`: roster still 124) + `CSharpLateBoundComparisonShapeTests` (fast, 2: typed comparisons emit no late-bound call; the Nothing literal never makes one). MOVED: `MsilObjectBoxingExecutionTests.ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211` (10) is now `…_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. Mutants M1-M5 killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,723 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Object` 216, `SelectCase` 83, `LateBound` 28, `CSharp` 1,297, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Traps / gaps** (fixture header): ⚠ the in-process Roslyn compile needs `Microsoft.VisualBasic.Core` among its references or the product's right output is CS0234 — `FourBackends.EmittedCSharpReferences` is the one list (`CompileEmittedCSharp`, `CSharpProcessRunner`, `MsilObjectBoxing.CSharpDiagnostics`); SEVEN other test files still build their own from the loaded assemblies alone (`ReturnCoercionTests`, `NameBindingResolution…`, `FloatingIntegerDivision`, `LambdaBoundaryDiagnostics…`, `LoopConditionEmissionShape`, `LambdaBodyEmissionShape`, `MyBaseMethodCallStatementShape`). Gaps, no test: L11b is the #214 fold (wrong on every backend); an analyzer-mistyped operand (an Enum member, #277) also goes late-bound, as on MSIL; JS `= Nothing` (#215); C++ has no Object.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #210 TESTED — an auto-property initializer (`Public Property P As Integer = 7`, ReadOnly / Shared too) parses and runs: instance = `Me.P = const` THROUGH the property after the base call in every constructor (one is synthesized when none is declared), Shared = `IRProperty.Initializer` beside each backend's Shared field initializer, so it runs before a `Shared Sub New` body (`git log --grep '#210'`)
 - **Tests (12 new, 0 moved):** `AutoPropertyInitializerExecutionTests` (Integration, 11 groups of 19 vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 125 = master 124 + 1, #209 may also take 125) + `AutoPropertyInitializerDiagnosticsTests` (fast, 1: BC36714 on a Get/Set and an interface property, BC30439, and the conversion / non-constant refusals as PARITY with the field, since vbc accepts those two). Mutants M1-M6 all killed (fixture headers). `OverridableAutoPropertyExecutionTests` no longer lists #210 as a gap.
 - **Gates (Linux, ilasm / g++ / Node present, one filter each, 0 failed):** fast 12,722 passed / 94 skipped; the fixtures 12, `Initializer` 203, `Property` 1,444 (+3 skipped), `Parser` 77, `Constructor` 341, `SharedConstructor` 14, `OverridableAutoProperty` 16, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -6803,9 +6810,11 @@ single new failure against the 170-name baseline.
       never prints). (E07)
     - **#216** — an `Optional` parameter typed Object with a non-`Nothing` default refuses to
       compile on C# (CS1763: a reference-typed default other than `string`/`null`). (E16)
-    - **#211** — a comparison with a statically Object operand refuses to compile on C# at all
-      (CS0019, or CS8781 for a string relational `Case` pattern); C# owes MSIL's own ADR-0012
-      ruling. (E02, C1, L01, L03-L08, L10)
+    - **#211** — FIXED 2026-10-06 (was: a comparison with a statically Object operand refused to
+      compile on C# at all, CS0019, or CS8781 for a string relational `Case` pattern). C# now emits
+      ADR-0012's late-bound comparison (`CSharpBackend.IsLateBoundComparison`) and runs E02, C1,
+      L01, L03-L08 and L10 with vbc's answers; their pin group became
+      `ObjectComparison_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. (E02, C1, L01, L03-L08, L10)
     - **#214** — the optimizer's mixed-type Object constant fold is WRONG on every backend that
       reaches it (C#, JavaScript, MSIL) — a silent wrong answer, pinned visibly as today's
       `False | False` rather than left undiscovered. (L11)
