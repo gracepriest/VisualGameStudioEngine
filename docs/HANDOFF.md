@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #214 TESTED — copy propagation no longer erases an Object comparison operand, so C# and MSIL print vbc's answer for `Dim s As Object = "20" : s = 20` (ADR-0012; `CopyPropagationPass.KeepsLateBinding`; `git log --grep '#214'`)
+- **Tests (14 new, 1 moved):** `ObjectComparisonUnderOptimizerExecutionTests` (Integration, 13: vbc-answered Object-vs-constant rows on C# + MSIL x CLI / `--optimize` / `CompileProjectFiles` + the in-process emitters, the constant on either side, `If o = 20`, `"abc" = 20` THROWS InvalidCast, three controls; two JS rows via `RunOptimized`, which spawns Node, so it joined the JS roster: now 126 = master 125 + 1) + `ObjectComparisonUnderOptimizerShapeTests` (fast, 1). MOVED: `MsilObjectBoxingExecutionTests.L11b_…` is a positive pin on C# + MSIL, JS a NAMED #215 pin. Mutants M1-M5 killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,725 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `ConstantFold` 7, `Optimizer` 340, `MixedNumeric` 79, `Object` 230, `CSharpLateBoundComparison` 14, `CopyPropagation` 62, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): JS `===` on an Object (#215); an Object holding Nothing vs a number (`n = 0` False everywhere); a TYPED String/Boolean vs a number (`"20" = 20`, `s = i`) is wrong on all four backends (no front-end VB conversion); Object arithmetic is refused; C++ has no Object; LLVM.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #212 TESTED — a VB conversion intrinsic of an Object (`CInt` / `CBool` / `CByte` … and `CType(o, T)`) is VB's own `Conversions.ToXxx(object)` on C# and MSIL, as vbc emits it, not `System.Convert` (`CSharpBackend.VbConversionText`; MSIL `EmitConvertFromObject` + `VbObjectConversions`; `git log --grep '#212'`)
 - **Tests (14 new, 7 moved):** `ObjectConversionIntrinsicExecutionTests` (Integration, 10: vbc-answered probes on C# and MSIL x CLI / `--optimize` / `CompileProjectFiles`: a boxed True is -1 / all ones, CBool of a boxed "0" / "12", " 3.5 " and 2.5, a boxed Char / "abc" throws, the Nothing literal and an Object holding Nothing, `CType`, `CStr` stays on `Convert` (`Len(CStr(Nothing))`), an ordinary Integer, a Function result; C# + MSIL only, so under `NotJavaScriptExecution`: roster still 125) + `ObjectConversionIntrinsicShapeTests` (fast, 4: all 11 targets as text on both backends, the typed control, the `(object)null` literal). MOVED: the five `ConversionIntrinsic_…CallsConvertToXxx` rows assert `Conversions::ToXxx` AND the `.assembly extern` line (the ONLY kill of a dropped extern: Linux ilasm infers it), `CIntOfBoxedTrue_…PinTheSameWrongAnswer_Against212` is `…PrintMinusOne_AsVbcDoes_Task212`, `E14_…Agree` is `…EndInVbcsUnhandledInvalidCast_Task212` (vbc's unhandled InvalidCastException; it expected C#'s `format`); CStr is its own case. Mutants M1-M5 (+M5b, MSIL CStr) killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,728 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Conversion` 300, `Object` 230, `NetConversion` 36, `VbConversion` 21, `CSharp` 1,299, `JsExecutionTierRoster` 5 (ilasm / g++ / Node present). Full suite NOT run.
@@ -6822,9 +6829,13 @@ single new failure against the 170-name baseline.
       ADR-0012's late-bound comparison (`CSharpBackend.IsLateBoundComparison`) and runs E02, C1,
       L01, L03-L08 and L10 with vbc's answers; their pin group became
       `ObjectComparison_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. (E02, C1, L01, L03-L08, L10)
-    - **#214** — the optimizer's mixed-type Object constant fold is WRONG on every backend that
-      reaches it (C#, JavaScript, MSIL) — a silent wrong answer, pinned visibly as today's
-      `False | False` rather than left undiscovered. (L11)
+    - **#214** — FIXED 2026-10-06 (was: `Dim s As Object = "20" : s = 20` printed `False` on C#,
+      JavaScript and MSIL where vbc prints `True`). Not the fold: `CopyPropagationPass` replaced the
+      Object variable with its String constant, taking away the type the late-bound comparison keys
+      on. `CopyPropagationPass.KeepsLateBinding` keeps an Object comparand in place; C# and MSIL print
+      vbc's answer at every entry point. JavaScript's own `===` on an Object is still #215. L11b's pin
+      is now `L11b_StringObjectVersusNumber_AnswersLikeVbc_OnCSharpAndMsil_JavaScriptPinsAgainst215`.
+      (L11, L11b)
     - **#215** — JavaScript disagrees with VB on `= Nothing`, `Case Nothing` and a boxed `Is`.
       (L05, L08, L09)
     - **#213** — `MyBase.Show(5)` into a Base method typed `o As Object` names the WRONG call-site

@@ -26,7 +26,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⚠ Object boxes: for two NUMERIC boxes VB's late-bound compare widens the same way, so the fold is
 //  right there too (MsilObjectBoxingExecutionTests.L11). A boxed String against a number is NOT a
-//  numeric pair and the fold still says "unequal" where VB converts the String — what remains of #214.
+//  numeric pair and the fold still says "unequal" where VB converts the String. That no longer reaches an OBJECT operand (#214, fixed: CopyPropagationPass.KeepsLateBinding leaves the Object variable in the
+//  compare, so its backend's late-bound comparison answers and the fold never sees the pair); it is still what a TYPED or literal String-against-number pair gets (`"20" = 20`, `s = i`), a front-end gap.
 // ================================================================================================
 
 /// <summary>#123: the fold compares mixed-width numeric constants the way VB does.</summary>
@@ -220,9 +221,10 @@ public class MixedNumericCompareFoldTests
     }
 
     /// <summary>
-    /// Same-type pairs and non-numeric pairs keep the answers they had. ⚠ The String row is NOT VB's answer — a boxed
-    /// "20" = 20 is True in VB, converted late-bound — and is asserted as today's answer because it is what remains of
-    /// #214: the fold sees two CLR values, not VB's late-bound conversion.
+    /// Same-type pairs and non-numeric pairs keep the answers they had. ⚠ The String row is NOT VB's answer — "20" = 20 is
+    /// True in VB, converted — and is asserted as the PASS's answer: the fold sees two CLR values, not VB's conversion. #214
+    /// no longer routes an Object operand here (copy propagation keeps it, so the late-bound comparison answers); a typed or
+    /// literal pair still arrives, because the front end inserts no VB conversion for it. TryFoldCompare is unchanged.
     /// </summary>
     [Test]
     public void SameTypeAndNonNumericPairs_AreUnchanged()
@@ -232,8 +234,8 @@ public class MixedNumericCompareFoldTests
         {
             Assert.That(Fold(CompareKind.Lt, 3.0, "Double", 3.14, "Double"), Is.True, "Double/Double");
             Assert.That(Fold(CompareKind.Eq, 7, "Integer", 7, "Integer"), Is.True, "Integer/Integer");
-            Assert.That(Fold(CompareKind.Eq, "20", str, 20, "Integer"), Is.False, "#214 remains: \"20\" = 20 (VB: True)");
-            Assert.That(Fold(CompareKind.Ne, "20", str, 20, "Integer"), Is.True, "#214 remains: \"20\" <> 20 (VB: False)");
+            Assert.That(Fold(CompareKind.Eq, "20", str, 20, "Integer"), Is.False, "the pass still answers \"20\" = 20 with Equals (VB: True; an Object operand no longer reaches it, #214)");
+            Assert.That(Fold(CompareKind.Ne, "20", str, 20, "Integer"), Is.True, "the pass still answers \"20\" <> 20 with Equals (VB: False; an Object operand no longer reaches it, #214)");
             Assert.That(Fold(CompareKind.Lt, 1.5m, "Decimal", 2, "Integer"), Is.Null, "Decimal is never folded");
         });
     }
