@@ -98,17 +98,26 @@ internal static class LambdaCaptureSetProbes
 
     internal const string K8Expected = "3,103";
 
-    /// <summary>K9 — the lambda's OWN parameter is spelled exactly like the creator's local (n).
+    /// <summary>K9 — the lambda's OWN parameter is spelled exactly like a local of the creator (n).
     /// The lambda never touches the creator's n at all; only its own parameter. Precision: n must
-    /// stay call-INvisible (private).</summary>
+    /// stay call-INvisible (private).
+    /// <para>⭐ RESHAPED (task #217). The original had the creator's <c>Dim n</c> in the lambda's
+    /// own enclosing block — the lambda parameter hides it, which VB refuses (BC36641) and so does
+    /// the front end now, before any IR is built. The creator still has a local <c>n</c> and the
+    /// lambda still names its parameter <c>n</c>, but the local lives in a SIBLING block (an
+    /// <c>If</c> that has closed): it does not enclose the lambda, vbc accepts the program, and
+    /// the function's IR carries both. That is what the capture-set subtraction exists for.</para></summary>
     internal const string K9 = """
         Sub Main()
-            Dim n As Integer = 1
             Dim q As Integer = 2
+            If q > 0 Then
+                Dim n As Integer = 1
+                Console.WriteLine(n)
+            End If
             Dim show = Sub(n As Integer) Console.WriteLine(n)
-            Dim a As Integer = n + q
+            Dim a As Integer = q + 1
             show(50)
-            Dim b As Integer = n + q
+            Dim b As Integer = q + 1
             Console.WriteLine(CStr(a) & "," & CStr(b))
         End Sub
         """;
@@ -205,22 +214,29 @@ internal static class LambdaCaptureSetProbes
     /// (lowercase). Task #169 (ADR-0013 D1) closed the open question this pin used to carry:
     /// the analyzer now resolves the body's bare `n` case-insensitively to the LAMBDA's own
     /// parameter N (VB's own shadowing rule), and the IR builder binds through that record — so
-    /// the write targets the parameter, not the creator's n. This IS now the K9 shadowing case,
-    /// just spelled with the case difference on the OTHER side (creator lowercase, parameter
-    /// uppercase, instead of K9's exact-spelling match both lowercase). The creator's n is never
-    /// written, and must stay call-INvisible.</summary>
+    /// the write targets the parameter, not the creator's n. This is the K9 case, just spelled
+    /// with the case difference on the OTHER side (creator lowercase, parameter uppercase, instead
+    /// of K9's exact-spelling match both lowercase). The creator's n is never written, and must
+    /// stay call-INvisible.
+    /// <para>⭐ RESHAPED (task #217), the same way as <see cref="K9"/>: the creator's <c>n</c> moved
+    /// from the lambda's enclosing block into a sibling block (an <c>If</c> that has closed), because
+    /// a lambda parameter that hides an enclosing local is now VB's BC36641. The body's <c>n</c>
+    /// must still bind to the parameter <c>N</c>, not to the closed block's local.</para></summary>
     internal const string N4b = """
         Function Seed(v As Integer) As Integer
             Return v
         End Function
 
         Sub Main()
-            Dim n As Integer = Seed(1)
             Dim q As Integer = Seed(2)
+            If q > 0 Then
+                Dim n As Integer = Seed(1)
+                Console.WriteLine(n)
+            End If
             Dim setp = Sub(N As Integer) n = n + 100
-            Dim a As Integer = n + q
+            Dim a As Integer = q + 1
             setp(5)
-            Dim b As Integer = n + q
+            Dim b As Integer = q + 1
             Console.WriteLine(CStr(a) & "," & CStr(b))
         End Sub
         """;
@@ -527,10 +543,11 @@ public class LambdaCaptureSetIrLevelTests
             + "the SAME variable, and the capture-set compare must see that.");
     }
 
-    /// <summary>K9 — the lambda's OWN parameter shadows the creator's local, EXACT spelling. The
-    /// lambda never touches the creator's n; only its own parameter. Precision only: this narrows
-    /// "every local" to "captured locals", and does not change any program's OUTPUT (n is never
-    /// actually read after the call in K9's own probe).
+    /// <summary>K9 — the lambda's OWN parameter is spelled exactly like a local of the creator (in a
+    /// sibling block since #217: see <see cref="LambdaCaptureSetProbes.K9"/>). The lambda never
+    /// touches the creator's n; only its own parameter. Precision only: this narrows "every local"
+    /// to "captured locals", and does not change any program's OUTPUT (n is never actually read
+    /// after the call in K9's own probe).
     /// <para>⛔ MUTANT Mf_no_param_subtraction (skip removing the lambda's own parameter names
     /// from its capture set) kills this test: without the subtraction, "n" (the parameter
     /// mention) stays in the capture set and IsCallVisible("n", Main) wrongly becomes True. This
@@ -539,14 +556,14 @@ public class LambdaCaptureSetIrLevelTests
     /// IR-level assertion can see it, exactly as the brief requires.</para>
     /// </summary>
     [Test]
-    public void K9_LambdaParameterShadowsCreatorLocal_ExactSpelling_StaysPrivate()
+    public void K9_LambdaParameterNamedLikeACreatorLocalInASiblingBlock_ExactSpelling_StaysPrivate()
     {
         var module = JsTestSupport.BuildModule(LambdaCaptureSetProbes.K9, sourceFilePath: "prog.bas");
         var main = Fn(module, "Main");
 
         Assert.That(OptimizationPass.IsCallVisible("n", main), Is.False,
-            "show's own parameter n shadows the creator's n by EXACT spelling -- the lambda's body "
-            + "reads only ITS OWN n, never the creator's, so the creator's n must stay private.");
+            "show's own parameter n is spelled exactly like the creator's n (a local of a closed sibling block) -- the "
+            + "lambda's body reads only ITS OWN n, never the creator's, so the creator's n must stay private.");
     }
 
     /// <summary>N4b (pin g) — the lambda's OWN parameter is N (uppercase); its body writes the
@@ -554,10 +571,11 @@ public class LambdaCaptureSetIrLevelTests
     /// to carry: the front end now resolves the body's bare <c>n</c> case-insensitively to the
     /// LAMBDA's own parameter <c>N</c> (VB's shadowing rule), and the IR builder binds every
     /// reference through that record (<c>ReferencedVariable</c>) — so the write targets the
-    /// parameter's own storage, never the creator's <c>n</c>. This is now the SAME shadowing
-    /// K9 pins, just with the case difference on the opposite side (creator lowercase, parameter
-    /// uppercase, instead of K9's exact-spelling match). The creator's <c>n</c> is never
-    /// written, and must stay call-INvisible.
+    /// parameter's own storage, never the creator's <c>n</c>. This is the SAME case K9 pins, just
+    /// with the case difference on the opposite side (creator lowercase, parameter uppercase,
+    /// instead of K9's exact-spelling match). The creator's <c>n</c> (a local of a closed sibling
+    /// block since #217: see <see cref="LambdaCaptureSetProbes.N4b"/>) is never written, and must
+    /// stay call-INvisible.
     /// <para>⛔ MUTANT Mg_param_subtraction_ignorecase (the parameter-name subtraction inside
     /// <c>LambdaCapturesOf</c> compares case-INSENSITIVELY instead of exactly) no longer kills
     /// this test — RE-MEASURED against this working tree with the mutation applied (a scratch
@@ -573,15 +591,15 @@ public class LambdaCaptureSetIrLevelTests
     /// discriminating shape is outside this task's scope).</para>
     /// </summary>
     [Test]
-    public void N4b_LambdaParameterUppercaseN_BodyWritesLowercaseN_BindsToTheParameter_CreatorsNStaysPrivate()
+    public void N4b_LambdaParameterUppercaseN_BodyWritesLowercaseN_BindsToTheParameter_CreatorsSiblingBlockNStaysPrivate()
     {
         var module = JsTestSupport.BuildModule(LambdaCaptureSetProbes.N4b, sourceFilePath: "prog.bas");
         var main = Fn(module, "Main");
 
         Assert.That(OptimizationPass.IsCallVisible("n", main), Is.False,
             "task #169 (ADR-0013 D1): the body's bare n now resolves case-insensitively to the "
-            + "LAMBDA's own parameter N (VB's shadowing rule) -- the creator's n is never "
-            + "written, so it must stay private.");
+            + "LAMBDA's own parameter N (VB's shadowing rule) -- the creator's n (in a closed sibling "
+            + "block) is never written, so it must stay private.");
     }
 
     /// <summary>N9 (pin h) — the lambda writes the creator's n on its FIRST line, then declares

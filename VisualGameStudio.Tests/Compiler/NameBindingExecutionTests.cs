@@ -37,18 +37,32 @@ public class NameBindingExecutionTests
     // Shared plumbing
     // ============================================================================================
 
-    /// <summary>Analyze <paramref name="source"/> and assert it reports NO diagnostic at all —
-    /// the D2 interim: a lambda parameter shadows its creator's same-spelled local
-    /// case-insensitively, and #169 adds no BC36641 (that stays an owner decision, #217).</summary>
-    private static void AssertNoDiagnostic(string source)
+    /// <summary>Assert <paramref name="source"/> is refused with exactly ONE diagnostic, VB's BC36641, at the lambda
+    /// parameter (<paramref name="line"/>, <paramref name="column"/>) — through the analyzer AND through
+    /// <c>BasicCompiler.CompileProjectFiles</c> (the IDE's build path). Task #217 (the owner's ruling, "the VB way"):
+    /// a lambda parameter that hides a local or parameter of its procedure is an error. Task #169's own D2 had it
+    /// SHADOW silently, with no diagnostic; the shapes that did are these pins, and they no longer compile.</summary>
+    private static void AssertRefusedBC36641(string source, int line, int column)
     {
         var ast = new Parser(new Lexer(source).Tokenize()).Parse();
         var analyzer = new SemanticAnalyzer();
-        var ok = analyzer.Analyze(ast);
-        Assert.That(ok, Is.True, string.Join(" | ", analyzer.Errors.Select(e => e.Message)));
-        Assert.That(analyzer.Errors, Is.Empty,
-            "expected NO diagnostic (D2 interim -- shadowing, no BC36641): "
-            + string.Join(" | ", analyzer.Errors.Select(e => e.Message)));
+        Assert.That(analyzer.Analyze(ast), Is.False, "the analyzer must refuse a lambda parameter that hides a local or a parameter");
+        Assert.That(analyzer.Errors.Select(e => (e.ErrorCode, e.Line, e.Column)).ToArray(),
+            Is.EqualTo(new[] { ("BC36641", line, column) }),
+            "analyzer: " + string.Join(" | ", analyzer.Errors.Select(e => e.Message)));
+
+        var dir = Path.Combine(Path.GetTempPath(), "bl-namebinding-refuse-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "Main.bas");
+            File.WriteAllText(path, source);
+            var result = new BasicCompiler(new CompilerOptions { OptimizeAggressive = true }).CompileProjectFiles(new List<string> { path });
+            Assert.That(result.AllErrors.Select(e => (e.ErrorCode, e.Line, e.Column)).ToArray(),
+                Is.EqualTo(new[] { ("BC36641", line, column) }),
+                "CompileProjectFiles: " + string.Join(" | ", result.AllErrors.Select(e => e.Message)));
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { /* temp */ } }
     }
 
     /// <summary>
@@ -173,7 +187,8 @@ public class NameBindingExecutionTests
         => RunsEverywhereAndThroughTheProjectEntryPoint(K10, "27");
 
     // ============================================================================================
-    // K1 / K6 / K7 — the D2 interim: shadowing, no diagnostic. Standard + aggressive.
+    // K1 / K6 / K7 — a lambda parameter that hides the creator's local or parameter. ADR-0013's D2 had these SHADOW silently (K1 and K7 printed 1, K6 printed 7,
+    // on every backend); task #217 (the owner's ruling, "the VB way") makes each VB's BC36641, so they are pinned as REFUSED, not run. vbc refuses all three.
     // ============================================================================================
 
     private const string K1 = """
@@ -188,12 +203,11 @@ public class NameBindingExecutionTests
         End Sub
         """;
 
+    /// <summary>K1 — `N` (the lambda parameter) against the creator's `n`: they differ only in case, and VB is case-insensitive, so the parameter hides the local (BC36641, line 6 column 20).</summary>
     [Test]
-    public void K1_LambdaParamShadowsCreatorLocal_CreatorUntouched_NoDiagnostic()
+    public void K1_LambdaParamHidesCreatorLocal_CaseDiffering_IsRefused_BC36641()
     {
-        AssertNoDiagnostic(K1);
-        FourBackends.RunsOnEveryBackend(K1, "1");
-        FourBackends.RunsOnEveryBackendAggressive(K1, "1");
+        AssertRefusedBC36641(K1, 6, 20);
     }
 
     private const string K6 = """
@@ -206,12 +220,11 @@ public class NameBindingExecutionTests
         End Sub
         """;
 
+    /// <summary>K6 — the same against the creator's PARAMETER `n` (a procedure parameter hides the same way): BC36641, line 2 column 17.</summary>
     [Test]
-    public void K6_LambdaParamShadowsCreatorParameter_ReadsItsOwnParameter_NoDiagnostic()
+    public void K6_LambdaParamHidesCreatorParameter_CaseDiffering_IsRefused_BC36641()
     {
-        AssertNoDiagnostic(K6);
-        FourBackends.RunsOnEveryBackend(K6, "7");
-        FourBackends.RunsOnEveryBackendAggressive(K6, "7");
+        AssertRefusedBC36641(K6, 2, 17);
     }
 
     private const string K7 = """
@@ -226,15 +239,12 @@ public class NameBindingExecutionTests
         End Sub
         """;
 
-    /// <summary>K7 — the EXACT-spelling sibling of K1 (no case difference at all): already
-    /// shadowed before #169, unaffected by it, kept here as the control that proves K1's answer
-    /// is VB's shadowing rule and not a coincidence of this fix.</summary>
+    /// <summary>K7 — the EXACT-spelling sibling of K1 (no case difference at all), the control that K1's refusal is VB's
+    /// hiding rule and not a coincidence of case-folding: BC36641, line 6 column 20.</summary>
     [Test]
-    public void K7_ExactSpellingShadow_Control_NoDiagnostic()
+    public void K7_ExactSpellingHide_Control_IsRefused_BC36641()
     {
-        AssertNoDiagnostic(K7);
-        FourBackends.RunsOnEveryBackend(K7, "1");
-        FourBackends.RunsOnEveryBackendAggressive(K7, "1");
+        AssertRefusedBC36641(K7, 6, 20);
     }
 
     // ============================================================================================
@@ -630,11 +640,10 @@ public class NameBindingExecutionTests
             End Sub
             """, "6");
 
-    /// <summary>E16 — a lambda parameter (<c>total</c>) hides the creator's local
-    /// (<c>Total</c>) with the SAME case shape as N4b/K1: read and write both stay inside the
-    /// lambda's own parameter, and the creator's <c>Total</c> is untouched afterward.</summary>
+    /// <summary>E16 — a lambda parameter (<c>total</c>) hides the creator's local (<c>Total</c>), the same case shape as N4b/K1.
+    /// ADR-0013's D2 had it shadow silently (prints 6 then 100); it is now BC36641 at the parameter, line 3 column 22 (task #217).</summary>
     [Test]
-    public void E16_LambdaParamHidesLocal_SameCaseInLambda()
+    public void E16_LambdaParamHidesLocal_CaseDiffering_IsRefused_BC36641()
     {
         const string source = """
             Sub Main()
@@ -644,9 +653,7 @@ public class NameBindingExecutionTests
                 Console.WriteLine(Total)
             End Sub
             """;
-        AssertNoDiagnostic(source);
-        FourBackends.RunsOnEveryBackend(source, "6\n100");
-        FourBackends.RunsOnEveryBackendAggressive(source, "6\n100");
+        AssertRefusedBC36641(source, 3, 22);
     }
 
     private static void RunEdge(string source, string expected)

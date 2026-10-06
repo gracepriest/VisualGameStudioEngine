@@ -443,9 +443,9 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     [Test]
     public void R6_ByValParameter_RunsOnEveryBackendAggressive() => FourBackends.RunsOnEveryBackendAggressive(R6, "8");
 
-    // R7 — a lambda parameter shadows a ByRef parameter (#217's interim: shadowing, silently).
-    // The ENCLOSING Sub still has a ByRef parameter, so JavaScript still refuses it by design —
-    // the shadowing only means the FRONT END accepts the program, not that JS can lower it.
+    // R7 — a lambda parameter spelled like the ByRef parameter around it. Task #217 (the owner's ruling, "the VB way"): VB's BC36641, at the parameter. Before it,
+    // the front end ACCEPTED this and the lambda's `n` silently won: 2 on C++, C# and MSIL, and a BL7002 refusal on JavaScript (it has no ByRef parameters, by design).
+    // Now no backend ever sees the program: it is refused by the front end at every entry point, and the code is BC36641 on EVERY target, JavaScript included.
     private const string R7 = """
         Sub Run(ByRef n As Integer)
             Dim f As Func(Of Integer, Integer) = Function(n) n + 1
@@ -459,22 +459,37 @@ public class LambdaBoundaryDiagnosticsExecutionTests
         """;
 
     [Test]
-    public void R7_LambdaParameterShadowsByRefParameter_CppRuns2() =>
-        Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(R7))), Is.EqualTo("2"));
+    public void R7_LambdaParameterHidesByRefParameter_CliRefusesOnEveryTarget_BC36641() => CliRefusesOnEveryTarget(R7, "BC36641");
 
     [Test]
-    public void R7_LambdaParameterShadowsByRefParameter_MsilRuns2() =>
-        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(R7)), Is.EqualTo("2"));
+    public void R7_LambdaParameterHidesByRefParameter_CliOptimizeAlsoRefuses_BC36641() => CliRefusesOnEveryTarget(R7, "BC36641", optimize: true);
 
     [Test]
-    public void R7_LambdaParameterShadowsByRefParameter_CSharpRuns2() =>
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(R7)), Is.EqualTo("2"));
+    public void R7_LambdaParameterHidesByRefParameter_ReleaseBlprojBuildAlsoRefuses_BC36641() => ReleaseBlprojBuild_Refuses(R7, "BC36641");
 
+    /// <summary>The JavaScript row of the old R7 pin (BL7002, "ByRef" refused by design) moved: the BC36641 comes from the FRONT END, before the JavaScript backend
+    /// is asked, so the refusal names BC36641 and no longer BL7002. It is also still not BC36639: the lambda's own `n` resolves to itself (by SYMBOL, ADR-0013), never to the ByRef parameter.</summary>
     [Test]
-    public void R7_LambdaParameterShadowsByRefParameter_JavaScript_RefusesByDesign_BL7002()
+    public void R7_LambdaParameterHidesByRefParameter_JavaScript_IsRefusedByTheFrontEnd_NotByBL7002()
     {
-        var ex = Assert.Throws<ForeignFeatureException>(() => JsTestSupport.Compile(R7));
-        Assert.That(ex!.Message, Does.Contain("BL7002").And.Contain("ByRef"));
+        var dir = Path.Combine(Path.GetTempPath(), "bl-lambdaboundary-r7js-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Program.bas"), R7);
+            var (exitCode, stdOut, stdErr) = CliTestHarness.RunProcess(
+                CliTestHarness.CliPath(), new[] { Path.Combine(dir, "Program.bas"), "--target=javascript" }, dir, timeoutMs: 60_000);
+            var output = stdOut + "\n" + stdErr;
+            Assert.That(exitCode, Is.Not.EqualTo(0), output);
+            Assert.That(output, Does.Contain("BC36641"), output);
+            Assert.That(output, Does.Not.Contain("BL7002"), "the front end refuses before the JavaScript backend is asked.\n" + output);
+            Assert.That(output, Does.Not.Contain("BC36639"), "the lambda's own n is not the ByRef parameter.\n" + output);
+            Assert.That(File.Exists(Path.Combine(dir, "Program.js")), Is.False, "a front-end refusal writes no JavaScript");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort temp cleanup */ }
+        }
     }
 
     // S5 — Me.V and bare V, both reading the SAME field, inside a lambda.

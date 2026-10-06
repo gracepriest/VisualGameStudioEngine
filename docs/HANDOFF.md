@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-05: #217 TESTED — a lambda parameter that hides a local or parameter of its procedure is VB's BC36641 (`SemanticAnalyzer.CheckLambdaParameterHides`; ADR-0013 D2 amended; `git log --grep '#217'`)
+- **Tests (12 new, 15 moved):** `LambdaParameterHidesDiagnosticsTests` (fast, 11: vbc-answered probes p01-p23 as 9 rows, the `CompileProjectFiles` row, the LSP row) + `LambdaParameterHidesExecutionTests` (Integration, 1: a field / module-global name still runs on C#, C++, JS x CLI / `-O` / `CompileProjectFiles`; in the JS roster, now 118 = master 117 + 1). MOVED: R7 x4, E16 / K1 / K6 / K7 are now REFUSED pins (a); K9, N4b, `BoundMiss`, `LambdaParameterCase`, `NodeName`, `ReAnalysis`, R6 keep their property on a reshaped program (module global or sibling-block local) (b). Mutants M1-M3 (+ the (b) mutants) killed.
+- **Gates (Linux):** fast 0 failed / 12,692 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 16, `LambdaBoundaryDiagnostics` 82, `NameBinding` 314, `LambdaCaptureSet` 27, `ClosureLowering` 100, `Lambda` 794, `LSP` 470 (+11 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gap, NO test pins it** (fixture header): p21, a lambda parameter named like its enclosing FUNCTION — vbc says BC30530 + BC36641, BasicLang models no function-name local and accepts it.
+
+---
+
 ## ⚡ NEWEST — 2026-10-05: #206 TESTED — a String `=` / `<>` reads Nothing as "" the VB way on every backend; #205 (MSIL compared Strings with `ceq`) is FIXED by the same change (`IRCompare.IsStringEquality` / `ReadsNothingAsEmpty`; `git log --grep '#206'`)
 - **Tests (12 new, 3 moved):** `StringNothingEqualityExecutionTests` (Integration, 11 rows of vbc-answered probes p01-p16 on C#, C++, JavaScript and MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 117) + `StringNothingEqualityFoldTests` (1, hand-built IR, fast). MOVED to vbc's answer and renamed: `NothingStringTextExecutionTests` E4, E4b, E10 (E10's MSIL `same=False` was #205). Mutants killed: fold off (P01_P02, P03_P04, P05, P12 + Fold test), MSIL `ceq` back (P08), C# `Case Is Nothing` widened (P16).
 - **Gates (Linux):** fast 0 failed / 12,681 passed / 94 skipped; Integration, one filter each, 0 failed, 0 skipped: the fixture 12, `NothingString` 46, `Fold` 307, `StringCompar` 1, `IsIsNot` 91, `SelectCase` 82, `MsilString` 75, `ObjectCompar` 10, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -7112,8 +7119,8 @@ single new failure against the 170-name baseline.
     scope — is REMOVED, not merely restored; K1 printed 101 before this, and a module global read
     right after such a lambda would otherwise inherit the lambda's OWN parameter's C# spelling).
   - **Measured** (4 backends × CLI/CLI `-O`/Release `.blproj`): K2 42, K3 6, K8 40, K10 27 in
-    every cell; K1/K6/K7 shadow (1/7/1) with NO diagnostic (D2's interim — BC36641 stays an owner
-    decision, #217); K4/K9/K5 are right except pre-existing, UNRELATED backend defects (C#'s own
+    every cell; K1/K6/K7 shadow (1/7/1) with NO diagnostic (D2's interim — BC36641 was an owner
+    decision, #217; ✅ DECIDED 2026-10-05, the VB way: they are REFUSED with BC36641 now); K4/K9/K5 are right except pre-existing, UNRELATED backend defects (C#'s own
     dropped lambda-parameter write, widened #136; C++'s capture-by-copy, #140; C#'s dropped
     nested-lambda declaration, #165 — ⚠ the two C# defects FIXED 2026-10-02 by #136: K4 prints 2, K5 prints 3 on C#). Byte compare of 646 programs: only the 11 CASE-DIFFERING
     programs change at all. No internal compiler error anywhere in the corpus or the full suite.
@@ -7154,7 +7161,7 @@ single new failure against the 170-name baseline.
       Each` without `As`, and the Catch/Using/ReDim declarators). See the correction on the
       original #124 section above — its own headline repro is now fixed for a local, and what
       remains is narrower than that section describes.
-    - **#217** — D2's "BC36641 is not reported" recommendation is language policy and needs an
+    - **#217** (✅ DONE 2026-10-05: BC36641 IS reported, ADR-0013's D2 amendment) — D2's "BC36641 is not reported" recommendation is language policy and needs an
       owner decision; #169 implements the shadowing D1 produces on its own and adds no diagnostic
       either way.
     - **#224** — LINQ (`From`/`Where`/`Select`) is broken on every backend, a pre-existing gap
@@ -7214,7 +7221,7 @@ single new failure against the 170-name baseline.
     write, at ANY lambda nesting depth, of a ByRef parameter of an enclosing procedure. Decided by
     the resolved SYMBOL (ADR-0013's NameBinding / `SetNodeSymbol`), never by spelling — a lambda
     PARAMETER spelled like the ByRef one shadows it (R7) and is not reported; whether that
-    shadowing itself deserves BC36641 is still the owner's pending decision, #217, untouched here.
+    shadowing itself deserves BC36641 was the owner's pending decision, #217 (✅ DONE 2026-10-05: it is refused with BC36641), untouched here.
   - A lambda's own `Dim` hiding a name declared OUTSIDE that lambda (within its procedure):
     **BC30616** for a local of an enclosing block, the creator, or an enclosing lambda — including
     one declared LATER in the same enclosing block, per VB's whole-block scope (N7/N12), and a
