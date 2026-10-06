@@ -12,9 +12,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⛔ THE BUG. `Dim s As Object = "20" : Console.WriteLine(s = 20)` printed False on C#, JavaScript and MSIL at the CLI, with --optimize and from a Release project; vbc prints True. `"abc" = 20`, which throws
 //  InvalidCastException in VB, printed False. Both backends that implement the late-bound comparison (MSIL since #177, C# since #211) decide that from the operand's IR TYPE, and CopyPropagationPass took the type
 //  away: it replaced the Object variable with its recorded copy, the String constant "20", which carries its OWN type, so the compare became `"20" = 20` and ConstantFoldingPass answered the pair with Equals ("unequal").
-//  The fix is `CopyPropagationPass.KeepsLateBinding` (IROptimizer.cs): a comparison operand that is an Object comparand is not replaced by a copy that is not one. The Nothing literal still propagates (it is
-//  Object-typed already, and the fold's String arm answers `Nothing = ""` True, which JavaScript's own `===` would not: #215, whose late-bound helper has since made the Object-operand form answer it too, so that reason no longer separates them: see M2). TryFoldCompare is unchanged; declining the fold was measured and is worse (C# CS0019, MSIL still
-//  wrong, a typed `Boolean = 1` the fold answers right by luck turning wrong).
+//  The fix is `CopyPropagationPass.KeepsLateBinding` (IROptimizer.cs): a comparison operand that is an Object comparand is not replaced by a copy that is not one. TryFoldCompare is unchanged; declining the fold was
+//  measured and is worse (C# CS0019, MSIL still wrong, a typed `Boolean = 1` the fold answers right by luck turning wrong).
+//  ⭐ #300: the Nothing LITERAL is held back too. #214 exempted it (the fold's String arm answered `Nothing = ""` True where JavaScript's own `===` would not), and that exemption was the whole of a wrong answer:
+//  `Dim n As Object = Nothing : n = 0` became the constant pair `Nothing = 0`, which the fold answered False, so `n = 0`, `n < 1` and `n = False` printed False on C#, JavaScript and MSIL at every entry point (vbc: True).
+//  Since #215 JavaScript's late-bound `__blCompareObject` answers the kept variable as vbc does, so the exemption had no reason left; the `AnObjectHoldingNothing_…` / `AnObjectAssignedNothing_…` rows assert the result.
 //
 //  ⭐ THE ORACLE IS vbc. Every `vb` below is what the SDK's vbc prints for the program wrapped in a VB Module (S/t214/tw-programs, run through S/t136/tools/vbv2.py by the test-writer: every answer matched the
 //  implementer's own `.exp` in S/t214/probes). Never what a backend printed.
@@ -22,23 +24,22 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⭐ ENTRY POINTS (CLAUDE.md: "test both entry points", "validate codegen through the CLI and the IR optimizer"): C# and MSIL each run through the real CLI (standard passes), the real CLI with `--optimize`
 //  (aggressive) and `BasicCompiler.CompileProjectFiles` with `OptimizeAggressive` (what a Release .blproj and the IDE call), PLUS the in-process standard and aggressive emitters. ⛔ Every C# RUN is HANG-SAFE
 //  (`CSharpProcessRunner`, a child process with a time limit): the in-process runner has none. The C# legs run first and their failures are reported before the MSIL legs, which SKIP (not fail) where ilasm is missing.
-//  The JavaScript rows go through `JavaScriptOptimizedExecutionTests.RunOptimized` (the STANDARD pipeline the CLI always runs; `JavaScriptExecutionTests.RunJs` runs no optimizer at all and would never reach the pass).
+//  The JavaScript rows go through `JavaScriptOptimizedExecutionTests.RunOptimized` (the STANDARD pipeline the CLI always runs; `JavaScriptExecutionTests.RunJs` runs no optimizer at all and would never reach the pass),
+//  and #300's two also through the real CLI, the CLI with `--optimize` and `CompileProjectFiles`, as C# and MSIL do.
 //  The FAST half is `ObjectComparisonUnderOptimizerShapeTests` below: what the compiler WRITES, no process.
 //
 //  ⭐ MUTANTS (each is the fix plus ONE change, built from a plain source copy of the fix outside the worktree and run against a copy of the test output with its BasicLang.dll swapped; the cases that go red, measured):
 //    M1 no guard (propagation as before the fix)                -> ELEVEN: `AnObjectString_AgainstAnIntegerOnTheRight` / `…OnTheLeft` / `…ADoubleAndAnInteger` / `…ABoolean`, `AnObjectBoolean_…`, `AnObjectChar_…`,
 //                                                                    `AnObjectComparison_AsAnIfCondition` (`ne`), `AnObjectStringThatIsNotANumber_…` (prints False, does not throw), `JavaScript_AnObjectString_GreaterThanAnInteger`
 //                                                                    (False), the fast `AnObjectOperand_KeepsItsLateBoundCall_…` (no call left) and the moved pin `MsilObjectBoxing…L11b_…`. The three controls and the Nothing row stay green.
-//    M2 the Nothing literal is no longer exempt                 -> when #214 landed: `JavaScript_TheNothingLiteral_StillPropagates` ONLY (`n === ""` on null: False). C# and MSIL answer `n = ""` the same through the late-bound
-//                                                                    call, and the shape that DOES change there (`n = 0`, `n < 1`) is a known gap, so no row could see M2 on them.
-//                                                                    ⚠ SINCE #215 NO COMMITTED TEST KILLS M2 (re-measured on the fix plus #215: the fast subset and the ConstantFold / Optimizer / MixedNumeric / Object /
-//                                                                    CSharpLateBound / CopyPropagation / MsilObjectBoxing / JavaScript / SelectCase / LateBound / JsExecutionTierRoster filters, 14,211 results, the same failure NAMES as
-//                                                                    the control; the full suite was not run). The JavaScript row above stopped killing it: JavaScript's `n = ""` on an Object is `__blCompareObject` now, which says True with
-//                                                                    the exemption (the fold answers `Nothing = ""`) and without it (the helper answers it). No row CAN kill it by asserting vbc's answer: the only shapes where M2 and the
-//                                                                    fix differ are the ones where the exemption leaves the Nothing literal propagated into `n = 0` / `n < 1` / `n = False`, and there the FIX is wrong and M2 is right
-//                                                                    (measured on JavaScript: `Dim n As Object = Nothing : n = 0, n < 1, n = "", n = False` prints `False | False | True | False` on the fix, vbc's `True` four times on M2).
-//                                                                    Pinning the fix's answer would pin a defect, so the row below stays a regression row for the fix's behaviour and M2 survives. On JavaScript the exemption is the whole of the known gap
-//                                                                    below ("an Object holding Nothing vs a number"); C# and MSIL were not re-measured.
+//    M2 the Nothing literal is exempt again (#214's original rule, which #300 removed)
+//                                                               -> since #300: FIVE, #300's own: `AnObjectHoldingNothing_AgainstZeroOneEmptyAndFalse` and `AnObjectAssignedNothing_ConstantOnTheLeftAndAnIfCondition` (C#, every
+//                                                                    leg prints `False | False | True | False` / `True | False | ge`), their two `JavaScript_…` twins (the same on every JavaScript leg) and the fast
+//                                                                    `AnObjectHoldingNothing_KeepsItsLateBoundCalls_…` (no call left). `Control_NothingAgainstTypedIntegers` and every other row stay green (measured over this
+//                                                                    fixture and the JavaScriptLateBound / CSharpLateBound / MsilObjectBoxing / CopyPropagation filters, 209 cases).
+//                                                                    History: when #214 landed M2 was killed by the JavaScript `n = ""` row alone (`JavaScript_TheNothingLiteral_StillPropagates`, renamed by #300 `…_AnObjectHoldingNothing_EqualsTheEmptyString`); #215's helper made JavaScript
+//                                                                    answer `n = ""` True with the exemption and without it, and from then until #300 NO committed test killed M2, because the only shapes where M2 and #214 differed
+//                                                                    (`n = 0`, `n < 1`, `n = False`) were the ones the exemption answered WRONG: M2 was right there, and asserting vbc's answer would have failed on #214 itself.
 //    M3 only the LEFT operand is guarded (`20 = s` is not)      -> `AnObjectString_AgainstAnIntegerOnTheLeft` (False | False) and the fast `AnObjectOperand_KeepsItsLateBoundCall_…`. Two cases.
 //    M4 every constant is exempt, not only the Nothing literal  -> the same ELEVEN as M1 (the String "20" propagates again).
 //    M5 the VARIABLE's own type is ignored (a typed one is held back too) -> `Control_ATypedBooleanAgainstATypedOne` ONLY (`b = j` keeps both variables: C# CS0019 `bool == int`, MSIL answers True where vbc says False).
@@ -47,8 +48,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * (WAS: JavaScript's `===` on an Object, #215.) FIXED by #215: JavaScript's Object comparison is VB's late-bound `__blCompareObject` now, so an Object "2.5" `= 2.5`, an Object True `= -1`, an Object "True" `= True`
 //      and `If o = 20` print vbc's answer on JavaScript through every entry point. Asserted by `JavaScriptLateBoundComparisonExecutionTests` and by the moved pin `MsilObjectBoxingExecutionTests.L11b_…` (positive on
 //      JavaScript too). This fixture's own two JavaScript rows are unchanged and still right. What JavaScript still owes is a BOXED `Is` (primitives have no box identity), named in that fixture's header.
-//    * An Object holding Nothing compared with a number: `Dim n As Object = Nothing : n = 0` prints False on every backend (vbc True); the fold still answers it with Equals. Declining a Nothing-against-value pair
-//      was measured and turned C#'s `n <= 1` from True to False, so it is not part of this fix.
+//    * (WAS: an Object holding Nothing compared with a number, `Dim n As Object = Nothing : n = 0` False on every backend.) FIXED by #300 (above): the Nothing literal is no longer propagated into the comparison, so
+//      the fold never sees `Nothing = 0` and each backend's late-bound comparison answers vbc's True. (Declining the FOLD of a Nothing-against-value pair instead was measured by #214 and turned C#'s `n <= 1` wrong.)
 //    * A TYPED String or Boolean compared with a number (`"20" = 20`, `s = i`, `b = i` over -1) is wrong on all four backends: the front end inserts no VB conversion for the pair. (Its ONE line that is right,
 //      `b = j` over 1, IS asserted below, because a fix that declines the fold turned it wrong.)
 //    * Object ARITHMETIC (`o + 1`) is refused by the front end ("Arithmetic operator '+' requires numeric operands"), so there is no program to run.
@@ -192,6 +193,46 @@ public class ObjectComparisonUnderOptimizerExecutionTests
         End Sub
         """;
 
+    // ---- #300's programs (S/t300/tprobes, each run through S/t136/tools/vbv2.py; vbc's answer is in the summary) ----
+
+    /// <summary>#300: an Object holding the Nothing LITERAL against 0, 1, "" and False; Nothing is the other operand's default. vbc: `True | True | True | True`. Before #300: `False | False | True | False` on C#, JavaScript and MSIL.</summary>
+    internal const string NothingAgainstValues = """
+        Sub Main()
+            Dim n As Object = Nothing
+            Console.WriteLine(n = 0)
+            Console.WriteLine(n < 1)
+            Console.WriteLine(n = "")
+            Console.WriteLine(n = False)
+        End Sub
+        """;
+
+    /// <summary>#300: an Object holding 5 and then ASSIGNED Nothing, against 0 with the constant on the LEFT and in an `If o &lt; 1` condition. vbc: `True | True | lt`. Before #300: `True | False | ge`.</summary>
+    internal const string AssignedNothing = """
+        Sub Main()
+            Dim o As Object = 5
+            Console.WriteLine(o = 5)
+            o = Nothing
+            Console.WriteLine(0 = o)
+            If o < 1 Then
+                Console.WriteLine("lt")
+            Else
+                Console.WriteLine("ge")
+            End If
+        End Sub
+        """;
+
+    /// <summary>#300 CONTROL: Nothing against TYPED Integers. No Object operand, so nothing is late-bound and copy propagation is as before (its emission was byte-identical before and after #300). vbc: `True | True | True`.</summary>
+    internal const string NothingAgainstTypedIntegers = """
+        Sub Main()
+            Dim i As Integer = 0
+            Console.WriteLine(i = Nothing)
+            Dim j As Integer = 1
+            Console.WriteLine(j > Nothing)
+            Dim k As Integer = Nothing
+            Console.WriteLine(k = 0)
+        End Sub
+        """;
+
     // ---- plumbing ----
 
     private static string Norm(string s) => TempExec.Norm(s);
@@ -300,24 +341,53 @@ public class ObjectComparisonUnderOptimizerExecutionTests
     // ---- C# and MSIL: the controls ----
 
     /// <summary>
-    /// (9-11) The CONTROLS: what the fix must not change. A String against a String (an Object and a typed local), mixed-width numeric pairs on Objects and on typed locals, and a TYPED Boolean True against a typed
-    /// Integer 1, which the fold answers right (False) and which a fix that declined the fold turned wrong on MSIL (and made CS0019 on C#).
+    /// (9-11, and #300's 15) The CONTROLS: what the fix must not change. A String against a String (an Object and a typed local), mixed-width numeric pairs on Objects and on typed locals, and a TYPED Boolean True against a typed
+    /// Integer 1, which the fold answers right (False) and which a fix that declined the fold turned wrong on MSIL (and made CS0019 on C#). #300 adds Nothing against TYPED Integers: no Object operand, nothing held back.
     /// </summary>
     [TestCase(StrStrControl, "True\nTrue\nTrue\nFalse", TestName = "Control_StringAgainstString")]
     [TestCase(NumericControl, "True\nTrue\nFalse\nTrue", TestName = "Control_MixedWidthNumericPairs")]
     [TestCase(TypedBooleanAgainstOne, "False", TestName = "Control_ATypedBooleanAgainstATypedOne")]
+    [TestCase(NothingAgainstTypedIntegers, "True\nTrue\nTrue", TestName = "Control_NothingAgainstTypedIntegers")]
     public void TheControls_StayAsTheyWere_OnCSharpAndMsil(string source, string vb)
         => AssertCSharpAndMsilPrint(source, vb);
+
+    // ---- #300: an Object holding Nothing, C#, MSIL and JavaScript through every entry point ----
+
+    /// <summary>
+    /// (16-17) #300. An Object holding Nothing compared with a value prints vbc's answer on C# and MSIL through every entry point: Nothing is the other operand's default, so `n = 0`, `n &lt; 1`, `n = ""` and `n = False` are
+    /// all True, and so are `0 = o` and `o &lt; 1` once `o` is ASSIGNED Nothing. Before #300 the Nothing literal was propagated into each comparison and the fold answered `Nothing = 0` / `Nothing &lt; 1` / `Nothing = False`
+    /// False (`False | False | True | False` and `True | False | ge`). ⛔ M2 (the exemption back) fails both.
+    /// </summary>
+    [TestCase(NothingAgainstValues, "True\nTrue\nTrue\nTrue", TestName = "AnObjectHoldingNothing_AgainstZeroOneEmptyAndFalse")]
+    [TestCase(AssignedNothing, "True\nTrue\nlt", TestName = "AnObjectAssignedNothing_ConstantOnTheLeftAndAnIfCondition")]
+    public void AnObjectHoldingNothing_ComparedWithAValue_PrintsVbcsAnswer_OnCSharpAndMsil(string source, string vb)
+        => AssertCSharpAndMsilPrint(source, vb);
+
+    /// <summary>
+    /// (18-19) #300 on JavaScript, the same two programs through every entry point (the CLI, the CLI with `--optimize`, `CompileProjectFiles`) and the in-process standard pipeline: the kept Object variable reaches #215's
+    /// `__blCompareObject`, which answers vbc. Before #300 the same `False | False | True | False` and `True | False | ge` as C# and MSIL. ⛔ M2 fails both.
+    /// </summary>
+    [TestCase(NothingAgainstValues, "True\nTrue\nTrue\nTrue", TestName = "JavaScript_AnObjectHoldingNothing_AgainstZeroOneEmptyAndFalse")]
+    [TestCase(AssignedNothing, "True\nTrue\nlt", TestName = "JavaScript_AnObjectAssignedNothing_ConstantOnTheLeftAndAnIfCondition")]
+    public void JavaScript_AnObjectHoldingNothing_ComparedWithAValue_PrintsVbcsAnswer_EveryEntryPoint(string source, string vb)
+    {
+        TempExec.RequireTool(Bk.JavaScript); // a skip, outside any multiple-assertion block
+        var failures = new List<string>();
+        foreach (var entry in Enum.GetValues<EntryPoint>())
+            Check(failures, $"JavaScript {entry}", vb, () => TempExec.Run(Bk.JavaScript, entry, source));
+        Check(failures, "JavaScript standard passes (in process)", vb, () => JavaScriptOptimizedExecutionTests.RunOptimized(source));
+        Assert.That(failures, Is.Empty, "on JavaScript:\n" + string.Join("\n", failures));
+    }
 
     // ---- JavaScript, the standard pipeline ----
 
     /// <summary>
-    /// (12-13) JavaScript, through the optimizer-running pipeline. `Object "2.5" > 2` is right now (JavaScript's own coercion answers it once the fold no longer sees `"2.5" > 2`), and the Nothing LITERAL still
-    /// propagates: `Object Nothing = ""` is True because the fold's String arm answers it, where JavaScript's own `===` on `null` and `""` would say False (#215). The rest of an Object comparison on JavaScript is #215's
-    /// `JavaScriptLateBoundComparisonExecutionTests` (see the header).
+    /// (12-13) JavaScript, through the optimizer-running pipeline. `Object "2.5" > 2` is right now (JavaScript's own coercion answers it once the fold no longer sees `"2.5" > 2`), and an Object holding Nothing
+    /// `= ""` is True. (Until #300 that row was `…_TheNothingLiteral_StillPropagates`: the literal was propagated and the fold's String arm answered `Nothing = ""`; since #300 the variable is kept and #215's
+    /// `__blCompareObject` answers it, the same True.) The rest of an Object comparison on JavaScript is #215's `JavaScriptLateBoundComparisonExecutionTests` (see the header).
     /// </summary>
     [TestCase(StrDoubleGreater, "True", TestName = "JavaScript_AnObjectString_GreaterThanAnInteger")]
-    [TestCase(NothingEqualsEmpty, "True", TestName = "JavaScript_TheNothingLiteral_StillPropagates")]
+    [TestCase(NothingEqualsEmpty, "True", TestName = "JavaScript_AnObjectHoldingNothing_EqualsTheEmptyString")]
     public void JavaScript_StandardPipeline_PrintsVbcsAnswer(string source, string vb)
         => Assert.That(Norm(JavaScriptOptimizedExecutionTests.RunOptimized(source)), Is.EqualTo(Norm(vb)),
             $"JavaScript (optimizer-running pipeline) must print vbc's [{Norm(vb).Replace("\n", " | ")}]");
@@ -362,6 +432,43 @@ public class ObjectComparisonUnderOptimizerShapeTests
             var calls = Count(text, LateBoundCall);
             if (calls != 2)
                 failures.Add($"{label}, {name}: {calls} late-bound calls where the two comparisons make two:\n{text}");
+        }
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+    }
+
+    /// <summary>
+    /// (20) #300: the Nothing LITERAL is not propagated into an Object comparison either. An Object holding Nothing compared with 0, 1, "" and False keeps all four late-bound calls on C# (the standard passes, the
+    /// aggressive ones, <c>CompileProjectFiles</c>) and all four <c>__blCompareObject</c> calls on JavaScript (the standard pipeline); Nothing against TYPED Integers makes none on either. With #214's exemption back (M2)
+    /// the literal replaces <c>n</c>, the fold answers every pair and no call is left.
+    /// </summary>
+    [Test]
+    public void AnObjectHoldingNothing_KeepsItsLateBoundCalls_NothingAgainstATypedIntegerMakesNone()
+    {
+        const string JsHelper = "__blCompareObject(";
+        var failures = new List<string>();
+        foreach (var (label, source, expected) in new[]
+        {
+            ("an Object holding Nothing", ObjectComparisonUnderOptimizerExecutionTests.NothingAgainstValues, 4),
+            ("Nothing against typed Integers", ObjectComparisonUnderOptimizerExecutionTests.NothingAgainstTypedIntegers, 0),
+        })
+        {
+            foreach (var (name, text) in new (string, string)[]
+            {
+                ("standard", ReturnCoercionTests.EmitCSharpForTest(source)),
+                ("aggressive", ReturnCoercionTests.EmitCSharpAggressiveForTest(source)),
+                ("project", TempExec.Emit(Bk.CSharp, EntryPoint.ProjectRelease, source)),
+            })
+            {
+                var calls = Count(text, LateBoundCall);
+                if (calls != expected)
+                    failures.Add($"{label}, C# {name}: {calls} late-bound calls where {expected} are due:\n{text}");
+            }
+
+            var js = JsTestSupport.CompileOptimized(source);
+            var jsCalls = Count(js, JsHelper) - Count(js, "function " + JsHelper);
+            if (jsCalls != expected)
+                failures.Add($"{label}, JavaScript standard pipeline: {jsCalls} {JsHelper}…) calls where {expected} are due:\n{js}");
         }
 
         Assert.That(failures, Is.Empty, string.Join("\n", failures));
