@@ -17,6 +17,14 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #203 TESTED — a bare field / Shared field / module global / ByRef operand is read BEFORE a later operand's call, as VB reads it (`IRBuilder.ReadOperand` / `ValueBeforeLaterOperands`; `git log --grep '#203'`)
+- **Fix:** a bare field, Shared field, global or ByRef parameter lowers to an `IRVariable` that C++, JS and MSIL read BY NAME at the consuming instruction, after a later operand's call; when a LATER operand may write it, the read is copied into a `__snap{n}` carrier AT the read (pushed, reserved, in `LocalVariables`, like `__sc` / `__inc`). ⛔ NOT a `DeclareTemp` temp: ADR-0018 E1 — the reserved names are not published until after the walk, so a minted `tN` could collide with a user name, and `SeparateTempsFromUserNames` never renames an `IRVariable`. A ByRef argument is never copied; a plain field read (`o.K`) is not a writer.
+- **Tests (14 new, 1 moved):** `OperandEvaluationOrderExecutionTests` (Integration, 13 groups of 27 vbc-answered probes on C#, C++, JS, MSIL x CLI / `-O` / `CompileProjectFiles`; JS roster now 122 = master 121 + 1) + `OperandEvaluationOrderTextTests` (fast, 1: `K + o.K`, `K + 1`, `K + L` emit no `__snap`). MOVED: the G2b pin is now `DelegateMemberInvocationExecutionTests.G2b_..._EveryBackendPrintsTheOracle_Task203`. Mutants M1-M5 killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,717 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `DelegateMemberInvocation` 52, `UserDelegateGaps` 14, `ExpressionStatementVbRefusal` 15, `PropertyAccess` 74, `CompilerTemp` 164, `NameReservation` 443, `InheritedMember` 36, `Shared` 198 (+1 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header, #292): compound assignment `K += Bump()` evaluates the value BEFORE it reads the target (C++ / JS / MSIL print 111, VB 11); a lambda-captured local that a later call writes; a method receiver `Items.Add(Bump())`; pre-existing: C# CS1620 on a ByRef argument in an expression (#232), JS BL7002, MSIL `String.Concat`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #204 TESTED — `b.Items(0)`, a paren element read through ANY receiver, lowers like the bare `Items(0)` (`SemanticAnalyzer.IsParenElementRead`, `IRBuilder.TryEmitElementRead`; `git log --grep '#204'`)
 - **Tests (14 new, 1 moved):** `QualifiedElementReadExecutionTests` (Integration, 13 rows of vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`: List / Dictionary / `List(Of Action)` / array members read, written and `+=`; a computed index; `Make().Arr(1)` calling Make ONCE; `b.MakeArr(3)` staying a call; `Me.` / `MyBase.` / Shared / Module / inherited / property / nested receivers; the controls; in the JS roster, now 121) + `QualifiedElementReadEmissionTests` (fast, 1: the C# is `b.Items[0]`). MOVED: `DelegateMemberInvocationExecutionTests.G6c_…_PinsTodaysCSharpCompileFailure_Against204` is now `…_PrintsVbcsAnswer_OnEveryBackend_Issue204`. Mutants M1-M4 killed (M1 by P01_P02 / P04 / P07 / the text test / G6c, M2 and M4 by Q21, M3 by Q15); M5 (the `.Item` admission clause) survives BY DESIGN: it is defensive.
 - **Gates (Linux, on the fix 6c47ebba):** fast 0 failed / 12,717 passed / 94 skipped; Integration, one filter each: the fixture 14 / 0 failed, `DelegateMemberInvocation` 52, `Indexer` 53 (+1 skipped, MSVC), `ExpressionStatement` 31, `PropertyAccess` 74, `Array` 329 (+2 skipped, Windows), `JsExecutionTierRoster` 5, all 0 failed; `Collection` 198 passed + 1 FAILED, `CppCollectionTests.Cpp_UnboundCollectionTemporary_StillEmitsPreambleViaFallback` (BC30035, #267's statement check: fails on master too, NOT #204's, fixed apart). Full suite NOT run.
@@ -7071,13 +7079,12 @@ single new failure against the 170-name baseline.
     killed against real NUnit — see `S/t188/tw/mut-results.txt` for the full table (which test
     kills which).
   - **Follow-ups filed, not fixed here** (next in the queue):
-    - **#203** — the BARE spelling of a delegate-member call evaluates its callee's value AFTER its
-      own argument runs, when that argument reassigns the same field (`Handler(Swap(1))` inside the
-      declaring class prints "new 1" where C# prints "old 1"). The `Me.`-qualified and externally-
-      qualified spellings are unaffected — they snapshot the field into a temp BEFORE the arguments
-      run; the bare spelling's `CalleeValue` is an `IRVariable` read INLINE at the call site
-      (ADR-0007's bare-name rule), with no such snapshot. Pinned as `DelegateMemberInvocation
-      ExecutionTests.G2b_BareSpellingEvaluatesTheCalleeAfterItsArgument_PinsTodaysWrongOrder_Against203`.
+    - **#203 — now DONE, see the 2026-10-06 #203 section at the top.** The BARE spelling of a delegate-member
+      call evaluated its callee's value AFTER its own argument ran, when that argument reassigns the same field
+      (`Handler(Swap(1))` inside the declaring class printed "new 1" where C# prints "old 1"). It was never
+      specific to delegates: any bare field / global read to the left of a later operand's call was wrong on
+      C++, JavaScript and MSIL, and #203 fixed them all in `IRBuilder` (a `__snap{n}` carrier). The pin is
+      promoted: `DelegateMemberInvocationExecutionTests.G2b_BareSpellingEvaluatesTheCalleeBeforeItsArgument_EveryBackendPrintsTheOracle_Task203`.
     - **#204 — FIXED** (`git log --grep '#204'`; see the #204 section at the top). A `List(Of Action)`
       FIELD (not a local) indexed with VB's paren syntax through an EXTERNAL, qualified receiver
       (`b.Items(0)`) failed to build on EVERY backend, C# included (`CS1955: Non-invocable member`);
