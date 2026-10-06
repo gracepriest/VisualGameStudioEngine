@@ -37,6 +37,12 @@ namespace VisualGameStudio.Tests.Msil;
 /// CS0019, CS8781) until #211 gave it the same late-bound comparison (ADR-0012). The group in
 /// section 4 now RUNS each on C# against the expectation in this file.
 /// <see cref="CSharpLateBoundComparisonExecutionTests"/> is the C# fixture for the rest.</para>
+///
+/// <para><b>Conversions since #212.</b> A conversion intrinsic of an Object (<c>CInt(o)</c>, <c>CBool(o)</c>, …) is VB's own
+/// <c>Conversions.ToXxx(object)</c> on C# and MSIL, as vbc emits it, where it was <c>System.Convert.ToXxx(object)</c>. Two pins
+/// here moved with it: <c>CIntOfBoxedTrue_…</c> prints vbc's <c>-1</c> (it pinned <c>1</c>), and <c>E14_…</c> ends in vbc's
+/// UNHANDLED InvalidCastException (it expected the .NET answer, a printed <c>format</c>; its expectation had come from C#).
+/// <see cref="ObjectConversionIntrinsicExecutionTests"/> is the fixture for the rest.</para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -104,6 +110,12 @@ public class MsilObjectBoxingExecutionTests
     }
 
     private string BuildReleaseMsilAndRun(string basSource)
+        => RunIlExpectingSuccess(BuildReleaseMsilText(basSource), "App");
+
+    /// <summary>The Release .blproj leg up to the generated IL: the CLI's <c>build -c Release</c>, and the text of the
+    /// <c>App.il</c> it wrote. A caller that expects the PROGRAM to end in an exception (E14, #212) runs it with
+    /// <see cref="MsilHarness.RunIl"/> and reads the outcome itself.</summary>
+    private string BuildReleaseMsilText(string basSource)
     {
         File.WriteAllText(Path.Combine(_projectDir, "Main.bas"), basSource);
         File.WriteAllText(Path.Combine(_projectDir, "App.blproj"),
@@ -133,7 +145,7 @@ public class MsilObjectBoxingExecutionTests
         Assert.That(ilFiles, Is.Not.Empty,
             $"CLI build claimed success but produced no App.il.\nSTDOUT:\n{buildOut}");
 
-        return RunIlExpectingSuccess(File.ReadAllText(ilFiles[0]), "App");
+        return File.ReadAllText(ilFiles[0]);
     }
 
     // ====================================================================================
@@ -676,19 +688,63 @@ public class MsilObjectBoxingExecutionTests
             End Try
         End Sub
         """;
-    private const string E14Expected = "2\n13\n1.5\nTrue\nFalse\n2\nformat";
+
+    // ⛔ #212. E14 ends in an UNHANDLED InvalidCastException — that is vbc's answer, and C# and MSIL give it now.
+    //
+    // `CInt(bad)` of a boxed "abc" is Conversions.ToInteger(object) in VB: it parses the String with VB's own parser
+    // and, when that refuses, throws InvalidCastException ("Conversion from string "abc" to type 'Integer' is not
+    // valid", the FormatException only an inner exception). The program's `Catch ex As FormatException` does not catch
+    // that, so vbc's run prints the six lines below and dies (S/t212/vbonly/e14, re-run by the test-writer). Before
+    // #212 both backends called Convert.ToInt32(object), which throws FormatException, so the program printed "format"
+    // as its seventh line — the .NET answer, which this test had pinned because its expectation came from C#.
+    private const string E14Printed = "2\n13\n1.5\nTrue\nFalse\n2";
 
     [Test]
-    public void E14_ConvertFromObject_CSharpAndMsilAgree()
+    public void E14_ConvertFromObject_CSharpAndMsil_EndInVbcsUnhandledInvalidCast_Task212()
     {
         // JS is excluded here: no lowering for 'CLng' at all — a separate, pre-existing,
         // unrelated gap, not filed under #177.
+        // ⛔ C# runs in a child process (CSharpProcessRunner): an unhandled exception must fail ONE test, and the
+        // in-process runner would throw it into the test host. Standard passes and the aggressive ones; the CLI and
+        // CompileProjectFiles entry points for C# are ObjectConversionIntrinsicExecutionTests'.
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(E14)), Is.EqualTo(E14Expected), "C#");
+            foreach (var (leg, csharp) in new[]
+            {
+                ("C# standard", ReturnCoercionTests.EmitCSharpForTest(E14)),
+                ("C# aggressive", ReturnCoercionTests.EmitCSharpAggressiveForTest(E14)),
+            })
+            {
+                var run = CSharpProcessRunner.Run(csharp);
+                Assert.That(run.Outcome, Is.EqualTo(CSharpRunOutcome.Crashed), $"{leg}: stdout [{run.Output}] stderr [{run.Error}]");
+                Assert.That(run.ExitCode, Is.Not.EqualTo(0), $"{leg}: an unhandled exception ends the process with a non-zero code");
+                Assert.That(Norm(run.Output), Is.EqualTo(E14Printed), $"{leg}: the lines printed before the exception");
+                Assert.That(run.Error, Does.Contain("System.InvalidCastException"), $"{leg}: vbc's exception, not FormatException");
+            }
             AssertCppRefuses(E14);
         });
-        AssertMsilAllEntryPoints(E14, E14Expected);
+
+        // MSIL at all three entry points. The harness reports an unhandled exception as RunFailed, with stdout then
+        // stderr in Output.
+        Assert.Multiple(() =>
+        {
+            AssertEndsInUnhandledInvalidCast("MSIL CLI", Run(E14));
+            AssertEndsInUnhandledInvalidCast("MSIL CLI --optimize", Run(E14, aggressive: true));
+            AssertEndsInUnhandledInvalidCast("MSIL Release .blproj", RunIl(BuildReleaseMsilText(E14), "App"));
+        });
+    }
+
+    private static void AssertEndsInUnhandledInvalidCast(string leg, MsilRun run)
+    {
+        Assert.That(run.Outcome, Is.EqualTo(MsilOutcome.RunFailed), $"{leg}: {run.Report}");
+        // Output is stdout then stderr: the lines the program printed, then the CLR's "Unhandled exception. ..." report.
+        // (The report itself mentions "format" — the inner FormatException of VB's parser — so the .NET answer's regression,
+        // a printed `format` line, is read from the part BEFORE it.)
+        var combined = Norm(run.Output);
+        var marker = combined.IndexOf("Unhandled exception", StringComparison.Ordinal);
+        Assert.That(marker, Is.GreaterThan(0), $"{leg}: no unhandled exception:\n{combined}");
+        Assert.That(combined.Substring(0, marker).Trim(), Is.EqualTo(E14Printed), $"{leg}: the lines printed before the exception");
+        Assert.That(combined.Substring(marker), Does.Contain("System.InvalidCastException"), $"{leg}: vbc's exception, not a bare FormatException:\n{combined}");
     }
 
     private const string E15 = """
@@ -1547,23 +1603,27 @@ public class MsilObjectBoxingExecutionTests
         Assert.That(run.Output.Replace("\r\n", "\n").Trim(), Is.EqualTo("5"), run.Report);
     }
 
-    // #212 — CInt of a boxed True prints 1 on C# and MSIL where VB prints -1 (True widens to
-    // -1, not 1, as an Integer). Pinned on both.
+    // #212, FIXED — CInt of a boxed True is -1 (True widens to -1 as an Integer, all bits set), as vbc prints.
+    // C# and MSIL printed 1: both called System.Convert.ToInt32(object), which answers 1 for a boxed Boolean. Both
+    // call VB's own Conversions.ToInteger(object) now. This was
+    // CIntOfBoxedTrue_CSharpAndMsil_PinTheSameWrongAnswer_Against212, which pinned "1" on both: the pin moved to the
+    // positive assertion rather than being deleted. ObjectConversionIntrinsicExecutionTests is the fixture for the
+    // rest of the conversions, through the CLI, --optimize and CompileProjectFiles.
     private const string CIntOfBoxedTrue =
         "Sub Main()\n Dim o As Object = True\n Console.WriteLine(CInt(o))\nEnd Sub\n";
 
     [Test]
-    public void CIntOfBoxedTrue_CSharpAndMsil_PinTheSameWrongAnswer_Against212()
+    public void CIntOfBoxedTrue_CSharpAndMsil_PrintMinusOne_AsVbcDoes_Task212()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(Norm(FourBackends.RunEmittedCSharp(CIntOfBoxedTrue)), Is.EqualTo("1"), "C#");
-            Assert.That(Norm(RunExpectingSuccess(CIntOfBoxedTrue)), Is.EqualTo("1"), "MSIL");
+            // C# in a child process with a time limit (CSharpProcessRunner), never the in-process runner.
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(CIntOfBoxedTrue))),
+                Is.EqualTo("-1"), "C# standard");
+            Assert.That(Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(CIntOfBoxedTrue))),
+                Is.EqualTo("-1"), "C# aggressive");
         });
-        // task #212 (pre-existing, unrelated to #177): VB's own answer is -1 (True widens to
-        // Integer as -1, all bits set), which is what Convert.ToInt32(object) does NOT do for a
-        // boxed Boolean (it gives 1). A change to "-1" on either backend above means #212
-        // moved — update this pin, do not just delete it.
+        AssertMsilAllEntryPoints(CIntOfBoxedTrue, "-1");
     }
 
     // ====================================================================================

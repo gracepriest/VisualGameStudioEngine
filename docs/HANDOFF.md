@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-06: #212 TESTED — a VB conversion intrinsic of an Object (`CInt` / `CBool` / `CByte` … and `CType(o, T)`) is VB's own `Conversions.ToXxx(object)` on C# and MSIL, as vbc emits it, not `System.Convert` (`CSharpBackend.VbConversionText`; MSIL `EmitConvertFromObject` + `VbObjectConversions`; `git log --grep '#212'`)
+- **Tests (14 new, 7 moved):** `ObjectConversionIntrinsicExecutionTests` (Integration, 10: vbc-answered probes on C# and MSIL x CLI / `--optimize` / `CompileProjectFiles`: a boxed True is -1 / all ones, CBool of a boxed "0" / "12", " 3.5 " and 2.5, a boxed Char / "abc" throws, the Nothing literal and an Object holding Nothing, `CType`, `CStr` stays on `Convert` (`Len(CStr(Nothing))`), an ordinary Integer, a Function result; C# + MSIL only, so under `NotJavaScriptExecution`: roster still 125) + `ObjectConversionIntrinsicShapeTests` (fast, 4: all 11 targets as text on both backends, the typed control, the `(object)null` literal). MOVED: the five `ConversionIntrinsic_…CallsConvertToXxx` rows assert `Conversions::ToXxx` AND the `.assembly extern` line (the ONLY kill of a dropped extern: Linux ilasm infers it), `CIntOfBoxedTrue_…PinTheSameWrongAnswer_Against212` is `…PrintMinusOne_AsVbcDoes_Task212`, `E14_…Agree` is `…EndInVbcsUnhandledInvalidCast_Task212` (vbc's unhandled InvalidCastException; it expected C#'s `format`); CStr is its own case. Mutants M1-M5 (+M5b, MSIL CStr) killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,728 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Conversion` 300, `Object` 230, `NetConversion` 36, `VbConversion` 21, `CSharp` 1,299, `JsExecutionTierRoster` 5 (ilasm / g++ / Node present). Full suite NOT run.
+- ⛔ **Traps / gaps** (fixture header): CStr of an Object stays `Convert.ToString` ON PURPOSE (VB's `CStr(Nothing)` is Nothing and `Len` lowers to `.Length`, so adopting it is a NullReferenceException; a follow-up); `CType(o, Short/Byte)` unboxes and throws; JS Object conversions disagree with VB and JS has no `CLng`; MSIL typed-Boolean `CInt`/`CLng`/`CDbl` print 1 and `CBool` of a typed Double/Integer is refused; ⚠ MSIL accepts neither `Catch ex As InvalidCastException` nor `ex.GetType()`, so a probe tells the exception by `Catch FormatException` then `Catch SystemException`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-06: #211 TESTED — C#: an Object comparison is VB's late-bound comparison, `Operators.ConditionalCompareObject*` (ADR-0012; `CSharpBackend.IsLateBoundComparison` / `LateBoundCaseTest`, `case var _caseN when …`; `git log --grep '#211'`)
 - **Tests (14 new, 10 moved, 2 harness-fixed):** `CSharpLateBoundComparisonExecutionTests` (Integration, 12: vbc-answered probes on C# x CLI / `--optimize` / `CompileProjectFiles`: Object = Object, `o = Nothing` on a 0, `Is` / `Case Is Nothing` stay identity, `Case 1 To 5` on 3.5, a run-time String, a class instance `=` THROWS InvalidCast (as vbc), `<>` / `<`, a `When` guard, `Case Nothing`, nested Select + Or pattern, a String subject, the Object on the right + loop conditions; C# only, so under `NotJavaScriptExecution`: roster still 124) + `CSharpLateBoundComparisonShapeTests` (fast, 2: typed comparisons emit no late-bound call; the Nothing literal never makes one). MOVED: `MsilObjectBoxingExecutionTests.ObjectComparison_RefusesToCompileOnCSharp_PinnedForTask211` (10) is now `…_CompilesAndRunsOnCSharp_AsVbcAnswers_Task211`. Mutants M1-M5 killed (fixture header).
 - **Gates (Linux):** fast 0 failed / 12,723 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `MsilObjectBoxing` 99, `Object` 216, `SelectCase` 83, `LateBound` 28, `CSharp` 1,297, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -6826,9 +6833,10 @@ single new failure against the 170-name baseline.
       and throws `MissingMethodException` at run time. (C# used to drop the `MyBase.Show(5)` call
       ENTIRELY, for any parameter type — that was #139, FIXED 2026-10-04: C# now writes it and prints
       vbc's `5`, so C# is a usable oracle for this program; the MSIL pin is unchanged.)
-    - **#212** — `CInt` of a boxed `True` prints `1` on both C# and MSIL, where VB's own answer is
-      `-1` (`True` widens to Integer as all bits set, which `Convert.ToInt32(object)` does not do
-      for a boxed Boolean).
+    - **#212** — `CInt` of a boxed `True` printed `1` on both C# and MSIL, where VB's own answer is
+      `-1` (`Convert.ToInt32(object)` does not widen a boxed Boolean as all bits set) — FIXED
+      2026-10-06, see the #212 section at the top: an Object conversion is VB's
+      `Conversions.ToXxx(object)` now, and this pin is `CIntOfBoxedTrue_…PrintMinusOne_AsVbcDoes_Task212`.
     - #208-#210 were filed while briefing #178 (ReadOnly/WriteOnly diagnostics), not by #177:
       **#208** `Shared Sub New` never ran on any backend (a Shared field it sets read 0) — FIXED 2026-10-06, see the #208 section at the top;
       **#209** a property passed ByRef loses VB's copy-back (C++ silently, C# CS0206, MSIL
