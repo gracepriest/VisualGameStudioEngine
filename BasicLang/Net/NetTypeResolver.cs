@@ -1341,7 +1341,9 @@ namespace BasicLang.Net
                         // An indexer's parameters, empty for an ordinary property. Without these
                         // two indexers present one identity and the collapse eats one.
                         Describe(property.Parameters),
-                        isSettable: IsSettable(property));
+                        isSettable: IsSettable(property),
+                        // #222: no setter of ANY accessibility — VB's ReadOnly (BC30526).
+                        isGetOnly: property.SetMethod == null);
 
                 case IFieldSymbol field:
                     return new NetMemberDescriptor(

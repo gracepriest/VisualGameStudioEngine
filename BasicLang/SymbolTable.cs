@@ -551,9 +551,10 @@ public class TypeInfo
         /// For a <see cref="SymbolKind.Property"/> declared in BasicLang source — a class's or an
         /// INTERFACE's: declared <c>ReadOnly</c> / <c>WriteOnly</c>; and the built-in
         /// <c>Exception</c>'s hand-built <c>Message</c> / <c>StackTrace</c> / <c>InnerException</c>,
-        /// ReadOnly as in .NET (#220). False for every other symbol, a .NET property included
-        /// (task #178, rule 5: those are left to csc unless the .NET resolver positively knows,
-        /// and it does not carry the fact — #222).
+        /// ReadOnly as in .NET (#220). False for every other symbol. A .NET property binds no
+        /// symbol at all; its ReadOnly-ness is a fact of the hand-built tables or of metadata,
+        /// judged by <c>SemanticAnalyzer.ReadOnlyNetPropertyName</c> (#222; task #178's rule 5,
+        /// "left to csc unless it is positively known", now that it is).
         ///
         /// <para>⭐ Read by the analyzer's two access judgments: a write of a ReadOnly property is
         /// VB's BC30526 (<c>SemanticAnalyzer.CheckPropertyWrite</c>) and a read of a WriteOnly one
