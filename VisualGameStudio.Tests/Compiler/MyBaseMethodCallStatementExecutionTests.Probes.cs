@@ -451,7 +451,7 @@ internal static class MyBaseCallProbes
         206
         """, Bk.All, HangSafe: true);
 
-    /// <summary>a bottom-tested loop (`Do ... Loop While`, `Do ... Loop`) whose body C# writes more than once (#227's peel): the call must still run once per iteration.</summary>
+    /// <summary>a bottom-tested loop (`Do ... Loop While`) and a top-tested one (`Do Until ... Loop`): the call runs once per iteration. (C# used to write the body twice, a peel plus a copy, #227; it is written once now.)</summary>
     internal static readonly TempProbe c5b_dowhile = new("c5b_dowhile", """
         ' MyBase.M() in the body of a bottom-tested loop (Do ... Loop While), counter
         Class Base

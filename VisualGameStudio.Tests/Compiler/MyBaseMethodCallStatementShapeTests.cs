@@ -112,7 +112,8 @@ public class MyBaseMethodCallStatementShapeTests
     /// <summary>
     /// A row's expectation: its statement-form base calls as (the line before, the call, the line after) — the neighbours are matched as a PREFIX, so a change to how an
     /// unrelated statement is spelled (`Console.WriteLine(` …) does not move this table; the call itself is exact — and its inline uses, exact, in order.
-    /// A bottom-tested loop is written twice by the emitter (the peel, then the loop), so its call appears in both copies.
+    /// A bottom-tested loop is written ONCE (#227: `do { … } while (c);`; it was a peeled first iteration plus a copy of the body, so its call appeared twice), so
+    /// its call appears once, as often as the source calls it.
     /// </summary>
     public sealed record Expected(string Id, (string Prev, string Stmt, string Next)[] Statements, string[] Inline)
     {
@@ -133,7 +134,7 @@ public class MyBaseMethodCallStatementShapeTests
         new("c3b_lamvalue", None, new[] { "f = () => base.Tag(n) + 10;" }),
         new("c4_if", new[] { ("{", "base.Bump(1);", "}"), ("{", "base.Bump(100);", "}") }, NoInline),
         new("c5_loop", new[] { ("{", "base.Bump(i);", "i = i + 1;"), ("{", "base.Bump(100);", "j = j + 1;") }, NoInline),
-        new("c5b_dowhile", new[] { ("i = 0;", "base.Bump(10);", "i = i + 1;"), ("{", "base.Bump(10);", "i = i + 1;"), ("{", "base.Bump(1);", "i = i + 1;") }, NoInline),
+        new("c5b_dowhile", new[] { ("{", "base.Bump(10);", "i = i + 1;"), ("{", "base.Bump(1);", "i = i + 1;") }, NoInline), // #227: the Do … Loop While body is written ONCE (it was a peel plus a copy: the first call twice)
         new("c5c_foreach", new[] { ("{", "base.Bump(1);", "}"), ("{", "base.Bump(20);", "}"), ("{", "base.Bump(300);", "}") }, NoInline),
         new("c6_select", new[] { ("case 1:", "base.Bump(1);", "break;"), ("case 2:", "base.Bump(20);", "break;"), ("default:", "base.Bump(300);", "break;") }, NoInline),
         new("c7_try", new[] { ("{", "base.Bump(1);", "if (x > 0)"), ("{", "base.Bump(10);", "}"), ("{", "base.Bump(100);", "}") }, NoInline),
@@ -343,14 +344,14 @@ public class MyBaseMethodCallStatementShapeTests
     // ============================================================================================
 
     /// <summary>
-    /// A statement-level base call outside a lambda body is preceded by the `#line` of the source line it is written on (the debugger steps by it; the peeled first
-    /// iteration of a bottom-tested loop carries it too). Inside a lambda body no `#line` is written (#136), so those calls are not asked.
+    /// A statement-level base call outside a lambda body is preceded by the `#line` of the source line it is written on (the debugger steps by it; the body of a
+    /// bottom-tested loop carries it too). Inside a lambda body no `#line` is written (#136), so those calls are not asked.
     /// </summary>
     [TestCase("s1_sub", TestName = "TheLineOfASubCall")]
     [TestCase("s2_func", TestName = "TheLineOfADiscardedFunctionCall")]
     [TestCase("c1_ctor", TestName = "TheLineOfAConstructorCall")]
     [TestCase("c2_prop", TestName = "TheLineOfAPropertyAccessorCall")]
-    [TestCase("c5b_dowhile", TestName = "TheLineOfALoopBodyCall_AndItsPeel")]
+    [TestCase("c5b_dowhile", TestName = "TheLineOfALoopBodyCall")]
     [TestCase("c7_try", TestName = "TheLineOfATryCatchFinallyCall")]
     public void AStatementLevelBaseCall_IsPrecededByTheLineDirectiveOfItsSourceLine(string id)
     {

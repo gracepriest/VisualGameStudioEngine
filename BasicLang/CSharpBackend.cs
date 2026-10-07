@@ -125,12 +125,25 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private PerIterationPlan _perIter = PerIterationPlan.Empty;
 
         /// <summary>
-        /// The first iteration of a <c>Do … Loop While</c> whose body has captured locals, while it is
-        /// being written. This backend peels that iteration — the body is emitted once before the
-        /// <c>while</c> and once inside it — so the peeled copy gets its own braces (its <c>x</c>
-        /// would otherwise clash with the loop's, CS0136), closed where it branches to the condition.
+        /// #227: the bottom-tested loops (<c>Do … Loop While/Until</c>, <c>Do … Loop</c>) whose body
+        /// is being written, innermost on top — see <see cref="GenerateBottomTestedLoop"/>.
         /// </summary>
-        private readonly Stack<(BasicBlock Cond, BasicBlock Body)> _openPeels = new();
+        private readonly Stack<BottomTestedLoop> _openBottomTested = new();
+
+        /// <summary>#227: one bottom-tested loop while its body is being written.</summary>
+        private sealed class BottomTestedLoop
+        {
+            public BasicBlock Body;
+            /// <summary><c>doN.cond</c>; null when the optimizer removed it (no iteration completes).</summary>
+            public BasicBlock Cond;
+            public BasicBlock End;
+            /// <summary>The loop's own test, when it is <c>do { … } while (…);</c>; null for <c>while (true)</c>.</summary>
+            public IRConditionalBranch PlainTest;
+            /// <summary>The iteration's <see cref="CloseIteration"/> is written (at the branch to <see cref="Cond"/>).</summary>
+            public bool IterationClosed;
+            /// <summary><c>while (true)</c> only: the exit test is written (the walk reached the loop's own branch).</summary>
+            public bool ExitTestWritten;
+        }
 
         /// <summary>
         /// #256: the bodies of the <c>While</c>/<c>Do</c> loops whose <c>while (true)</c> is open and
@@ -2206,7 +2219,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             public string[] IssuedForEachNames;
             public IRFunction ForEachNamesOwner;
             public PerIterationPlan PerIter;
-            public (BasicBlock Cond, BasicBlock Body)[] OpenPeels;
+            public BottomTestedLoop[] OpenBottomTested;
             public BasicBlock[] ReentrantLoopBodies;
             public int LastEmittedSourceLine;
             public string LastEmittedSourceFile;
@@ -2233,9 +2246,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// </list>
         /// <para>What starts FRESH: use counts, materialised temps, processed blocks, the
         /// loop/switch/exit bookkeeping (a <c>break</c> in a lambda can never leave an enclosing
-        /// loop), the If-merge claims, ADR-0014's per-iteration plan and open peels, #256's
-        /// re-entrant loops. A lambda written inside an enclosing loop's body must not see that
-        /// loop's open state, and must not leave its own behind.</para>
+        /// loop), the If-merge claims, ADR-0014's per-iteration plan, #227's open bottom-tested
+        /// loops, #256's re-entrant loops. A lambda written inside an enclosing loop's body must not
+        /// see that loop's open state, and must not leave its own behind.</para>
         /// </summary>
         private OuterEmitState EnterLambdaScope(IRFunction lambdaFunc)
         {
@@ -2261,7 +2274,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 IssuedForEachNames = _issuedForEachNames.ToArray(),
                 ForEachNamesOwner = _forEachNamesOwner,
                 PerIter = _perIter,
-                OpenPeels = _openPeels.ToArray(),
+                OpenBottomTested = _openBottomTested.ToArray(),
                 ReentrantLoopBodies = _reentrantLoopBodies.ToArray(),
                 LastEmittedSourceLine = _lastEmittedSourceLine,
                 LastEmittedSourceFile = _lastEmittedSourceFile,
@@ -2313,7 +2326,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             ResetLoopExitState();
             _forEachNamesOwner = lambdaFunc;
             _perIter = PerIterationPlan.Empty;
-            _openPeels.Clear();
+            _openBottomTested.Clear();
             _reentrantLoopBodies.Clear();
 
             return outer;
@@ -2357,8 +2370,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _forEachNamesOwner = outer.ForEachNamesOwner;
 
             _perIter = outer.PerIter;
-            _openPeels.Clear();
-            for (var i = outer.OpenPeels.Length - 1; i >= 0; i--) _openPeels.Push(outer.OpenPeels[i]);
+            _openBottomTested.Clear();
+            for (var i = outer.OpenBottomTested.Length - 1; i >= 0; i--) _openBottomTested.Push(outer.OpenBottomTested[i]);
             _reentrantLoopBodies.Clear();
             for (var i = outer.ReentrantLoopBodies.Length - 1; i >= 0; i--) _reentrantLoopBodies.Push(outer.ReentrantLoopBodies[i]);
 
@@ -2491,41 +2504,180 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             _processedBlocks.Add(block);
 
-            // ADR-0014: a Do … Loop While/Until body reached here is its PEELED first iteration (a
-            // pre-test body is only emitted by GenerateLoop, a For Each body by Visit(IRForEach)).
-            // Its captured locals get braces of their own, closed where it branches to the condition
-            // (HandleUnconditionalBranch) — or below, if it never does.
-            var peel = _perIter.AtBody(block);
-            BasicBlock peelCond = null;
-            if (peel.Count > 0 && peel[0].Loop.Kind == IRLoopKind.Do && peel[0].Loop.Continue != null)
+            // #227: a Do … Loop While/Until (or Do … Loop) body reached here is entered from the
+            // block BEFORE the loop — a pre-test body is only emitted by GenerateLoop, a For Each
+            // body by Visit(IRForEach) — and the whole loop is written from here, once.
+            if (IsBottomTestedLoopBody(block, out var bottomCond, out var bottomEnd))
             {
-                peelCond = peel[0].Loop.Continue;
-                WriteLine("{");
-                Indent();
-                OpenIteration(block);
-                _openPeels.Push((peelCond, block));
+                GenerateBottomTestedLoop(block, bottomCond, bottomEnd);
+                return;
             }
 
-            try
+            GenerateStructuredBlockCore(block);
+        }
+
+        /// <summary>
+        /// #227 — whether <paramref name="block"/> is the body of a bottom-tested <c>Do</c> loop being
+        /// ENTERED: <c>doN.body</c> whose <c>doN.cond</c> the walk has not written. A pre-test
+        /// <c>Do While</c>'s body is entered from its condition, which is written first; a
+        /// bottom-tested one's from the block before the loop (<c>IRBuilder.Visit(DoLoopNode)</c>).
+        /// <paramref name="cond"/> is null when the optimizer removed it (no iteration completes),
+        /// <paramref name="end"/> when nothing leaves the loop.
+        /// </summary>
+        private bool IsBottomTestedLoopBody(BasicBlock block, out BasicBlock cond, out BasicBlock end)
+        {
+            cond = null;
+            end = null;
+            var name = block?.Name;
+            if (name == null || !name.StartsWith("do", StringComparison.Ordinal) || !name.EndsWith(".body", StringComparison.Ordinal))
+                return false;
+            var prefix = name.Substring(0, name.Length - ".body".Length);
+            if (prefix.Length <= 2 || !prefix.Skip(2).All(char.IsDigit))
+                return false;
+            // Its siblings are looked up in the function being written, which must be the block's own.
+            var blocks = _currentFunction?.Blocks;
+            if (blocks == null || !blocks.Contains(block))
+                return false;
+            cond = blocks.FirstOrDefault(b => b.Name == prefix + ".cond");
+            end = blocks.FirstOrDefault(b => b.Name == prefix + ".end");
+            return cond == null || !_processedBlocks.Contains(cond);
+        }
+
+        /// <summary>
+        /// #227 — a bottom-tested loop (<c>Do … Loop While/Until</c>, <c>Do … Loop</c>), written ONCE
+        /// from its body (see <see cref="IsBottomTestedLoopBody"/>).
+        ///
+        /// <para>⛔ It used to be a PEELED first iteration — the walk reached the body first and
+        /// wrote it straight — followed by <c>while (cond) { body }</c> when it reached the
+        /// condition. The second copy could not hold any block the first had already written:
+        /// an <c>If</c>'s continuation, a nested loop, the statements after them. MEASURED through
+        /// the CLI, the optimizer and a project build: a statement after an <c>If</c> ran in the
+        /// first iteration only (<c>body=101</c> for vbc's 103); a plain <c>Do … Loop Until i &gt;= 3</c>
+        /// around a <c>Do While</c> lost the inner loop from its copy and never ended; a
+        /// <c>Do … Loop</c> ran its body once. JavaScript, C++ and MSIL were right — they do not
+        /// rebuild structure from the CFG this way.</para>
+        ///
+        /// <para>A condition that is one block writing nothing — the loop's own branch and
+        /// expression temps — is <c>do { body } while (cond);</c>. Anything else (control flow,
+        /// #256's <c>AndAlso</c>/<c>OrElse</c>/<c>If()</c>; a store, #141; no condition at all) is
+        /// <c>while (true) { body; …condition…; if (!c) break; }</c>: the body's branch to the
+        /// condition walks into it (<see cref="HandleUnconditionalBranch"/>) and the loop's own
+        /// branch is the exit test (<see cref="HandleConditionalBranch"/>), so every path back to the
+        /// test re-runs all of it.</para>
+        /// </summary>
+        private void GenerateBottomTestedLoop(BasicBlock body, BasicBlock cond, BasicBlock end)
+        {
+            var loop = new BottomTestedLoop { Body = body, Cond = cond, End = end, PlainTest = PlainBottomTest(body, cond) };
+
+            if (end != null)
+                _loopEndBlocks.Push(end);
+            _loopSwitchDepths.Push(_switchDepth);
+            _openBottomTested.Push(loop);
+
+            WriteLine(loop.PlainTest != null ? "do" : "while (true)");
+            WriteLine("{");
+            Indent();
+
+            // ADR-0014: this iteration's captured locals, copied forward from their carriers, and the
+            // try the rest of the body runs in (A1) — closed at the branch to the condition.
+            OpenIteration(body);
+            GenerateStructuredBlockCore(body);
+            if (!loop.IterationClosed)
+                CloseIteration(body);   // no path reached the condition
+
+            if (_openBottomTested.Count == 0 || !ReferenceEquals(_openBottomTested.Pop(), loop))
+                throw new InvalidOperationException($"CSharpBackend: bottom-tested loop '{body.Name}' was closed out of order (#227).");
+
+            // The walk out of the body ends at the condition's own branch. If the condition can be
+            // reached and that branch was never written, `while (true)` would never end.
+            if (loop.PlainTest == null && cond?.Instructions.LastOrDefault() is IRConditionalBranch
+                && !loop.ExitTestWritten && ReachesWithoutReentering(body, cond, end))
+                throw new InvalidOperationException(
+                    $"CSharpBackend: the body of loop '{body.Name}' never reached its condition's own branch (#227).");
+
+            Unindent();
+            if (loop.PlainTest != null)
             {
-                GenerateStructuredBlockCore(block);
+                _processedBlocks.Add(cond);
+                WriteLine("}");
+                EmitBlockInstructions(cond);   // writes nothing but comments: see PlainBottomTest
+                if (loop.PlainTest.SourceLine > 0)
+                    EmitLineDirective(loop.PlainTest.SourceLine, _currentFunction?.SourceFilePath);
+                var condition = EmitExpression(loop.PlainTest.Condition);
+                // While loops back while the condition holds, Until while it does not.
+                var loopsWhenTrue = ReferenceEquals(loop.PlainTest.TrueTarget, body);
+                WriteLine(loopsWhenTrue ? $"while ({condition});" : $"while (!({condition}));");
             }
-            finally
+            else
             {
-                if (peelCond != null && _openPeels.Count > 0 && ReferenceEquals(_openPeels.Peek().Cond, peelCond))
-                {
-                    var (_, peeledBody) = _openPeels.Pop();
-                    CloseIteration(peeledBody);
-                    Unindent();
-                    WriteLine("}");
-                }
+                WriteLine("}");
+            }
+            EmitLoopExitLabelIfNeeded(end);
+
+            if (end != null)
+                _loopEndBlocks.Pop();
+            _loopSwitchDepths.Pop();
+
+            // Continue after the loop
+            if (end != null && !_processedBlocks.Contains(end))
+            {
+                _processedBlocks.Add(end);
+                EmitBlockInstructions(end);
+                EmitContinuationTerminator(end);
             }
         }
 
+        /// <summary>
+        /// #227: the loop's own branch, when <paramref name="cond"/> can be the text of
+        /// <c>do { … } while (…);</c> — one block, ending in that branch, in which nothing but the
+        /// branch would be WRITTEN as a statement (a store, a materialised temp, a call made for its
+        /// effect: those must run before every test, inside the loop). Null otherwise.
+        /// </summary>
+        private IRConditionalBranch PlainBottomTest(BasicBlock body, BasicBlock cond)
+        {
+            if (cond?.Instructions.LastOrDefault() is not IRConditionalBranch test
+                || test.TrueTarget == null || test.FalseTarget == null)
+                return null;
+            if (!IsLoopHeader(test.TrueTarget, test.FalseTarget, out var ownBody, out _, out _, out _, out _)
+                || !ReferenceEquals(ownBody, body))
+                return null;
+            foreach (var instruction in cond.Instructions)
+            {
+                if (ReferenceEquals(instruction, test) || instruction is IRComment) continue;
+                if (WritesStorage(instruction) || ShouldEmitInstruction(instruction)) return null;
+            }
+            return test;
+        }
+
+        /// <summary>Whether <paramref name="target"/> is reachable from <paramref name="body"/>'s
+        /// successors without passing <paramref name="end"/> or <paramref name="body"/> again.</summary>
+        private static bool ReachesWithoutReentering(BasicBlock body, BasicBlock target, BasicBlock end)
+        {
+            var seen = new HashSet<BasicBlock>(ReferenceEqualityComparer.Instance) { body };
+            if (end != null) seen.Add(end);
+            var stack = new Stack<BasicBlock>(ControlFlowGraph.SuccessorsOf(body));
+            while (stack.Count > 0)
+            {
+                var b = stack.Pop();
+                if (b == null || !seen.Add(b)) continue;
+                if (ReferenceEquals(b, target)) return true;
+                foreach (var s in ControlFlowGraph.SuccessorsOf(b)) stack.Push(s);
+            }
+            return false;
+        }
+
+        /// <summary>#227: whether <paramref name="block"/> is the condition of the innermost
+        /// bottom-tested loop being written.</summary>
+        private bool IsOpenBottomTestedCondition(BasicBlock block) =>
+            block != null && _openBottomTested.Count > 0 && ReferenceEquals(_openBottomTested.Peek().Cond, block);
+
         private void GenerateStructuredBlockCore(BasicBlock block)
         {
-            // #256: a While/Do condition holding control flow is written INSIDE `while (true)`.
-            if (OpensReentrantLoop(block, out var reentrantBody))
+            // #256: a While/Do condition holding control flow is written INSIDE `while (true)` —
+            // except a bottom-tested loop's (#227), whose `while (true)` is already open around its
+            // body (GenerateBottomTestedLoop).
+            BasicBlock reentrantBody = null;
+            if (!IsOpenBottomTestedCondition(block) && OpensReentrantLoop(block, out reentrantBody))
             {
                 if (block.Instructions.LastOrDefault() is IRInstruction head && head.SourceLine > 0)
                     EmitLineDirective(head.SourceLine, _currentFunction?.SourceFilePath);
@@ -2696,6 +2848,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Detect loop patterns
             if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType, out var negateCondition))
             {
+                // #227: the own branch of a bottom-tested loop, whose `while (true)` is open around
+                // its body and whose condition the walk has just written (GenerateBottomTestedLoop)
+                // — the exit test, at the end of the iteration. Never a second copy of the body.
+                if (_openBottomTested.Count > 0 && ReferenceEquals(_openBottomTested.Peek().Body, loopBody))
+                {
+                    var bottom = _openBottomTested.Peek();
+                    bottom.ExitTestWritten = true;
+                    var leave = LoopExitStatement(loopEnd);
+                    WriteLine(negateCondition ? $"if ({condition}) {leave}" : $"if (!({condition})) {leave}");
+                    return;
+                }
+
                 // #256: this loop's `while (true)` and its condition are already written (see
                 // OpensReentrantLoop) — the branch becomes the exit test. While leaves when the
                 // condition is false, Until when it is true.
@@ -2746,14 +2910,21 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             var target = branch.Target;
 
-            // ADR-0014: the peeled first iteration of a Do loop ends where it branches to the
-            // condition — close its try, its finally and its braces there.
-            if (_openPeels.Count > 0 && target != null && ReferenceEquals(_openPeels.Peek().Cond, target))
+            // #227: the body of a bottom-tested loop ends where it branches to its condition —
+            // ADR-0014's iteration (its try and finally) closes there. `do { … } while (c);` writes
+            // its test after the closing brace; under `while (true)` the walk goes on into the
+            // condition, which ends in the exit test (HandleConditionalBranch).
+            if (IsOpenBottomTestedCondition(target))
             {
-                var (_, peeledBody) = _openPeels.Pop();
-                CloseIteration(peeledBody);
-                Unindent();
-                WriteLine("}");
+                var bottom = _openBottomTested.Peek();
+                if (!bottom.IterationClosed)
+                {
+                    bottom.IterationClosed = true;
+                    CloseIteration(bottom.Body);
+                }
+                if (bottom.PlainTest == null)
+                    GenerateStructuredBlock(target);
+                return;
             }
 
             // ADR-0014 A1: a wrapped counted For's step comes after the body's finally, which
@@ -3203,8 +3374,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// MSIL stop after three iterations; a loop left by <c>Exit</c> ended, having run its
         /// condition once. The loop is written <c>while (true) { …condition…; if (!c) break; …body… }</c>
         /// instead — the shape the JavaScript backend gives every loop — so every path back to the
-        /// condition re-runs all of it: the body's end, and a bottom-tested loop's test after its
-        /// peeled first iteration.</para>
+        /// condition re-runs all of it.</para>
         ///
         /// <para>A condition that is ONE block — a compare, a call, <c>Not</c>, <c>And</c>/<c>Or</c> —
         /// keeps <c>while (cond)</c>, byte for byte, unless the block also stores (#141, a <c>++</c>
@@ -3213,9 +3383,13 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// its emission: its <c>To</c> bound sits in its condition block, and an <c>If()</c> there is
         /// computed once before the loop, as VB evaluates the bound.</para>
         ///
-        /// <para>⚠ Not #227: a bottom-tested loop's body is still emitted twice (the peel, then the
-        /// loop's copy), and the copy drops every block the peel already wrote — an <c>If</c>'s
-        /// continuation, a nested loop. That is wrong with a plain condition too, and unchanged here.</para>
+        /// <para>Pre-test loops only. A bottom-tested loop's (<c>Do … Loop While/Until</c>) condition
+        /// is reached from the END of its body, inside the loop <see cref="GenerateBottomTestedLoop"/>
+        /// has already opened (#227: <c>while (true) { body; …condition…; if (!c) break; }</c>, or
+        /// <c>do { body } while (c);</c> for a one-block condition that writes nothing), and never
+        /// opens a loop of its own (<see cref="IsOpenBottomTestedCondition"/>). It used to be reached
+        /// after a peeled first iteration, and open this loop around a second copy of the body that
+        /// dropped every block the first had written.</para>
         /// </summary>
         private bool OpensReentrantLoop(BasicBlock block, out BasicBlock body)
         {
@@ -3583,16 +3757,18 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// switch, and it is emitted ONLY in that case so the ordinary loops keep reading as
         /// ordinary loops.</para>
         /// </summary>
-        private void EmitLoopExit(BasicBlock endBlock)
+        private void EmitLoopExit(BasicBlock endBlock) => WriteLine(LoopExitStatement(endBlock));
+
+        /// <summary>The statement <see cref="EmitLoopExit"/> writes (and the label it books).</summary>
+        private string LoopExitStatement(BasicBlock endBlock)
         {
             if (_loopSwitchDepths.Count > 0 && _switchDepth > _loopSwitchDepths.Peek())
             {
                 _labelledLoopEnds.Add(endBlock);
-                WriteLine($"goto {LoopExitLabel(endBlock)};");
-                return;
+                return $"goto {LoopExitLabel(endBlock)};";
             }
 
-            WriteLine("break;");
+            return "break;";
         }
 
         /// <summary>
@@ -3844,7 +4020,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // (OpenIteration); its CARRIER takes its place here, with the default the
             // variable itself would have had, and is never reset.
             _perIter = PerIterationPlan.Build(_currentModule, function);
-            _openPeels.Clear();
+            _openBottomTested.Clear();
             _reentrantLoopBodies.Clear();
 
             foreach (var localVar in function.LocalVariables)

@@ -692,6 +692,8 @@ public class JsExecutionTierRosterTests
         "CppUserExceptionExecutionTests",
         // Task #225: a generic delegate or collection in an MSIL type-token position (a sized array of Func / Action / List, a For Each over a List of them, an array type) assembles, run against vbc on MSIL with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript already answered these programs.
         "MsilGenericTypeTokenExecutionTests",
+        // Tasks #227 / #293: a bottom-tested loop (`Do … Loop While/Until`, `Do … Loop` left by `Exit Do`) is written once on C#, run against vbc on C# only, through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays 131.
+        "BottomTestedLoopCSharpExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

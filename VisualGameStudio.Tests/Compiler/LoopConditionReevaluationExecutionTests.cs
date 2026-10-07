@@ -33,10 +33,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⛔ CELLS WITH NO EXPECTATION — each is a defect that is NOT #256's, measured on the fixed build and on the build before it. Asserting
 //  one would pin the defect (and a hang would have to be pinned through the runner). Their rows exist, with the other backends.
 //
-//    C# #227   f_LW_aa f_LW_ctl x_LW n_LD n_LDctl   a bottom-tested loop (`Do … Loop While/Until`) is emitted twice — the peel, then the
-//                                                    loop's copy — and the copy drops every block the peel already wrote (an If's
-//                                                    continuation, a nested loop). Wrong with a PLAIN condition too (f_LW_ctl); n_LDctl,
-//                                                    the nesting with plain conditions, HANGS before and after #256.
+//    — (C# #227, f_LW_aa f_LW_ctl x_LW n_LD n_LDctl, were here: a bottom-tested loop (`Do … Loop While/Until`) was emitted twice — a peel, then
+//       the loop's copy — and the copy dropped every block the peel had written (an If's continuation, a nested loop); n_LDctl HUNG. FIXED:
+//       the loop is written once (CSharpBackend.GenerateBottomTestedLoop) and all five run on C#, hang-safe, with vbc's answer and its counter.
+//       BottomTestedLoopCSharpExecutionTests holds the rows of that fix.)
 //    — (C# l_fn l_sub, a loop inside a lambda, were #136 here: CS1643 / the lambda's writes lost. The lambda body is written by the
 //       function-body emitter now and both run on C#, hang-safe, with vbc's answer and its counter: `k=3 seen=abababa`, `total=6 seen=abababa`.)
 //    MSIL #257 W_nt DW_nt DU_nt LW_nt LU_nt          `Not (a AndAlso b)`: MSIL's `Not` is bitwise (three of those cells hang, two are wrong).
@@ -80,7 +80,7 @@ public class LoopConditionReevaluationExecutionTests
     /// <summary>
     /// The tables ARE the proof, so their shape is pinned: a row cannot vanish, and a backend cannot be dropped from one, without this
     /// test saying so. The cells WITHOUT an expectation are pinned by name too — the header says why each is there, and a defect that gets
-    /// fixed (#227, #257, #261; #136 was one until l_fn and l_sub got their C# cells) must come back in as a row on purpose. It is also the fixture's one plain [Test]:
+    /// fixed (#257, #261; #136 was one until l_fn and l_sub got their C# cells, #227 until f_LW_aa, f_LW_ctl, x_LW, n_LD and n_LDctl got theirs) must come back in as a row on purpose. It is also the fixture's one plain [Test]:
     /// <c>JsExecutionTierRosterTests</c> counts attributes, and a fixture whose tests are all [TestCaseSource] counts as empty.
     /// </summary>
     [Test]
@@ -99,7 +99,7 @@ public class LoopConditionReevaluationExecutionTests
                 Is.Empty, "a row with no side-effect counter (only the plain-condition CONTROLS, `…ctl`, have none)");
 
             // the cells with NO expectation, by backend
-            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.CSharp))), Is.EqualTo("f_LW_aa,f_LW_ctl,n_LD,n_LDctl,x_LW"), "C# cells with no expectation (#227)");
+            Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.CSharp))), Is.Empty, "C# cells with no expectation: none since #227 (f_LW_aa, f_LW_ctl, n_LD, n_LDctl and x_LW print vbc's answer)");
             Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Msil))), Is.EqualTo("W_nt,DW_nt,DU_nt,LW_nt,LU_nt,o_for"),
                 "MSIL cells with no expectation (#257 Not, #261 For bound)");
             Assert.That(Ids(all.Where(p => !p.Agrees.HasFlag(Bk.Cpp))), Is.EqualTo("o_for"), "C++ cells with no expectation (#261)");
@@ -112,7 +112,7 @@ public class LoopConditionReevaluationExecutionTests
 
             // the cell counts, per table
             Assert.That(GridCells().Count(), Is.EqualTo(110), "35 C# + 35 C++ + 30 MSIL + 10 JavaScript");
-            Assert.That(ExtraCells().Count(), Is.EqualTo(59), "was 57; l_fn and l_sub gained their C# cells (#136)");
+            Assert.That(ExtraCells().Count(), Is.EqualTo(64), "was 59, and 57 before #136 (l_fn and l_sub gained their C# cells); f_LW_aa, f_LW_ctl, n_LD, n_LDctl and x_LW gained theirs (#227)");
             Assert.That(JsRefusedCells().Count(), Is.EqualTo(129), "43 programs x 3 entry points");
 
             // the stress table: ten conditions the grid has no row for, in While and Do … Loop While, C# and C++

@@ -87,7 +87,7 @@ another test goes green.
   or use the optimizer-running test helper (`CompileToCppOptimized` in `CppCollectionTests.cs`).
 - **A test that RUNS a loop on C# goes through `CSharpProcessRunner` (or `TempProbe.HangSafe`)**,
   never the in-process `FourBackends.RunEmittedCSharp*`: those have no timeout, so a hanging
-  loop freezes the whole test host instead of failing one test (#256; #227 can still hang).
+  loop freezes the whole test host instead of failing one test (#256, #227 — a regression of either hangs).
 - **Test both entry points.** The IDE build delegates to the CLI engine
   (`CompileProjectFiles`); a fix verified only through the test helper can still break
   via the IDE or the CLI. Exercise both.
