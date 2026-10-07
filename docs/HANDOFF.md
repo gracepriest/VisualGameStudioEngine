@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #219 + #249 TESTED — VB's implicit return variable: `F = v` in a Function and `P = v` in a Get bind to a Local the IR carries as `__ret`; falling off the end, `Exit Function` and `Exit Property` return it (`SemanticAnalyzer.AsReturnVariable`; BC36946 Async/Iterator, BC30066; `git log --grep '#219'`)
+- **Tests (14 new, 1 moved):** `ImplicitReturnVariableExecutionTests` (Integration, 11 vbc-answered programs on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 128 = master 127 + 1) + `ImplicitReturnVariableDiagnosticsTests` (fast, 3). MOVED: `PropertyAccessExecutionTests.E09_…` is positive (`…_PrintsVbs43_Task219`); #249 and #219 no longer read as open. Mutants M1-M6 killed (fixture header).
+- **Gates (Linux):** fast 0 failed / 12,735 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 11, `PropertyAccess` 75, `Function` 506, `Return` 850, `NameBinding` 314, `Recursi` 8, `Lambda` 799, `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture header): a String Function with no assignment returns "" not Nothing (F06); `Exit Function` in a lambda (Z6); BC30290 / BC30067 not reported; a bare parameterless call statement is dropped (#289); ⚠ a user local spelled `__ret` (or `__with`) merges with the carrier.
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #218 + #254 TESTED — C++ keeps a bare store to a plain auto-property (`P = P + 10`, `P += 20`, `Count += 1`, `S = S * 10`, `P++`), instance or Shared, in a constructor / method / `Shared Sub New` / lambda / generic class / inherited (`CppCodeGenerator.IsStorageAutoProperty` behind `IsNamedDestination`; ADR-0007; `git log --grep '#218'`)
 - **Tests (10 new, 2 renamed, 6 programs enabled on C++):** `CppAutoPropertyBareStoreExecutionTests` (Integration, 9 cases / 18 vbc-answered probes on C++ with C# as the reference x CLI / `--optimize` / `CompileProjectFiles`; under `NotJavaScriptExecution`, roster still 127) + `V6shared` on C++ in `OverridableAutoPropertyExecutionTests`. MOVED: `PropertyAccess` E16 / E27 `_Cpp_PinsSilentWrongAnswer_Against218` are positive (`E16_…_Cpp` 22, `E27_…_Cpp` 7); C++ cells ENABLED for `AutoPropertyInitializer` P06 / Q01 / Q03 / Q04 and `NameBindingResolution` PRa / PRac (table counts 91 / 87). Mutants: the unfixed source fails 8 of 9, M1 (own class only) 2, M2 (instance only) 4, M3 (Shared only) 5, M5 (#208 guard gate) 1 (A29 only), M6 (the rejected `_declaredIdentifiers` registration) 1 (A28 only); M4 (any property) is EQUIVALENT (ADR-0007).
 - **Gates (Linux):** fast 0 failed / 12,732 passed / 94 skipped; Integration, one filter each, 0 failed: the fixture 9, `Cpp` 1,903 (+19 skipped), `PropertyAccess` 74, `AutoPropertyInitializer` 12, `NameBindingResolution` 205, `OverridableAutoProperty` 17, `SharedConstructor` 14, `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -843,7 +850,7 @@ it is tested on the real front end with a tampered binding, `NameBindingMissTest
 | #246 | C#: a For over ANOTHER module's global writes its increment to a plain variable (CS0103) | FOg, FOgc, MF5, MF5c on C# (pinned) |
 | #247 | `For x As T` leaves the loop variable bound after the loop; a later read of a same-named field gets it | FOac (prints 4, VB 50) |
 | #248 | `Catch err` with no `As` does not reuse an existing variable | CAn, CAnc |
-| #249 | a Function's own name used as its return value (`F = v`) prints 0 | MEr, MErc |
+| #249 | ✅ FIXED by #219 (2026-10-07): a Function's own name used as its return value (`F = v`) printed 0 | MEr, MErc |
 | #250 | ARCHITECT: record that member access and `New` consume symbol/type (done: the ADR amendment); decide whether `IRBuilder.CanonicaliseMemberNames` is retired | — |
 | #251 | test infra: the `dotnet test --filter` trap (below) | — |
 
@@ -3597,7 +3604,7 @@ Prefer those.
 
 > ✅ **DONE 2026-09-30 — #124 consumed ADR-0013 D3; everything in this subsection is HISTORY.** Every remaining name reference (Field, Property, ModuleGlobal, Method, Type,
 > Event, a member access, `New`, an `Await` callee, a `RaiseEvent`, and the counted `For`'s control) now reaches the IR under its DECLARED spelling, on all four backends.
-> Read "#124 DONE" at the top of this file. What stays open from this subsection is #244–#249 (listed there), not the C++/JavaScript case-folding defect.
+> Read "#124 DONE" at the top of this file. What stays open from this subsection is #244–#248 (listed there; #249 was FIXED by #219), not the C++/JavaScript case-folding defect.
 
 BasicLang is case-insensitive; the front end accepts `P = Seed(100)` as a write to `p` and the IR
 records `IRCall("P")` alongside `IRVariable("p")`. Measured on that program:
@@ -6760,7 +6767,7 @@ single new failure against the 170-name baseline.
     one carve-out is VB's own: a ReadOnly AUTO-property (no Get body) may be assigned bare or
     `Me.` inside a constructor of its DECLARING class, matching Shared-ness — never a derived
     class, another method, or a lambda written inside the constructor.
-    `IsReadOnlyAutoPropertyInitialization` / `IsGetterReturnVariable` are the two exemptions;
+    `IsReadOnlyAutoPropertyInitialization` / `IsGetterReturnVariable` are the two exemptions (⚠ `IsGetterReturnVariable` was REPLACED by #219: a bare `P` in its own Get is bound to the Get's implicit return variable, `SemanticAnalyzer.AsReturnVariable`);
     `Symbol.IsReadOnly`/`IsWriteOnly`/`IsAutoProperty` are set wherever a property becomes a
     symbol (the declaration, `PopulateClassMemberSignatures`, an interface member, and the LSP's
     `LspProjectContext`). MSIL's `EmitPropertySet` now stores that one carve-out assignment to the
@@ -6781,9 +6788,10 @@ single new failure against the 170-name baseline.
       then a For loop, each writing a ReadOnly auto-property in its own constructor) run to
       completion and print `2`/`0` where every other backend prints `22`/`7`. **FIXED 2026-10-06
       (with #254)** — see the #218 section at the top; E16/E27 are positive rows on C++ now.
-    - **#219** — E09 (the accessor's own implicit GET RETURN VARIABLE, `P = …` inside its own
-      `Get`) is legal per the front end's own carve-out, but no backend implements that return
-      variable, so every one of them still fails to RUN it.
+    - **#219** — ✅ FIXED 2026-10-07 (`git log --grep '#219'`): E09 (the accessor's own implicit GET RETURN
+      VARIABLE, `P = …` inside its own `Get`) was legal per the front end's own carve-out, but no backend
+      implemented that return variable, so every one of them failed to RUN it. It now prints vbc's 43
+      (`PropertyAccessExecutionTests.E09_GetterReturnVariableWrite_Msil_PrintsVbs43_Task219`).
     - **#220** — `Exception.Message = x` is accepted: the .NET resolver does not carry
       `Message`'s real ReadOnly-ness into a fact the analyzer can see (rule 5's own silence,
       applied to one more member the resolver's accessor metadata does not reach).

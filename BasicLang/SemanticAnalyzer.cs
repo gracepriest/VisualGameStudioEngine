@@ -421,11 +421,68 @@ namespace BasicLang.Compiler.SemanticAnalysis
         private bool _constructorIsShared;
 
         /// <summary>
-        /// Task #178: the property whose <c>Get</c> body is being analyzed, and that accessor's
-        /// function scope — for <see cref="IsGetterReturnVariable"/>. Null outside a getter.
+        /// ⭐ #219 / #249 — VB's IMPLICIT RETURN VARIABLE. Every <c>Function F</c> and every
+        /// property <c>Get</c> declares a local named as the procedure, typed as its return type and
+        /// starting at that type's default; the procedure returns it when it ends without a
+        /// <c>Return</c> (falling off the end, <c>Exit Function</c>, <c>Exit Property</c>). One
+        /// entry per such procedure scope, keyed by that scope (<see cref="DeclareReturnVariable"/>);
+        /// a lambda written inside the body is found through it, because VB's lambdas read and write
+        /// the variable too (vbc, measured).
         /// </summary>
-        private string _currentGetterProperty;
-        private Scope _currentGetterScope;
+        private readonly Dictionary<Scope, ReturnVariable> _returnVariableScopes =
+            new Dictionary<Scope, ReturnVariable>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #219 / #249 — the procedures whose body NAMES its return variable, and that variable's
+        /// symbol (<see cref="ReferencedReturnVariable"/>): a <see cref="FunctionNode"/>, or the
+        /// <see cref="PropertyNode"/> whose <c>Get</c> it is. A procedure that never names it has
+        /// no entry, and the IR builder then declares nothing for it.
+        /// </summary>
+        private readonly Dictionary<ASTNode, Symbol> _referencedReturnVariables =
+            new Dictionary<ASTNode, Symbol>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #219 / #249 — the one identifier being visited that names the PROCEDURE, never its return
+        /// variable, however it is spelled (vbc, measured): a call's callee (<c>F(n - 1)</c>, and
+        /// <c>F()</c> — parentheses always call, even when the result is an array), the operand of
+        /// <c>AddressOf</c>, and a name standing alone as a statement (an invocation; a property's
+        /// own name there is BC30545). Set for the duration of that one visit.
+        /// </summary>
+        private IdentifierExpressionNode _procedureNameUse;
+
+        /// <summary>
+        /// The function scopes of property accessors (<c>Get</c> and <c>Set</c>), where
+        /// <c>Exit Property</c> is valid (BC30066 elsewhere).
+        /// </summary>
+        private readonly HashSet<Scope> _propertyAccessorScopes =
+            new HashSet<Scope>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// A procedure's implicit return variable (<see cref="_returnVariableScopes"/>).
+        /// <see cref="Symbol"/> is a Local of the procedure's own scope, so a reference bound to it
+        /// records <see cref="NameBindingKind.Local"/> under the procedure's DECLARED spelling.
+        /// </summary>
+        private sealed class ReturnVariable
+        {
+            public ReturnVariable(ASTNode procedure, Symbol symbol, SymbolKind ownerKind, bool inaccessible)
+            {
+                Procedure = procedure;
+                Symbol = symbol;
+                OwnerKind = ownerKind;
+                Inaccessible = inaccessible;
+            }
+
+            /// <summary>The <see cref="FunctionNode"/>, or the <see cref="PropertyNode"/> of a Get.</summary>
+            public ASTNode Procedure { get; }
+            public Symbol Symbol { get; }
+
+            /// <summary>What a bare own-name reference resolves to before it is bound here:
+            /// <see cref="SymbolKind.Function"/>, or <see cref="SymbolKind.Property"/> in a Get.</summary>
+            public SymbolKind OwnerKind { get; }
+
+            /// <summary>An <c>Async</c> or <c>Iterator</c> function: VB's BC36946.</summary>
+            public bool Inaccessible { get; }
+        }
 
         /// <summary>
         /// P2a-2 Task 8c-3 — spec §8.3's enum row. Enum-member arguments that were folded to
@@ -1472,6 +1529,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             _nodeTypes.Clear();
             _nodeSymbols.Clear();
             _lambdaParameterSymbols.Clear();
+            _returnVariableScopes.Clear();
+            _referencedReturnVariables.Clear();
+            _propertyAccessorScopes.Clear();
+            _procedureNameUse = null;
             _lambdaScopes.Clear();
             _lambdaLocals.Clear();
             _lambdaParameters.Clear();
@@ -7113,6 +7174,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             functionScope.ReturnType = returnType;
             functionScope.IsAsync = node.IsAsync;
 
+            // #219 / #249: `F = v` inside F names F's implicit return variable.
+            DeclareReturnVariable(functionScope, node, node.Name, returnType, SymbolKind.Function,
+                inaccessible: node.IsAsync || node.IsIterator, node.Line, node.Column);
+
             SetNodeSymbol(node, symbol);
             SetNodeType(node, returnType);
 
@@ -8268,22 +8333,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var getterScope = EnterScope($"get_{node.Name}", ScopeKind.Function);
                 getterScope.ReturnType = propertyType;
+                _propertyAccessorScopes.Add(getterScope);
 
-                // Analyze getter body. Task #178: inside it, `P = v` names the accessor's return
-                // variable, not the property (IsGetterReturnVariable).
-                var outerGetterProperty = _currentGetterProperty;
-                var outerGetterScope = _currentGetterScope;
-                _currentGetterProperty = node.Name;
-                _currentGetterScope = getterScope;
-                try
-                {
-                    node.Getter.Accept(this);
-                }
-                finally
-                {
-                    _currentGetterProperty = outerGetterProperty;
-                    _currentGetterScope = outerGetterScope;
-                }
+                // Analyze getter body. Task #178 / #219: inside it, a bare `P` names the accessor's
+                // implicit return variable, not the property — so `P = v` is never BC30526, because
+                // it is not a store into the property at all (BoundProperty finds none).
+                DeclareReturnVariable(getterScope, node, node.Name, propertyType, SymbolKind.Property,
+                    inaccessible: false, node.Line, node.Column);
+                node.Getter.Accept(this);
 
                 // Validate that getter returns the correct type
                 // Check if all return statements in getter return the property type
@@ -8297,6 +8354,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var setterScope = EnterScope($"set_{node.Name}", ScopeKind.Function);
                 setterScope.ReturnType = _typeManager.VoidType;
+                _propertyAccessorScopes.Add(setterScope);
 
                 // Register setter parameter (value)
                 if (node.SetterParameter != null)
@@ -10060,7 +10118,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 if (existing.Kind == SymbolKind.Property)
                     VisitWriteTarget(controlReference, alsoRead: true);   // task #178's check; records the binding too
                 else
-                    SetNodeSymbol(controlReference, existing);
+                    SetNodeSymbol(controlReference, AsReturnVariable(controlReference, existing));   // #219: `For F = …` in F
                 node.ControlReference = controlReference;
             }
 
@@ -10649,6 +10707,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     Error($"Exit {node.Kind} outside of {node.Kind.ToString().ToLower()}", node.Line, node.Column);
                 }
             }
+            // #219: Exit Property only inside a property accessor (its own body, not a lambda there)
+            else if (node.Kind == ExitKind.Property)
+            {
+                if (!_propertyAccessorScopes.Contains(_currentScope.GetFunctionScope()))
+                {
+                    VbCodedError("BC30066", "'Exit Property' is not valid in a Function or Sub.", node);
+                }
+            }
             // Exit For/Do/While should be inside a loop
             else if (node.Kind == ExitKind.For || node.Kind == ExitKind.Do || node.Kind == ExitKind.While)
             {
@@ -10713,7 +10779,6 @@ namespace BasicLang.Compiler.SemanticAnalysis
             var property = BoundProperty(target);
             if (property == null || !property.IsReadOnly) return;
             if (IsReadOnlyAutoPropertyInitialization(target, property)) return;
-            if (IsGetterReturnVariable(target, property)) return;
 
             PropertyAccessError("BC30526", $"Property '{property.Name}' is 'ReadOnly'.", target);
         }
@@ -10798,16 +10863,105 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
-        /// Inside a property's own <c>Get</c>, VB binds an assignment to the property's bare name
-        /// to the accessor's implicit RETURN VARIABLE, as it does a Function's name — it is not a
-        /// store into the property, so it is not BC30526. (BasicLang does not implement that
-        /// return variable; the program is left exactly as it compiled before, not refused.)
+        /// ⭐ #219 / #249 — declares <paramref name="procedureScope"/>'s implicit return variable: a
+        /// Local of that scope, spelled as the procedure is DECLARED and typed as its return type.
+        /// It is NOT defined in the scope — every lookup of the name still finds the procedure, so a
+        /// call (<c>F(n - 1)</c>) stays a call — and a bare reference is moved onto it afterwards, by
+        /// <see cref="AsReturnVariable"/>. A Sub, and a Function with no return type, has none.
         /// </summary>
-        private bool IsGetterReturnVariable(ExpressionNode target, Symbol property) =>
-            target is IdentifierExpressionNode
-            && _currentGetterProperty != null
-            && ReferenceEquals(_currentScope?.GetFunctionScope(), _currentGetterScope)
-            && string.Equals(_currentGetterProperty, property.Name, StringComparison.OrdinalIgnoreCase);
+        private void DeclareReturnVariable(Scope procedureScope, ASTNode procedure, string name, TypeInfo returnType,
+            SymbolKind ownerKind, bool inaccessible, int line, int column)
+        {
+            if (procedureScope == null || returnType == null || returnType.Kind == TypeKind.Void) return;
+            var symbol = new Symbol(name, SymbolKind.Variable, returnType, line, column)
+            {
+                DeclaringScope = procedureScope,
+            };
+            _returnVariableScopes[procedureScope] = new ReturnVariable(procedure, symbol, ownerKind, inaccessible);
+        }
+
+        /// <summary>
+        /// ⭐ #219 / #249 — THE ONE PLACE a bare reference to a procedure's own name becomes its
+        /// implicit return variable: <paramref name="resolved"/> is what lexical lookup found for
+        /// <paramref name="reference"/>, and the answer is the symbol to bind it to.
+        ///
+        /// <para>VB's rule, measured with vbc: inside <c>Function F</c> (or the <c>Get</c> of
+        /// <c>P</c>), the name — in any case — denotes the return variable as an assignment target,
+        /// a read, a compound target, a ByRef argument, a receiver (<c>F.Length</c>) and inside a
+        /// lambda written there; it denotes the PROCEDURE when it is called (<see cref="_procedureNameUse"/>).
+        /// Only when lookup found the procedure itself: a local, a parameter or a lambda parameter
+        /// spelled like it is nearer and is what the name means.</para>
+        ///
+        /// <para>An <c>Async</c> or <c>Iterator</c> function's return variable cannot be accessed
+        /// (vbc's BC36946); the reference is refused and keeps the procedure.</para>
+        /// </summary>
+        private Symbol AsReturnVariable(IdentifierExpressionNode reference, Symbol resolved)
+        {
+            if (resolved == null || ReferenceEquals(reference, _procedureNameUse)) return resolved;
+            if (resolved.Kind != SymbolKind.Function && resolved.Kind != SymbolKind.Property) return resolved;
+
+            var returnVariable = EnclosingReturnVariable();
+            if (returnVariable == null || returnVariable.OwnerKind != resolved.Kind
+                || !string.Equals(returnVariable.Symbol.Name, resolved.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                return resolved;
+            }
+
+            if (returnVariable.Inaccessible)
+            {
+                VbCodedError("BC36946",
+                    "The implicit return variable of an Iterator or Async method cannot be accessed.", reference);
+                return resolved;
+            }
+
+            _referencedReturnVariables[returnVariable.Procedure] = returnVariable.Symbol;
+            return returnVariable.Symbol;
+        }
+
+        /// <summary>
+        /// The return variable of the procedure the current scope is inside — through any block,
+        /// loop or lambda scope, and never past the type or module that holds the procedure.
+        /// </summary>
+        private ReturnVariable EnclosingReturnVariable()
+        {
+            for (var scope = _currentScope; scope != null; scope = scope.Parent)
+            {
+                if (_returnVariableScopes.TryGetValue(scope, out var returnVariable)) return returnVariable;
+                if (scope.Kind is ScopeKind.Class or ScopeKind.Interface or ScopeKind.Module
+                    or ScopeKind.Namespace or ScopeKind.Global)
+                {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// #219 / #249 — the implicit return variable of <paramref name="procedure"/> (a
+        /// <see cref="FunctionNode"/>, or a <see cref="PropertyNode"/> for its <c>Get</c>) when its
+        /// body names it, else null: the IR builder declares the variable's storage for exactly
+        /// these procedures, and returns it wherever the procedure ends without a <c>Return</c>.
+        /// </summary>
+        internal Symbol ReferencedReturnVariable(ASTNode procedure) =>
+            procedure != null && _referencedReturnVariables.TryGetValue(procedure, out var symbol) ? symbol : null;
+
+        /// <summary>
+        /// Visits <paramref name="expression"/> — when it is a bare name — as the PROCEDURE it names,
+        /// never the return variable (<see cref="_procedureNameUse"/>).
+        /// </summary>
+        private void VisitAsProcedureName(ExpressionNode expression)
+        {
+            var outer = _procedureNameUse;
+            _procedureNameUse = expression as IdentifierExpressionNode;
+            try
+            {
+                expression.Accept(this);
+            }
+            finally
+            {
+                _procedureNameUse = outer;
+            }
+        }
 
         /// <summary>
         /// A BC3052x diagnostic at the property use: VB's number as the code (the IDE's error
@@ -11156,7 +11310,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ExpressionStatementNode node)
         {
-            node.Expression.Accept(this);
+            // #219 / #249: a name standing alone is an invocation, never a return variable — `F` in F
+            // calls F, and `P` in P's Get is a property access (BC30545), as vbc reads them.
+            VisitAsProcedureName(node.Expression);
 
             // ⛔ A literal or an operator expression on a line of its own does nothing: VB
             // refuses it ("Expression is not a statement"). MEASURED on master dc949a24:
@@ -11973,6 +12129,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Task #178: `x++` / `x--` read AND store their operand — judged like `x += 1`.
             if (node.Operator is "++" or "--")
                 VisitWriteTarget(node.Operand, alsoRead: true);
+            else if (node.Operator == "AddressOf")
+                VisitAsProcedureName(node.Operand);   // #219 / #249: `AddressOf F` inside F is F
             else
                 node.Operand.Accept(this);
             var operandType = GetNodeType(node.Operand);
@@ -12197,7 +12355,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            var symbol = ResolveBareName(node.Name, node.Line, node.Column, report: true);
+            var symbol = AsReturnVariable(node, ResolveBareName(node.Name, node.Line, node.Column, report: true));
 
             // VB's control-character constants (vbCrLf, vbTab, ...). Backslash is not an escape
             // in a string literal, so these are how source spells a newline or tab. Only when
@@ -12850,7 +13008,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
-            node.Callee.Accept(this);
+            // #219 / #249: a called name is the procedure, even inside its own body — `F(n - 1)`,
+            // and `F()`, whose parentheses call it even when its result is an array (vbc).
+            VisitAsProcedureName(node.Callee);
 
             var calleeType = GetNodeType(node.Callee);
             Symbol calleeSymbol = null;

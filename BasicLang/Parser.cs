@@ -4060,7 +4060,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Exit, "Expected 'Exit'");
             var node = new ExitStatementNode(token.Line, token.Column);
 
-            // Expect the kind of exit: For, Do, While, Sub, Function
+            // Expect the kind of exit: For, Do, While, Sub, Function, Property
             if (Check(TokenType.For))
             {
                 Advance();
@@ -4086,9 +4086,15 @@ namespace BasicLang.Compiler
                 Advance();
                 node.Kind = ExitKind.Function;
             }
+            else if (Check(TokenType.Property))
+            {
+                // #219: leaves a property accessor; a Get returns its implicit return variable.
+                Advance();
+                node.Kind = ExitKind.Property;
+            }
             else
             {
-                throw new ParseException("Expected 'For', 'Do', 'While', 'Sub', or 'Function' after 'Exit'", Peek());
+                throw new ParseException("Expected 'For', 'Do', 'While', 'Sub', 'Function', or 'Property' after 'Exit'", Peek());
             }
 
             return node;

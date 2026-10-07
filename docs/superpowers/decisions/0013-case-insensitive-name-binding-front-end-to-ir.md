@@ -94,6 +94,14 @@ Every declaration the analyzer binds as Local, Parameter or LambdaParameter is r
 Invariant: after #169, no bound Local/Parameter/LambdaParameter reference reaches the create
 branch of `GetOrCreateVariable`. D1's ICE stays as the detector.
 
+*Amendment (task #219, 2026-10-07): the setter `value` alias is no longer the only place a Local's IR
+name differs from its declared spelling. The implicit return variable of a Function or a property Get
+(`F = v`, `P = v`) is a synthesized Local of the procedure's scope, and its carrier `__ret` is the
+second. It is bound through `binding.Declaration`, compared by reference, never by name: a bare
+own-name reference is bound to it by `SemanticAnalyzer.AsReturnVariable`, while a call `F(n - 1)` and
+`AddressOf F` still name the procedure. Like the alias, it is chosen at the declaration site, and the
+carrier's name is reserved under ADR-0018.*
+
 ### D6: the #169 / #124 boundary, restated
 
 #169 owns DECLARATION REGISTRATION wherever a Local, Parameter or LambdaParameter is declared,

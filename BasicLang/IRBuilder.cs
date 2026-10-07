@@ -1099,6 +1099,124 @@ namespace BasicLang.Compiler.IR
         // Functions and Subroutines
         // ====================================================================
 
+        /// <summary>
+        /// ⭐ #219 / #249 — the name of the local that holds VB's IMPLICIT RETURN VARIABLE: the
+        /// local every <c>Function F</c> and property <c>Get</c> has, named as the procedure, which
+        /// <c>F = v</c> assigns and the procedure returns when it ends without a <c>Return</c>.
+        ///
+        /// <para>A carrier, declared and reserved as the <c>__with</c> carrier is, and never the
+        /// procedure's own spelling: a local <c>F</c> inside <c>F</c> would hide the function from
+        /// its own recursive call on every backend (C#: "method name expected"; C++ and JavaScript:
+        /// the local shadows the function), and the method group <c>F</c> is not assignable
+        /// (CS1656) — which is what <c>F = v</c> emitted before. A reference reaches it by the
+        /// analyzer's DECLARATION, compared by reference (<see cref="_returnVariableCarriers"/>),
+        /// never by name: the name <c>F</c> still means the procedure to everything that asks by
+        /// name (<c>AddressOf F</c>, a call). So this is, with a declared setter parameter's alias of
+        /// <c>value</c> (ADR-0013 D5), the second place a Local's IR name is not its declared
+        /// spelling — chosen at the declaration site, never at a reference. One per procedure, so
+        /// one fixed name: a lambda written in the body reaches its creator's carrier and declares
+        /// none of its own.</para>
+        /// </summary>
+        internal const string ReturnVariableCarrierName = "__ret";
+
+        /// <summary>
+        /// #219 / #249 — the carrier of each implicit return variable whose procedure is being built,
+        /// keyed by the analyzer's return-variable symbol (<see cref="NameBinding.Declaration"/>, by
+        /// reference). Asked first by <see cref="BoundVariable"/>'s Local arm; an entry lives exactly
+        /// as long as its procedure's build, lambdas built inside it included.
+        /// </summary>
+        private readonly Dictionary<Symbol, IRVariable> _returnVariableCarriers =
+            new Dictionary<Symbol, IRVariable>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// #219 / #249 — the procedure being built that has an implicit return variable (a Function,
+        /// not Async or Iterator, or a property Get), its return type, and the carrier that holds the
+        /// variable when its body names it (null when it does not). Null outside one; a lambda built
+        /// inside one is a different <see cref="IRFunction"/>, so <see cref="ProcedureEndReturn"/>
+        /// leaves the lambda's own exits alone.
+        /// </summary>
+        private sealed class ProcedureReturn
+        {
+            public ProcedureReturn(IRFunction function, TypeInfo type, Symbol declaration, IRVariable carrier)
+            {
+                Function = function;
+                Type = type;
+                Declaration = declaration;
+                Carrier = carrier;
+            }
+
+            public IRFunction Function { get; }
+            public TypeInfo Type { get; }
+
+            /// <summary>The analyzer's return-variable symbol, when the body names it.</summary>
+            public Symbol Declaration { get; }
+            public IRVariable Carrier { get; }
+        }
+
+        private ProcedureReturn _procedureReturn;
+
+        /// <summary>
+        /// #219 / #249 — opens the implicit return variable of the procedure just made current
+        /// (<paramref name="procedure"/> is the AST node the analyzer recorded it for), and returns
+        /// the enclosing one for <see cref="EndProcedureReturn"/> to restore.
+        ///
+        /// <para>Storage is declared ONLY when the body names the variable
+        /// (<see cref="SemanticAnalyzer.ReferencedReturnVariable"/>): a procedure that returns
+        /// everywhere, or falls off the end returning the default, is built exactly as before. The
+        /// carrier is declared like a <c>Dim</c> with no initializer, which every backend starts at
+        /// the type's default — VB's starting value for the variable.</para>
+        /// </summary>
+        private ProcedureReturn BeginProcedureReturn(ASTNode procedure, TypeInfo returnType, bool hasReturnVariable)
+        {
+            var outer = _procedureReturn;
+            if (!hasReturnVariable || returnType == null || returnType.Kind == TypeKind.Void || returnType.Name == "Void")
+            {
+                _procedureReturn = null;
+                return outer;
+            }
+
+            IRVariable carrier = null;
+            var declared = _semanticAnalyzer.ReferencedReturnVariable(procedure);
+            if (declared != null)
+            {
+                carrier = CreateVariable(ReturnVariableCarrierName, declared.Type ?? returnType, _nextVersion++);
+                ReserveInCurrentFunction(carrier.Name);   // ADR-0018 D1: declared, so reserved
+                _currentFunction.LocalVariables.Add(carrier);
+                _returnVariableCarriers[declared] = carrier;
+            }
+
+            _procedureReturn = new ProcedureReturn(_currentFunction, returnType, declared, carrier);
+            return outer;
+        }
+
+        /// <summary>
+        /// #219 / #249 — closes what <see cref="BeginProcedureReturn"/> opened: the carrier is no
+        /// longer reachable, and the enclosing procedure's return variable (<paramref name="outer"/>)
+        /// is current again.
+        /// </summary>
+        private void EndProcedureReturn(ProcedureReturn outer)
+        {
+            if (_procedureReturn?.Declaration != null)
+                _returnVariableCarriers.Remove(_procedureReturn.Declaration);
+            _procedureReturn = outer;
+        }
+
+        /// <summary>
+        /// #219 / #249 — what the procedure being built returns where it ends without a
+        /// <c>Return</c>: falling off its end, <c>Exit Function</c> and <c>Exit Property</c>. Its
+        /// implicit return variable — the carrier when the body names it, else the type's default,
+        /// which is all the variable can hold then. A Sub, a setter, a constructor, a lambda and an
+        /// Async or Iterator function return as they always did.
+        /// </summary>
+        private IRReturn ProcedureEndReturn()
+        {
+            var procedureReturn = _procedureReturn;
+            if (procedureReturn == null || !ReferenceEquals(procedureReturn.Function, _currentFunction))
+                return new IRReturn();
+
+            return new IRReturn(procedureReturn.Carrier ?? (IRValue)CreateDefaultValue(procedureReturn.Type));
+        }
+
         public void Visit(FunctionNode node)
         {
             var returnType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Void", TypeKind.Void);
@@ -1149,6 +1267,10 @@ namespace BasicLang.Compiler.IR
             // Create entry block
             _currentBlock = _currentFunction.CreateBlock("entry");
 
+            // #219 / #249: `F = v` assigns F's implicit return variable (an Async or Iterator one
+            // cannot be named — the analyzer refuses it, BC36946).
+            var outerReturn = BeginProcedureReturn(node, returnType, hasReturnVariable: !node.IsAsync && !node.IsIterator);
+
             // Process body
             if (node.Body != null)
             {
@@ -1162,6 +1284,11 @@ namespace BasicLang.Compiler.IR
                 {
                     EmitInstruction(new IRReturn());
                 }
+                else if (_procedureReturn?.Carrier is { } returnVariable)
+                {
+                    // #219 / #249: falling off the end returns the implicit return variable
+                    EmitInstruction(new IRReturn(returnVariable));
+                }
                 else
                 {
                     // Return default value
@@ -1169,6 +1296,7 @@ namespace BasicLang.Compiler.IR
                     EmitInstruction(new IRReturn(defaultValue));
                 }
             }
+            EndProcedureReturn(outerReturn);
 
             // Clean up variable versions
             foreach (var param in node.Parameters)
@@ -2599,6 +2727,9 @@ namespace BasicLang.Compiler.IR
 
                     // Create entry block and generate body
                     _currentBlock = _currentFunction.CreateBlock("entry");
+                    // #219 / #249: the analyzer binds `M = v` in this body to M's return variable too.
+                    var outerReturn = BeginProcedureReturn(method, _currentFunction.ReturnType,
+                        hasReturnVariable: method.ReturnType != null && !method.IsAsync && !method.IsIterator);
                     method.Body.Accept(this);
 
                     // Ensure function ends with return
@@ -2606,9 +2737,12 @@ namespace BasicLang.Compiler.IR
                     {
                         if (method.ReturnType == null || method.ReturnType.Name == "Void")
                             EmitInstruction(new IRReturn());
+                        else if (_procedureReturn?.Carrier is { } returnVariable)
+                            EmitInstruction(new IRReturn(returnVariable));
                         else
                             EmitInstruction(new IRReturn(CreateDefaultValue(new TypeInfo(method.ReturnType.Name, TypeKind.Primitive))));
                     }
+                    EndProcedureReturn(outerReturn);
 
                     // Clean up
                     foreach (var param in method.Parameters)
@@ -2990,12 +3124,19 @@ namespace BasicLang.Compiler.IR
                 _currentFunction.SourceFilePath = _sourceFilePath;
                 _currentBlock = _currentFunction.CreateBlock("entry");
 
+                // #219: inside the Get, `P = v` assigns its implicit return variable, not the property.
+                var outerReturn = BeginProcedureReturn(node, propertyType, hasReturnVariable: true);
+
                 node.Getter.Accept(this);
 
                 if (!_currentBlock.IsTerminated())
                 {
-                    EmitInstruction(new IRReturn());
+                    // #219: falling off the end of a Get returns its implicit return variable — the
+                    // property type's default when the body never names it. It used to return no
+                    // value at all from a valued accessor.
+                    EmitInstruction(ProcedureEndReturn());
                 }
+                EndProcedureReturn(outerReturn);
                 ExitProcedureScope(getterScope);
             }
 
@@ -4524,8 +4665,12 @@ namespace BasicLang.Compiler.IR
             EmitInstruction(new IRAssignment(loopVar, startValue));
 
             // The spelling the increment writes back under: the storage's declared one when the
-            // loop drives existing storage (#124), else the loop's own.
-            var storageSpelling = drivenReference?.Binding.DeclaredName ?? node.Variable;
+            // loop drives existing storage (#124), else the loop's own. #219: a driven procedure's
+            // return variable is written under its carrier's name — `For F = 1 To 3` inside F.
+            var storageSpelling = drivenReference != null
+                && ReferenceEquals(loopVar, _procedureReturn?.Carrier)
+                    ? loopVar.Name
+                    : drivenReference?.Binding.DeclaredName ?? node.Variable;
 
             // ⭐ #169 (ADR-0013 D5): the analyzer declares the loop's control variable in the loop's
             // own scope, so the body's references to it are bound as a Local of this name — and
@@ -5624,8 +5769,10 @@ namespace BasicLang.Compiler.IR
 
                 case ExitKind.Sub:
                 case ExitKind.Function:
-                    // Exit Sub/Function is like Return (without value for Sub)
-                    EmitInstruction(new IRReturn());
+                case ExitKind.Property:
+                    // Exit Sub/Function/Property is like Return — of the implicit return variable
+                    // in a Function or a property Get (#219 / #249), with no value elsewhere.
+                    EmitInstruction(ProcedureEndReturn());
                     break;
             }
         }
@@ -6959,6 +7106,11 @@ namespace BasicLang.Compiler.IR
                 case NameBindingKind.Local:
                 case NameBindingKind.Parameter:
                 case NameBindingKind.LambdaParameter:
+                    // #219 / #249: a procedure's implicit return variable is its carrier, found by
+                    // the declaration — the name itself still denotes the procedure.
+                    if (binding.Declaration != null
+                        && _returnVariableCarriers.TryGetValue(binding.Declaration, out var returnVariable))
+                        return returnVariable;
                     if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
                         return versions.Peek();
 

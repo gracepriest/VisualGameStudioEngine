@@ -204,12 +204,13 @@ public class PropertyAccessExecutionTests
     // diagnostic, not these pre-existing backend gaps its probes surfaced.
     // ====================================================================================
 
-    /// <summary>#219 — E09 (the accessor's implicit GET RETURN VARIABLE, task #178's own carve-out
-    /// exempts it from BC30526 — see <c>PropertyAccessDiagnosticsTests.
-    /// Legal_AssignmentToPInsideItsOwnGet_IsTheGetterReturnVariable</c>). BasicLang does not
-    /// implement that return variable at all, so every backend still fails to RUN it — a
-    /// pre-existing gap #178's front-end fix does not touch (front-end acceptance was never the
-    /// problem here). Pinned on MSIL, the same MissingMethodException shape as before this fix.</summary>
+    /// <summary>#219 — E09 (the accessor's implicit GET RETURN VARIABLE: inside a Get, a bare `P`
+    /// names that variable, not the property, so `P = v` is never BC30526 — see
+    /// <c>PropertyAccessDiagnosticsTests.Legal_AssignmentToPInsideItsOwnGet_IsTheGetterReturnVariable</c>).
+    /// Task #178 left it exempt from BC30526 but unimplemented, so every backend failed to RUN it
+    /// (MSIL: MissingMethodException set_P). #219 implements the variable
+    /// (<c>SemanticAnalyzer.AsReturnVariable</c>, the IR carrier <c>__ret</c>), and E09 now prints
+    /// VB's own 43. <c>ImplicitReturnVariableExecutionTests</c> runs the family on all four backends.</summary>
     private const string E09 = """
         Class Ctx
             Private _v As Integer = 42
@@ -226,16 +227,13 @@ public class PropertyAccessExecutionTests
         """;
 
     [Test]
-    public void E09_GetterReturnVariableWrite_Msil_PinsPreExistingMissingMethod_Against219()
+    public void E09_GetterReturnVariableWrite_Msil_PrintsVbs43_Task219()
     {
-        var run = MsilHarness.Run(E09);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.RunFailed),
-            "task #219 (pre-existing, unrelated to #178): BasicLang does not implement a getter's "
-            + "implicit return variable at all, so E09 must still fail to RUN on MSIL. A different "
-            + "outcome (including Ran, with VB's own '43') means #219 moved — update this pin, do "
-            + "not just delete it.\n" + run.Report);
-        Assert.That(run.Output, Does.Contain("MissingMethodException"), run.Report);
-        Assert.That(run.Output, Does.Contain("set_P"), run.Report);
+        // Not inside Assert.Multiple: the harness may Ignore (no ilasm), and an Ignore inside one FAILS the test.
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(E09)), Is.EqualTo("43"),
+            "task #219: `P = _v + 1` inside the Get is the Get's return variable, so it returns 43 (was MissingMethodException set_P)");
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E09)), Is.EqualTo("43"),
+            "task #219: the same through the aggressive pipeline");
     }
 
     /// <summary>#220 — <c>Exception.Message</c> is a real .NET ReadOnly property, but the .NET
