@@ -645,10 +645,13 @@ public class PropertyAccessDiagnosticsTests
         End Module
         """);
 
-    /// <summary>E09 — inside a property's own Get, VB binds a bare assignment to the accessor's
-    /// implicit RETURN VARIABLE, not to the property — so it is never BC30526, even though
-    /// BasicLang does not implement that return variable (task #219: every backend still fails to
-    /// RUN this; see PropertyAccessExecutionTests).</summary>
+    /// <summary>E09 — inside a property's own Get, VB binds a bare `P` to the accessor's implicit
+    /// RETURN VARIABLE, not to the property — so `P = v` is never BC30526. Task #178 exempted it
+    /// with a carve-out (<c>IsGetterReturnVariable</c>); task #219 replaced the carve-out by the
+    /// binding itself (<c>SemanticAnalyzer.AsReturnVariable</c>): the reference is a Local, not a
+    /// property, so the check never sees it — in the Get's own body and in a lambda written there,
+    /// as vbc accepts. The program also RUNS now: <c>PropertyAccessExecutionTests.E09_…</c> and
+    /// <c>ImplicitReturnVariableExecutionTests</c>.</summary>
     [Test]
     public void Legal_AssignmentToPInsideItsOwnGet_IsTheGetterReturnVariable() => AssertNoPropertyAccessDiagnostic("""
         Class Ctx

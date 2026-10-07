@@ -51,7 +51,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //  (PRa / PRac, an auto-property written by its bare name, were excluded on C++ — it printed 0 for vbc's 30, the control too. FIXED by #218 / #254: both now run on all four backends.)
 //
 //  Rows NOT here because #124 does not fix them: EVa (`AddHandler b.clicked` — a member-access event, #245), FOac (`For x As T`
-//  leaves the variable bound, #247), CAn (`Catch err` with no `As`, #248), MEr (a Function's own name as its return value, #249),
+//  leaves the variable bound, #247), CAn (`Catch err` with no `As`, #248), MEr (a Function's own name as its return value, #249 — FIXED by #219,
+//  which binds the name to the implicit return variable under its declared spelling; `ImplicitReturnVariableExecutionTests` runs `twice = x * 2` in `Twice` on all four backends),
 //  MF3/MF3u (cross-file module globals that differ only by case, #244). RDa (ReDim: MSIL), TYb (`TypeOf`/`CType` to a class: C++),
 //  TYe (an Enum: every backend) and USa (`Using`: every backend) fail identically in their same-case controls — pre-existing, none filed.
 // ================================================================================================
