@@ -17,6 +17,13 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #230 FIXED — a `Structure` declares methods, properties, operators, `Const`s, Shared members (a `Shared Sub New` too) and constructors: `Parser.ParseStructure` reads the body with the class member parser (fields stay in `StructureNode.Members`, the rest goes to `NonFieldMembers`), `IRBuilder` lowers it as a class flagged `IsStruct`, and the front end reports VB's BC36638 / BC30629 / BC31049 / BC36713 / BC30435 / BC30269 on every backend; `New P(args)` binds a declared constructor, `New P()` is ALWAYS the zeroing one. C++: `Me` is `(*this)` and a call / field store / accessor on a Structure FIELD or ARRAY ELEMENT goes through its storage (also fixes `o.S.V = 5`, which printed 0 for vbc's 6); MSIL: always a `.ctor()`, members `call`ed on the storage's ADDRESS; JavaScript still BL7005 (`git log --grep '#230'`)
+- **Tests (16 new, no assertion moved):** `StructureMembersExecutionTests` (Integration, 10: 17 vbc-answered programs on C#, C++ and MSIL x CLI / `--optimize` / `CompileProjectFiles`, hang-safe, + the BL7005 row; in `NotJavaScriptExecution`, the roster stays 131) + `StructureMembersDiagnosticsTests` (fast, 6, both in-process entry points). Mutants M1-M5 each killed (M1 by the BC36638 case alone). Stale "a Structure holds fields only" notes updated: ADR-0010 / 0013 / 0015, five test-header comments, HANDOFF
+- ⛔ **Gaps, NO test pins them** (fixture header): `Implements` and `(Of T)` on a Structure do not parse; method overloads are refused; a Structure declared BELOW its first use is refused; LSP completion after `s.` lists fields only; a Protected Sub/Function is BC30435 where vbc says BC31067 (field and property agree); inherited CLASS defects: `p20` C# writes the module global for a field assignment shadowed by a file-level `Dim`, `p30` C++ emits `override` on `Overrides ToString` with no virtual base; LLVM
+- **Gates (Linux):** fast 0 failed / 12,782 passed / 94 skipped; one filter each, 0 failed: `StructureMembers` 16, `Structure` 55, `Struct` 113, `ClosureLowering` 100, `LambdaBodyEmission` 335, `Parser` 77, `JsExecutionTierRosterTests` 5
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #227 AND #293 FIXED — C# writes a bottom-tested loop (`Do … Loop While/Until`, and a `Do … Loop` with no condition) ONCE, from its body (`CSharpBackend.GenerateBottomTestedLoop`): `do { body } while (c);` for a one-block condition that writes nothing, `while (true) { body; …condition…; if (!c) break; }` for the rest. It was a peeled first iteration plus a copy that dropped an If's continuation, a nested loop and the code after the loop: `Do … Loop Until` around a `Do While` HUNG, a `Do … Loop` left by `Exit Do` ran its body once and lost the code after it (#293), a Function returning from inside one was CS0161; JS, C++ and MSIL were right (`git log --grep '#227'`)
 - **Tests (10 new, 28 moved, 5 expectations added):** `BottomTestedLoopCSharpExecutionTests` (Integration, 10 vbc-answered programs, C# only, CLI / `--optimize` / `CompileProjectFiles`, hang-safe; in `NotJavaScriptExecution`, the roster stays 131); the #256 cells `f_LW_aa f_LW_ctl x_LW n_LD n_LDctl` have their C# expectation (`LoopConditionReevaluation` 343 → 348, and its "no expectation" list is EMPTY); MOVED to the new shape: `LoopConditionEmissionShapeTests` x26, `c5b_dowhile`, `E07w` (now `E07w_ExitDoInsideWhile_RunsOnEveryBackend`, C# hang-safe). Mutants M1-M5 of the fix are each killed, M4 (a hang) by the runner as a `hung` failure.
 - ⛔ **Gaps, NO test pins them** (fixture header): a ByRef argument inside a loop CONDITION is CS1620 (`p11`, the #232 family); there is no `Continue` statement (#262). ⛔ The timeout rule STAYS: a regression of #227 or #256 hangs C#, so a C# loop test goes through `CSharpProcessRunner` / `TempProbe.HangSafe`.
@@ -144,7 +151,7 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 ## ⚡ NEWEST — 2026-10-06: #208 TESTED — a `Shared Sub New` runs as the type initializer, once, on first use: C# `static C()`, MSIL the one `.cctor`, JS lazy `$typeInit`, C++ `blTypeInit_()` + `(C::blTypeInit_(), C::F)` at a Shared field access (`IRClass.TypeInitializer`; BC30479 / BC30043 / BC30269 refused; `git log --grep '#208'`)
 - **Tests (14 new, 0 moved):** `SharedConstructorExecutionTests` (Integration, 12 groups of 25 vbc-answered probes on C#, C++, JS, MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster now 124 = master 123 + 1) + `SharedConstructorDiagnosticsAndEmissionTests` (fast, 2: the refusals at vbc's sites; a class with no `Shared Sub New` emits no type-init text). Mutants M1-M12 killed (fixture headers). ⚠ P15: `New Derived()` runs Derived's initializer FIRST, then Base's (vbc's order, not base-first).
 - **Gates (Linux, ilasm / g++ / Node present):** fast 0 failed / 12,721 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 14, `Shared` 214 (+1 skipped), `Constructor` 337, `PropertyAccess` 74, `Initializer` 191, `CppCollection` 103, `OperandEvaluationOrder` 14, `JavaScriptBoundsCheck` 15, `JsExecutionTierRoster` 5. Full suite NOT run.
-- ⛔ **Gaps, NO test pins them** (fixture header): a generic class's JS initializer runs once in total; LLVM emits no body; `Public Shared Sub New` (BC30480) and a bare `MyBase.New()` in a Shared ctor are accepted; #295 (C++ `C->F` for a ByRef / indexed Shared field with NO Shared ctor; JS / MSIL refuse a Shared field ByRef); #270 (MSIL drops a bare write to an inherited Shared field). A Structure cannot declare a Shared member at all.
+- ⛔ **Gaps, NO test pins them** (fixture header): a generic class's JS initializer runs once in total; LLVM emits no body; `Public Shared Sub New` (BC30480) and a bare `MyBase.New()` in a Shared ctor are accepted; #295 (C++ `C->F` for a ByRef / indexed Shared field with NO Shared ctor; JS / MSIL refuse a Shared field ByRef); #270 (MSIL drops a bare write to an inherited Shared field). (A Structure could not declare a Shared member at all - ✅ it can since #230, 2026-10-07; `Shared Sub New` in a Structure runs on C#, C++ and MSIL.)
 
 ---
 
@@ -893,7 +900,7 @@ closed block: FOsb). The increment writes back under the storage's declared spel
 **The deliberate non-ICE (a deviation from the orchestrator's Q3).** A bound Local, Parameter, LambdaParameter or FILE-SCOPE ModuleGlobal whose declaration the IR did not register is an
 internal compiler error. A Field or Property miss is NOT, and neither is an owning-module or imported global (those are forward references): a member has no IR-side registration
 complete at the reference, so an ICE would refuse programs VB accepts. Reachable from source: a nested class reading its enclosing class's Shared field (fails on EVERY backend, control
-too, since before #124) and a base declared AFTER its derived class (NIb: prints VB's answer everywhere). NOT reachable: a Structure member (a Structure holds fields only) and a base in
+too, since before #124) and a base declared AFTER its derived class (NIb: prints VB's answer everywhere). NOT reachable: a Structure member (a Structure held fields only - ✅ STALE since #230, 2026-10-07: it declares methods now; whether a bare Structure member takes this path was not measured) and a base in
 another file (refused: `InheritedMemberTests.ACrossFileBaseClass_IsNotFound_Pinned`). The file-scope ICE is not reachable from source either (the analyzer refuses use before declaration):
 it is tested on the real front end with a tampered binding, `NameBindingMissTests`.
 
@@ -4977,7 +4984,7 @@ single new failure against the 170-name baseline.
   ACCESS does not compile (`Box.Total` emits `t0 = Box->Total;` — "'Box' does not refer to a
   value"); a `Protected` field is not visible from a derived class ("Undefined identifier"), as the
   analyzer does not inherit Protected members into scope; a `Structure` field initializer does not
-  PARSE ("Expected member name but found Assignment").
+  PARSE ("Expected member name but found Assignment") (✅ #230, 2026-10-07: it parses and is BC31049, as vbc).
   ✅ **`CStr(Double)` → `2.500000` on C++** was the divergence above; it now prints `2.5`.
   `CStr(Boolean)` → `True` is .NET's spelling (JavaScript printed `true` until 2026-09-24).
 
@@ -6733,8 +6740,7 @@ single new failure against the 170-name baseline.
   measured with a plain undeclared call).
   ⛔ **Refused, naming the construct, never mis-emitted:** a ByRef parameter captured by a lambda;
   a lambda inside an Iterator/Async function, or an iterator/async lambda; `Me` captured in a
-  Structure's method (untestable today — this front end's `Structure` has no method syntax at
-  all, fields only); a capture set #122 could not enumerate (raw inline code); a lambda that
+  Structure's method (✅ #230, 2026-10-07: a Structure has methods now and the FRONT END refuses it with BC36638; this refusal is the MSIL backstop); a capture set #122 could not enumerate (raw inline code); a lambda that
   declares a name it also reads from the creator (N9) or one that differs from its own parameter
   only by case (#169 — **STALE as of ADR-0013, 2026-09-28, see the note below the list**); a
   captured variable typed by the creator's own generic parameter; a
@@ -7434,9 +7440,9 @@ single new failure against the 170-name baseline.
     control variable or a `Catch` variable declared inside a lambda is #231's job (X1/X3), so is
     the GENERAL nested-block rule with no lambda involved at all (B1-B3, VB's own BC30616/BC30734
     but not yet BasicLang's), a lambda `Dim` named like the enclosing Function (E16), and a type
-    parameter (E26, VB's own BC32089). BC36638 (`Me` in a Structure lambda) stays unreported —
-    **waits on #230**, since `ParseStructure` accepts only fields today and no Structure method
-    can hold a lambda at all; #174 added no dead code for it.
+    parameter (E26, VB's own BC32089). BC36638 (`Me` in a Structure lambda) stayed unreported —
+    it waited on #230, since `ParseStructure` accepted only fields and no Structure method
+    could hold a lambda at all; #174 added no dead code for it (✅ DONE by #230, 2026-10-07: reported by the front end).
   - **`ClosureLowering`'s own two refusals (ADR-0010 D4 ByRef-capture, and its own "N9"
     declares-while-captured) stay as BACKSTOPS**, now unreachable from most checked, front-end-
     accepted programs but not all: D4 is fully covered by BC36639 (every depth), so nothing

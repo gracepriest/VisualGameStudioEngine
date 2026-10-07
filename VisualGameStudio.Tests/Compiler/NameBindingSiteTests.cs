@@ -1750,8 +1750,10 @@ public class NameBindingMissTests
     /// base declared AFTER its derived class (the IR class list is filled in declaration order, so
     /// the base is not there yet). Each still builds, and each reference lowers to the declared name.
     ///
-    /// <para>⚠ Not reachable from source: a Structure's member (a Structure has fields only — no
-    /// method body can name one bare), and a base class in ANOTHER FILE (refused today:
+    /// <para>⚠ Not reachable from source: a Structure's member (a Structure had fields only — no
+    /// method body could name one bare; STALE since #230, a Structure declares methods now, and
+    /// <c>StructureMembersExecutionTests</c> runs a bare field write and a bare self-call inside
+    /// one; whether either takes this IR-miss path was not measured here), and a base class in ANOTHER FILE (refused today:
     /// <c>InheritedMemberTests.ACrossFileBaseClass_IsNotFound_Pinned</c>). Both are covered by the
     /// hand-built rows above.</para>
     /// </summary>

@@ -47,7 +47,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect). Each is outside what #209 fixes, and is the same before and after it:
 //    * JavaScript refuses every ByRef parameter by design (BL7002), so no probe runs there; `JavaScript_StillRefusesTheByRefParameter_BL7002` is the one row that says so.
-//    * A `Property` inside a `Structure` does not parse ("Expected member name but found Property", P07), so a struct's property cannot be passed ByRef at all.
+//    * A `Property` inside a `Structure` did not parse ("Expected member name but found Property", P07), so a struct's property could not be passed ByRef at all. (#230: it parses now; whether a struct's property passes ByRef is not measured here.)
 //    * A .NET property is NOT a copy-out argument unless it is KNOWN ReadOnly. #222 made `l.Count` and `s.Length` ones (copied in, never written
 //      back: `NetReadOnlyPropertyExecutionTests` runs `Change(l.Count)` and `Change(s.Length)`); every other .NET property is unchanged: a native-BCL-surface member has no property symbol, so the settable
 //      `sb.Length` stays CS0206 on C#, refused on MSIL and a type-map failure on C++ (P10), and `Change(l.Capacity)` / `Change(a.Message)` are refused ("cannot convert from 'Object'").

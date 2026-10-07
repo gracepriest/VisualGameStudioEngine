@@ -235,7 +235,10 @@ the test-writer's measurements.
     fail in their own backend, never in the IR builder (an enclosing class's Shared field read from a nested
     class, and a base declared after its derived class; the nested-class shape fails on every backend for a
     reason that predates #124, in the same-case control too). A Structure's member cannot be named bare (a
-    Structure holds fields only) and a base class in another file is refused today (`Unknown base class`).
+    Structure holds fields only; **stale since #230, 2026-10-07**: a Structure declares methods now, and
+    `StructureMembersExecutionTests` runs a bare field write and a bare self-call inside one on three
+    backends; whether either takes this IR-miss path was not measured) and a base class in another file
+    is refused today (`Unknown base class`).
     Those two are covered by hand-built input: a Field or Property binding whose declared name nothing
     registers builds without throwing.
   - ⚠ The file-scope ICE cannot be reached from source either (the analyzer refuses a file-scope global

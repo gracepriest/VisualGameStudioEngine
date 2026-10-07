@@ -694,6 +694,8 @@ public class JsExecutionTierRosterTests
         "MsilGenericTypeTokenExecutionTests",
         // Tasks #227 / #293: a bottom-tested loop (`Do … Loop While/Until`, `Do … Loop` left by `Exit Do`) is written once on C#, run against vbc on C# only, through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays 131.
         "BottomTestedLoopCSharpExecutionTests",
+        // Task #230: a Structure declares methods, properties, Shared members and constructors, run against vbc on C#, C++ and MSIL through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays 131. JavaScript still refuses every Structure (BL7005); its one row only COMPILES (CLI and generator) and asserts the refusal.
+        "StructureMembersExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>
