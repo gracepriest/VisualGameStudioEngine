@@ -43,15 +43,18 @@ namespace VisualGameStudio.Tests.Compiler;
 //    - The front end does not refuse a Private member used from OUTSIDE its class, in either declaration order
 //      (`c.F` from Main compiles; C# says CS0122, MSIL FieldAccessException, JavaScript has no private).
 //      Pre-existing; task #273.
-//    - `Me.<Const>` is CS0176 on C# and a wrong value on JavaScript; a Shared-PROPERTY increment is wrong on C++;
-//      and a member declared below its bare use that SHADOWS a file-scope global binds the global on C# and
-//      JavaScript. All pre-existing; task #274. (The rows below use a bare Const, a Shared FIELD and a Shared
-//      read-only property, and no global of the same name, for exactly that reason.)
+//    - `Me.<Const>` is CS0176 on C# and a wrong value on JavaScript; and a member declared below its bare use that
+//      SHADOWS a file-scope global binds the global on C# and JavaScript. Both pre-existing; task #274. (The rows
+//      below use a bare Const, a Shared FIELD and a Shared read-only property, and no global of the same name, for
+//      exactly that reason.) ((#274 also listed "a Shared-PROPERTY increment is wrong on C++": FIXED by #218 / #254,
+//      in `CppCodeGenerator.IsStorageAutoProperty`; `CppAutoPropertyBareStoreExecutionTests` A19 is that shape, a
+//      Private Shared `Count = Count + 1` declared below its use, and printed `1,0,9 | 2,1,9` on C++ before.))
 //    - A derived class naming its base's Private FUNCTION bare is not refused (R2uf's `Twice(1)`): pass 1
 //      flattens every procedure signature into the global scope by bare name, so it resolves there. Only the
 //      field in that program is refused, and only the field is pinned.
-//    - Observed while writing these rows, not filed: C++ drops `R = Q * 10` after `Q = P + 1` on plain
-//      auto-properties, in a single all-Public class on master too. T6 uses `R = 9` to stay clear of it.
+//    - (Observed while writing these rows, not filed: C++ dropped `R = Q * 10` after `Q = P + 1` on plain
+//      auto-properties, in a single all-Public class on master too. FIXED by #218 / #254, and
+//      `CppAutoPropertyBareStoreExecutionTests` A09 runs that chain. T6 keeps `R = 9`.)
 //    - A derived class in ANOTHER file is "Unknown base class" (open in CLAUDE.md), so there is no cross-file
 //      derived row; the cross-file row is a class with Private members used by its own methods.
 //

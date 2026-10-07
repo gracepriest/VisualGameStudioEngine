@@ -27,9 +27,9 @@ namespace VisualGameStudio.Tests.Compiler;
 ///   <item><c>MyBase.P</c> on a PROPERTY dispatches to the override on all four backends (probe V4autoboth prints
 ///   <c>5,5</c> where vbc prints <c>5,0</c>; V5grand, a <c>MyBase.V</c> inside the override, recurses until the stack
 ///   overflows) — task #271.</item>
-///   <item>C++ drops a bare store to a PLAIN (non-Overridable) auto-property (probe V6shared prints <c>10 0 6</c>
-///   where vbc prints <c>12 4 6</c>) — #254 / PRa.</item>
 /// </list>
+/// <para>(C++ used to drop a bare store to a PLAIN (non-Overridable) auto-property written beside an Overridable one — probe V6shared printed <c>10 0 6</c>
+/// where vbc prints <c>12 4 6</c>, #254 / PRa. FIXED by #218 / #254, so it is no longer a gap: <c>V6shared</c> runs below, on C++.)</para>
 /// <para>(An auto-property initialiser, <c>Property V As Integer = 4</c>, used to be listed here as not parsing; #210 fixed it, and
 /// <c>AutoPropertyInitializerExecutionTests</c> P07 runs it on an Overridable property.)</para>
 /// </summary>
@@ -435,6 +435,36 @@ public class OverridableAutoPropertyExecutionTests
 
     private const string E24Expected = "9";
 
+    /// <summary>V6shared — a PLAIN Shared and a PLAIN instance auto-property stored by their bare names (`Count = Count + 1`, `Plain = Plain + 2`) in a base's method, beside an Overridable one stored the same way
+    /// (`V = V + 3`), reached through a derived class; then `A.Count = A.Count + 10` from outside. On C++ the two plain stores were dropped (`10 0 6`) until #218 / #254; the Overridable one was never affected.</summary>
+    private const string V6shared = """
+        Class A
+            Public Shared Property Count As Integer
+            Public Property Plain As Integer
+            Overridable Property V As Integer
+
+            Sub Touch()
+                Count = Count + 1
+                Plain = Plain + 2
+                V = V + 3
+            End Sub
+        End Class
+
+        Class B
+            Inherits A
+        End Class
+
+        Sub Main()
+            Dim b As New B()
+            b.Touch()
+            b.Touch()
+            A.Count = A.Count + 10
+            Console.WriteLine(CStr(A.Count) & " " & CStr(b.Plain) & " " & CStr(b.V))
+        End Sub
+        """;
+
+    private const string V6sharedExpected = "12 4 6";
+
     // ---- JavaScript: the override is reached --------------------------------------------------------
 
     /// <summary>Every JavaScript row printed the BASE's value before #150 (a class field shadows the derived accessor); each must now print vbc's, through all three entry points.</summary>
@@ -457,6 +487,13 @@ public class OverridableAutoPropertyExecutionTests
     [TestCase(E24, E24Expected, TestName = "E24_SmallestReadOnlyCtorWrite_Cpp")]
     public void AnOverridableReadOnlyAutoProperty_WrittenByItsConstructor_CompilesAndRuns_OnCpp(string source, string expected)
         => TempExec.AssertMatchesInEveryEntryPoint(Bk.Cpp, source, expected, "#150");
+
+    // ---- C++: a plain auto-property's bare store lands (#218 / #254) ------------------------------
+
+    /// <summary>V6shared: the plain Shared and instance auto-properties are stored by their bare names (12 4 6); C++ printed `10 0 6` before #218 / #254 (vbc `12 4 6`).</summary>
+    [Test]
+    public void APlainAutoPropertyBesideAnOverridableOne_IsStoredByItsBareName_OnCpp()
+        => TempExec.AssertMatchesInEveryEntryPoint(Bk.Cpp, V6shared, V6sharedExpected, "V6shared (#254)");
 }
 
 /// <summary>
