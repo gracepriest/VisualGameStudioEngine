@@ -55,7 +55,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //      sees it before it is assigned.
 //    * JavaScript overloaded constructors (#238): P08.
 //    * MSIL generic `As T` (#239): a property of a generic class `Property P As T = ...`.
-//    * C++ `Inherits Exception` (#151): a class whose base is `Exception` does not compile on C++, with or without a property initializer.
+//    * (C++ `Inherits Exception`, #151, did not compile with or without a property initializer. FIXED by #151's C++ half: `CppUserExceptionExecutionTests`; no longer a gap.)
 // ================================================================================================
 
 /// <summary>#210 — an auto-property initializer parses and runs, on C#, C++, JavaScript and MSIL.</summary>

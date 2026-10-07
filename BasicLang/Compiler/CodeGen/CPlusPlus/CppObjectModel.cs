@@ -14,7 +14,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// <list type="bullet">
     /// <item>A hierarchy ROOT is a class with no BasicLang base: no <c>Inherits</c>, or an
     /// <c>Inherits</c> naming something that is not a class of this module (a
-    /// <c>#CppInclude</c>d C++ class). It alone carries <c>enable_shared_from_this</c> (D1).</item>
+    /// <c>#CppInclude</c>d C++ class). It alone carries <c>enable_shared_from_this</c> (D1).
+    /// ⚠ <c>Inherits Exception</c> (or another built-in exception) is NOT a root (#151): the
+    /// runtime's <c>BasicLang::Exception</c> is, and the class builds on it like on a BasicLang
+    /// base.</item>
     /// <item>A FOREIGN-ROOTED hierarchy is one whose root's base is such a C++ class — an
     /// ANCESTOR walk, never a descendant scan (D2a).</item>
     /// <item>The <c>MyBase.New</c> arguments of a constructor are the operands of its
@@ -36,15 +39,96 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <summary>
         /// The base <paramref name="cls"/> names in its <c>Inherits</c> when that base is NOT a
         /// BasicLang class of this module — a C++ class reached through <c>#CppInclude</c> — else
-        /// null. (An <c>Inherits Exception</c> lands here too; it has no C++ class to name and
-        /// fails in clang exactly as it did before ADR-0015.)
+        /// null. A built-in .NET exception base (<c>Inherits Exception</c>) is NOT foreign (#151):
+        /// it is the runtime's <c>BasicLang::Exception</c>, an ordinary two-phase base
+        /// (<see cref="IsRuntimeExceptionBase"/>).
         /// </summary>
         public static string ForeignBaseOf(IRModule module, IRClass cls) =>
             cls != null && !cls.IsStruct
             && !string.IsNullOrEmpty(cls.BaseClass)
             && !IsUserClass(module, cls.BaseClass)
+            && !IsRuntimeExceptionBase(module, cls.BaseClass)
                 ? cls.BaseClass
                 : null;
+
+        /// <summary>
+        /// #151: true when <paramref name="baseName"/>, written in an <c>Inherits</c>, is one of the
+        /// built-in .NET exceptions (<see cref="CppExceptionTypes"/>) and not a class of this module.
+        /// The C++ runtime's <c>BasicLang::Exception</c> (<see cref="CppExceptionRuntime"/>) stands
+        /// in for it: an ordinary hierarchy root — <c>enable_shared_from_this</c>, a tag
+        /// constructor and <c>ctor_</c> overloads — so the class below it is NOT a root and builds
+        /// its base through <c>ctor_</c> like any BasicLang base, never through a member-initializer
+        /// list. Which built-in it was survives only in the type chain a throw carries
+        /// (<see cref="ExceptionChainOf"/>).
+        /// </summary>
+        public static bool IsRuntimeExceptionBase(IRModule module, string baseName) =>
+            !string.IsNullOrEmpty(baseName)
+            && !IsUserClass(module, baseName)
+            && CppExceptionTypes.TryGetInheritanceChain(baseName, out _);
+
+        /// <summary>
+        /// #151: the built-in .NET exception at the top of <paramref name="cls"/>'s ancestor chain
+        /// (<c>Exception</c>, <c>ArgumentException</c>, …), or null when the class is not an
+        /// exception. An ANCESTOR walk, like <see cref="ForeignRootOf"/>.
+        /// </summary>
+        public static string ExceptionRootOf(IRModule module, IRClass cls)
+        {
+            var seen = new HashSet<IRClass>(ReferenceEqualityComparer.Instance);
+            while (cls != null && !cls.IsStruct && seen.Add(cls))
+            {
+                if (string.IsNullOrEmpty(cls.BaseClass)) return null;
+                if (!IsUserClass(module, cls.BaseClass))
+                    return IsRuntimeExceptionBase(module, cls.BaseClass) ? cls.BaseClass : null;
+                cls = module.Classes[cls.BaseClass];
+            }
+            return null;
+        }
+
+        /// <summary>#151: true when <paramref name="name"/> is a class of this module that is an exception.</summary>
+        public static bool IsExceptionClass(IRModule module, string name) =>
+            IsUserClass(module, name) && ExceptionRootOf(module, module.Classes[name]) != null;
+
+        /// <summary>
+        /// #151: true when <paramref name="cls"/> or a BasicLang class above it declares a field,
+        /// property or method named <paramref name="member"/> — so a member access by that name
+        /// reaches the user's member, not one <c>BasicLang::Exception</c> provides (or lacks).
+        /// </summary>
+        public static bool DeclaresMember(IRModule module, IRClass cls, string member)
+        {
+            var seen = new HashSet<IRClass>(ReferenceEqualityComparer.Instance);
+            while (cls != null && seen.Add(cls))
+            {
+                if (cls.Fields.Any(f => string.Equals(f.Name, member, StringComparison.OrdinalIgnoreCase))
+                    || cls.Properties.Any(p => string.Equals(p.Name, member, StringComparison.OrdinalIgnoreCase))
+                    || cls.Methods.Any(m => string.Equals(m.Name, member, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+                cls = IsUserClass(module, cls.BaseClass) ? module.Classes[cls.BaseClass] : null;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// #151: the type chain a thrown <paramref name="cls"/> carries, most-derived FIRST and
+        /// ';'-separated — this module's classes by their declared names, then the built-in root's
+        /// .NET chain: <c>LeafErr;BaseErr;System.Exception</c>. It is what
+        /// <c>BasicLang::NetException::Matches</c> walks, so a <c>Catch</c> of a user exception is
+        /// decided by element equality on the class's name, exactly as a .NET-typed one is. Null
+        /// when the class is not an exception.
+        /// </summary>
+        public static string ExceptionChainOf(IRModule module, IRClass cls)
+        {
+            var root = ExceptionRootOf(module, cls);
+            if (root == null || !CppExceptionTypes.TryGetInheritanceChain(root, out var netChain)) return null;
+            var names = new List<string>();
+            var seen = new HashSet<IRClass>(ReferenceEqualityComparer.Instance);
+            while (cls != null && seen.Add(cls))
+            {
+                names.Add(cls.Name);
+                cls = IsUserClass(module, cls.BaseClass) ? module.Classes[cls.BaseClass] : null;
+            }
+            names.Add(netChain);
+            return string.Join(";", names);
+        }
 
         /// <summary>D1: the class that carries the hierarchy's one <c>enable_shared_from_this</c>.</summary>
         public static bool IsRoot(IRModule module, IRClass cls) =>
@@ -61,7 +145,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             while (cls != null && !cls.IsStruct && seen.Add(cls))
             {
                 if (string.IsNullOrEmpty(cls.BaseClass)) return null;
-                if (!IsUserClass(module, cls.BaseClass)) return cls.BaseClass;
+                if (!IsUserClass(module, cls.BaseClass))
+                    return IsRuntimeExceptionBase(module, cls.BaseClass) ? null : cls.BaseClass;
                 cls = module.Classes[cls.BaseClass];
             }
             return null;

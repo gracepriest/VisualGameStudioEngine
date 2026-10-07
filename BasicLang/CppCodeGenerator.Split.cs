@@ -459,6 +459,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (DeclaresClass(module))
                 SpliceRuntimeSource(CppObjectModelRuntime.Source);
 
+            // #151: BasicLang::Exception, on demand over the COMBINED module, after the object
+            // model — mirroring the combined mode (keep in sync).
+            if (DeclaresExceptionClass(module))
+                SpliceRuntimeSource(CppExceptionRuntime.Source);
+
             EmitFrameworkCatalog();
         }
 
