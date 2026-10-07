@@ -41,13 +41,14 @@ namespace VisualGameStudio.Tests.Compiler;
 //  follow-up — measured identical before and after #124; asserting them would pin a defect):
 //
 //    FL  / FLc   C#   prints 7 where vbc prints 42 — a lambda's write to a field; the control too. Pre-existing; no follow-up filed.
-//    PRa / PRac  C++  prints 0 where vbc prints 30 — an auto-property written by its bare name; the control too. Pre-existing; none filed.
 //    FOg / FOgc  C#   CS0103 — the increment of a For over ANOTHER module's global.                  #246 (pinned below)
 //    MF5 / MF5c  C#   the same, across files.                                                        #246 (pinned below)
 //    EVb / EVbc  C++, MSIL   events do not run there in ANY case (C++ does not compile, MSIL BL-FAILs).      #245
 //    EVr / EVrc  C++, MSIL   the same.                                                               #245
 //    AWa / AWac  C++, JS, MSIL  Await on those backends: C++ and MSIL do not compile the control (`member reference type Task<int>`,
 //                            `undefined class 'Task'`) and JavaScript prints `undefined` for it. Pre-existing async gaps; none filed. C# is the only cell the fix moved.
+//
+//  (PRa / PRac, an auto-property written by its bare name, were excluded on C++ — it printed 0 for vbc's 30, the control too. FIXED by #218 / #254: both now run on all four backends.)
 //
 //  Rows NOT here because #124 does not fix them: EVa (`AddHandler b.clicked` — a member-access event, #245), FOac (`For x As T`
 //  leaves the variable bound, #247), CAn (`Catch err` with no `As`, #248), MEr (a Function's own name as its return value, #249),
@@ -257,7 +258,7 @@ internal static class BindingProbes
             o.count = o.COUNT * 10
             Console.WriteLine(o.Count)
         End Sub
-        """, "30", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "30", Bk.All);
 
     /// <summary>The same-case control of PRa.</summary>
     internal static readonly TempProbe PRac = P("PRac", """
@@ -274,7 +275,7 @@ internal static class BindingProbes
             o.Count = o.Count * 10
             Console.WriteLine(o.Count)
         End Sub
-        """, "30", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "30", Bk.All);
 
     /// <summary>A For Each over a FIELD reuses it.</summary>
     internal static readonly TempProbe FEf = P("FEf", """
@@ -1076,8 +1077,8 @@ public class NameBindingResolutionExecutionTests
             Assert.That(Ids(ControlCells()), Is.EqualTo("FRc,FWc,FLc,FInc,FShBc,PRac,FEfc,FElac,FOfc,FOgc,FOgfc,FOlc,FOlac,FOpc,MEac,MEbc,MEsc,MEtc,TYac,EVbc,AWac,MGwc,EVrc,NIbc"));
             Assert.That(Ids(ProjectVariantCells()), Is.EqualTo("MF1,MF2,MF5"));
             Assert.That(Ids(ProjectControlCells()), Is.EqualTo("MF1c,MF2c,MF5c"));
-            Assert.That(VariantCells().Count(), Is.EqualTo(90), "case-differing cells (id x backend)");
-            Assert.That(ControlCells().Count(), Is.EqualTo(86), "same-case control cells (id x backend)");
+            Assert.That(VariantCells().Count(), Is.EqualTo(91), "case-differing cells (id x backend)");
+            Assert.That(ControlCells().Count(), Is.EqualTo(87), "same-case control cells (id x backend)");
             Assert.That(ProjectVariantCells().Count(), Is.EqualTo(11), "MF1 x4, MF2 x4, MF5 x3 (C# is #246)");
             Assert.That(ProjectControlCells().Count(), Is.EqualTo(11), "MF1c x4, MF2c x4, MF5c x3 (C# is #246)");
         });

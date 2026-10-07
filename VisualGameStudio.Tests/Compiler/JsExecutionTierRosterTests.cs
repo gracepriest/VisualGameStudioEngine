@@ -665,6 +665,8 @@ public class JsExecutionTierRosterTests
         "ObjectConversionIntrinsicExecutionTests",
         // Task #216: an Optional parameter typed Object with a non-Nothing default (`= 5`, `= "x"`, `= True`, `= 2.5`, `= "a"c`, `= 5000000000L`) is VB's [Optional, DefaultParameterValue] encoding on C#, run against vbc through the CLI, --optimize and CompileProjectFiles, every run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript and MSIL already ran these programs.
         "OptionalObjectDefaultExecutionTests",
+        // Tasks #218 / #254: a bare store to a plain auto-property (`P = P + 10`, `P += 20`, `Count += 1`, `S = S * 10`, `P++`) lands on C++ (CppCodeGenerator.IsStorageAutoProperty), run against vbc on C++ with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript, MSIL and C# already answered these programs.
+        "CppAutoPropertyBareStoreExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

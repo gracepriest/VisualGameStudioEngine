@@ -167,39 +167,42 @@ public class PropertyAccessExecutionTests
     public void E27_IfElseThenForLoopInOwnCtor_MsilAggressive() =>
         Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(E27)), Is.EqualTo("7"));
 
+    /// <summary>#218 — was a SILENT WRONG ANSWER, now vbc's: the C++ backend ran E16's compound-assignment
+    /// chain to completion and printed 2 for 22, because a computed bare store to a plain auto-property
+    /// (`P += 10`, `Me.P *= 2` on a ReadOnly one, inside its own constructor) was dropped. It now prints
+    /// "22" like every other backend (moved from `..._PinsSilentWrongAnswer_Against218`; the C++ backend's
+    /// `IsStorageAutoProperty`). The fixture `CppAutoPropertyBareStoreExecutionTests` covers the shape
+    /// through the CLI, `--optimize` and `CompileProjectFiles`; this row keeps the in-process optimizing
+    /// helper.</summary>
+    [Test]
+    public void E16_CompoundAssignmentChainInOwnCtor_Cpp()
+    {
+        Assert.That(
+            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E16))),
+            Is.EqualTo("22"),
+            "task #218: a compound-assignment chain on a ReadOnly auto-property inside its own "
+            + "constructor must print VB's/every other backend's '22' on C++ too. '2' means the C++ "
+            + "backend dropped the computed bare stores again (CppCodeGenerator.IsStorageAutoProperty).");
+    }
+
+    /// <summary>#218's second probe — the same shape, an If/Else block then a counted For loop instead of a
+    /// compound chain. Was a pin printing "0"; now vbc's "7" (moved from
+    /// `..._PinsSilentWrongAnswer_Against218`).</summary>
+    [Test]
+    public void E27_IfElseThenForLoopInOwnCtor_Cpp()
+    {
+        Assert.That(
+            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E27))),
+            Is.EqualTo("7"),
+            "task #218: an If/Else block then a For loop writing a ReadOnly auto-property inside its own "
+            + "constructor must print VB's/every other backend's '7' on C++ too. '0' means the C++ "
+            + "backend dropped the computed bare stores again (CppCodeGenerator.IsStorageAutoProperty).");
+    }
+
     // ====================================================================================
     // Pins — each names the task it belongs to. Not fixed here; #178's own scope is the
     // diagnostic, not these pre-existing backend gaps its probes surfaced.
     // ====================================================================================
-
-    /// <summary>#218 — a SILENT WRONG ANSWER, not a refusal: the C++ backend runs E16's
-    /// compound-assignment chain to completion and prints the WRONG number. Pinned visibly
-    /// (VB/every other backend answer "22") rather than left undiscovered.</summary>
-    [Test]
-    public void E16_CompoundAssignmentChainInOwnCtor_Cpp_PinsSilentWrongAnswer_Against218()
-    {
-        Assert.That(
-            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E16))),
-            Is.EqualTo("2"),
-            "task #218 (pre-existing, unrelated to #178's own front-end fix): C++ prints '2', not "
-            + "VB's/every other backend's '22', for a compound-assignment chain on a ReadOnly "
-            + "auto-property inside its own constructor. A different answer here (including '22') "
-            + "means #218 moved — update this pin, do not just delete it.");
-    }
-
-    /// <summary>#218's second probe — same silent-wrong-answer shape, an If/Else block then a
-    /// counted For loop instead of a compound chain.</summary>
-    [Test]
-    public void E27_IfElseThenForLoopInOwnCtor_Cpp_PinsSilentWrongAnswer_Against218()
-    {
-        Assert.That(
-            FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(E27))),
-            Is.EqualTo("0"),
-            "task #218 (pre-existing, unrelated to #178's own front-end fix): C++ prints '0', not "
-            + "VB's/every other backend's '7', for an If/Else block then a For loop writing a "
-            + "ReadOnly auto-property inside its own constructor. A different answer here "
-            + "(including '7') means #218 moved — update this pin, do not just delete it.");
-    }
 
     /// <summary>#219 — E09 (the accessor's implicit GET RETURN VARIABLE, task #178's own carve-out
     /// exempts it from BC30526 — see <c>PropertyAccessDiagnosticsTests.

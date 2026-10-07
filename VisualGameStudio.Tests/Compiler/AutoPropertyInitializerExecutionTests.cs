@@ -24,7 +24,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //  EXCLUDED CELLS (stated, each pre-existing and measured identical on master 621d1348 with NO property initializer in the program):
 //    * P02 (a Decimal and a Long property) runs on C#, C++ and MSIL: JavaScript refuses `Decimal` (BL7007) and `Long` (BL7003). P02js is the same program without those two, and runs on all four.
 //    * P08 (two constructors) runs on C#, C++ and MSIL: JavaScript has no constructor overloads and emits two `constructor`s (#238). P08b is the same program with ONE constructor, on all four.
-//    * P06 and Q01 / Q03 / Q04 run on C#, JavaScript and MSIL, not C++: a bare store to a plain auto-property (`P = P + 10`, `S += 1`, `Count += 1`) is dropped on C++ (#254), with or without an initializer.
+//    * (P06 and Q01 / Q03 / Q04 used to run on C#, JavaScript and MSIL only: a bare store to a plain auto-property (`P = P + 10`, `S += 1`, `Count += 1`) was dropped on C++ (#254), with or without an initializer.
+//      FIXED by #218 / #254 in `CppCodeGenerator.IsStorageAutoProperty`: all four now run on C++ too, and `CppAutoPropertyBareStoreExecutionTests` covers the shapes without an initializer.)
 //    * P07 runs on all four. JavaScript's class-field timing (#234 family) shows only where a base constructor reads a property the DERIVED class initializes WITHOUT overriding (P07p prints "base sees undefined"
 //      for vbc's 0) or where a derived Set override reads its own field (P20): both listed below, neither tested.
 //
@@ -49,7 +50,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * Within one class, field initializers run before property initializers. With constant initializers that is observable only through a derived Set that reads a field of the same object.
 //    * LLVM places nothing new.
 //    * JavaScript has no Decimal (BL7007) and no Long (BL7003).
-//    * C++ drops a bare store to a plain auto-property (#254): P06, Q01, Q03, Q04 above.
+//    * (C++ dropped a bare store to a plain auto-property, #254: P06, Q01, Q03, Q04. FIXED by #218 / #254, see above; no longer a gap.)
 //    * JavaScript class-field timing (P07p, P20): the property is installed after `super()` returns, so a base constructor's virtual call sees `undefined`, and a derived Set override that reads a field
 //      sees it before it is assigned.
 //    * JavaScript overloaded constructors (#238): P08.
@@ -122,7 +123,7 @@ public class AutoPropertyInitializerExecutionTests
 
     /// <summary>
     /// (4) A DECLARED constructor runs the initializers first, in declaration order and interleaved with the field initializers' values, then its own body: the body reads 1, 2, 3, q (the field and the property
-    /// values) and then writes `P = P + 10` (P06; not C++, see the header). M1 prints 1 | 0 | 3 |  | 10: the properties are never initialized when the class declares a constructor.
+    /// values) and then writes `P = P + 10` (P06; on C++ that store was dropped until #218 / #254: the last line printed 2 for 12). M1 prints 1 | 0 | 3 |  | 10: the properties are never initialized when the class declares a constructor.
     /// </summary>
     [Test]
     public void ADeclaredConstructor_RunsTheInitializersBeforeItsBody_AndItsBodyWritesLast()
@@ -167,7 +168,7 @@ public class AutoPropertyInitializerExecutionTests
 
     /// <summary>
     /// (9) #208 x #210: a Shared property with an initializer AND a `Shared Sub New` that bumps it with `S += 1` (Q01: 5 then 6; the initializer runs BEFORE the Shared Sub New's body, as vbc orders them), and the
-    /// same with an instance constructor that reads it (Q04: 100, bumped by the Shared ctor and again by each `New`). Not C++ (#254, see the header). M3 (MSIL) and M6 (C#) print 1 for Q01 (the body runs, the initializer
+    /// same with an instance constructor that reads it (Q04: 100, bumped by the Shared ctor and again by each `New`). On C++ too since #218 / #254 (the bare `S += 1` / `Count += 1` stores used to be dropped there: Q01 printed 5 for 6, Q04 `100 | 100 | 100` for `102 | 103 | 103`). M3 (MSIL) and M6 (C#) print 1 for Q01 (the body runs, the initializer
     /// never did) and `2 | 3 | 3` for Q04.
     /// </summary>
     [Test]
@@ -184,7 +185,7 @@ public class AutoPropertyInitializerExecutionTests
 
     /// <summary>
     /// (11) #208 x #210: a Shared METHOD called first, with no `New` and no Shared access before it, runs the type initializer (Q03: "start", "init sees 5", 50, "t"): the Shared property's initializer (5) is what
-    /// the Shared Sub New body reads, and the Shared String one is set too. Not C++ (#254). M3 (MSIL) and M6 (C#) print "init sees 0".
+    /// the Shared Sub New body reads, and the Shared String one is set too. On C++ too since #218 / #254 (its `S = S * 10` used to be dropped: it printed "init sees 5" then 5). M3 (MSIL) and M6 (C#) print "init sees 0".
     /// </summary>
     [Test]
     public void ASharedMethodCalledFirst_SeesTheSharedPropertyInitializer_InsideTheSharedSubNew()
@@ -288,7 +289,7 @@ internal static class AutoPropertyInitProbes
         End Sub
         """, "3\n4\nt\n5");
 
-    /// <summary>Field and property initializers, a declared constructor reading all four and then writing `P = P + 10`. Not C++ (#254: the bare store is dropped, the last line prints 2).</summary>
+    /// <summary>Field and property initializers, a declared constructor reading all four and then writing `P = P + 10`. On C++ too since #218 / #254 (the bare store used to be dropped, the last line printed 2).</summary>
     internal static readonly TempProbe P06 = P("P06_order", """
         Class C
             Public A As Integer = 1
@@ -307,7 +308,7 @@ internal static class AutoPropertyInitProbes
             Dim c As New C()
             Console.WriteLine(c.P)
         End Sub
-        """, "1\n2\n3\nq\n12", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "1\n2\n3\nq\n12");
 
     /// <summary>A base constructor reads an OVERRIDABLE property; the derived class overrides it with an initializer of its own.</summary>
     internal static readonly TempProbe P07 = P("P07_basector", """
@@ -500,7 +501,7 @@ internal static class AutoPropertyInitProbes
         End Sub
         """, "base 5 1\n3");
 
-    /// <summary>A Shared property with an initializer AND a `Shared Sub New` that bumps it. Not C++ (#254).</summary>
+    /// <summary>A Shared property with an initializer AND a `Shared Sub New` that bumps it.</summary>
     internal static readonly TempProbe Q01 = P("Q01_sharedinit_ssn", """
         Class C
             Public Shared Property S As Integer = 5
@@ -511,7 +512,7 @@ internal static class AutoPropertyInitProbes
         Sub Main()
             Console.WriteLine(C.S)
         End Sub
-        """, "6", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "6");
 
     /// <summary>A class whose ONLY constructor is a `Shared Sub New`, with an instance property initializer.</summary>
     internal static readonly TempProbe Q02 = P("Q02_ssn_only_instance", """
@@ -530,7 +531,7 @@ internal static class AutoPropertyInitProbes
         End Sub
         """, "start\ntype init\n7\n7");
 
-    /// <summary>A Shared METHOD called first; the Shared Sub New body reads the Shared property's initializer. Not C++ (#254: its `S = S * 10` is a bare store).</summary>
+    /// <summary>A Shared METHOD called first; the Shared Sub New body reads the Shared property's initializer. Its `S = S * 10` is a bare store (dropped on C++ until #218 / #254).</summary>
     internal static readonly TempProbe Q03 = P("Q03_sharedinit_method_first", """
         Class C
             Public Shared Property S As Integer = 5
@@ -548,9 +549,9 @@ internal static class AutoPropertyInitProbes
             Console.WriteLine(C.Read())
             Console.WriteLine(C.T)
         End Sub
-        """, "start\ninit sees 5\n50\nt", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "start\ninit sees 5\n50\nt");
 
-    /// <summary>A Shared property, a Shared Sub New and an instance constructor, each bumping `Count`. Not C++ (#254).</summary>
+    /// <summary>A Shared property, a Shared Sub New and an instance constructor, each bumping `Count`.</summary>
     internal static readonly TempProbe Q04 = P("Q04_both_ctors", """
         Class C
             Public Shared Property Count As Integer = 100
@@ -570,5 +571,5 @@ internal static class AutoPropertyInitProbes
             Console.WriteLine(b.Id)
             Console.WriteLine(C.Count)
         End Sub
-        """, "102\n103\n103", Bk.CSharp | Bk.JavaScript | Bk.Msil);
+        """, "102\n103\n103");
 }
