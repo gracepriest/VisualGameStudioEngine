@@ -45,7 +45,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //      result on JavaScript, where C# and VB are lazy and print the new one.
 //    * The method syntax's RESULT is typed Object on C# (`xs.Where(Function(x As Integer) x > 2).Select(...)` assigned to a `Dim q`: CS1579, probes M01 / M03), so only the query spelling is run here.
 //    * `Select New With {.A = x, .B = x * 2}` does not parse (probe Q08).
-//    * A ByRef argument inside a NESTED call in a clause is CS1620 on C# (#232), outside what BC36533 catches.
+//    * ✅ #232 (no row here): a ByRef argument inside a call nested in a clause (`Where Bump(x) > 10 Select Bump(x) + x`) was CS1620 on C#, as was `Console.WriteLine(F(a))` with `Function F(ByRef n)`
+//      holding a query. The `ref` is written now and both build and run on C# (measured; the first prints `22 | 33 | 44`, not compared with vbc — a query needs `Imports System.Linq` there — and the second
+//      is the t224 quick probes B1, B3, C1: 2, 1, 3). A ByRef PARAMETER captured by a clause is BC36533 (the front end), untouched.
 //    * `Join` is refused first with its stated message, then a cascaded "Undefined identifier" for the join's range variable is reported after it (measured, `LinqQueryExpressionRefusalTests` asserts the
 //      stated message only).
 // ================================================================================================

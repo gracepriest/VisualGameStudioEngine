@@ -375,8 +375,8 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     }
 
     // R3 — the ByRef parameter copied into a local first: VB accepts and runs (8) on every
-    // backend that can even represent a ByRef parameter's declaration; C# and JS each hit their
-    // OWN pre-existing, unrelated gap.
+    // backend that can even represent a ByRef parameter's declaration. C# was #232 (fixed: it
+    // prints 8 below); JS refuses a ByRef parameter by design (BL7002).
     private const string R3 = """
         Function Twice(ByRef n As Integer) As Integer
             Dim copy As Integer = n
@@ -397,22 +397,18 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     public void R3_ByRefCopiedIntoLocalFirst_MsilRuns8() =>
         Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(R3)), Is.EqualTo("8"));
 
-    /// <summary>Task #232 (pre-existing, unrelated to #174): the C# backend mishandles ANY
-    /// function with a ByRef parameter that also creates a lambda, regardless of whether the
-    /// lambda touches the parameter — R3's lambda captures only the LOCAL copy, yet the emitted
-    /// call site still passes the ORIGINAL argument by <c>ref</c> into a method whose signature
-    /// the backend rewrote, giving Roslyn's CS1620. A different outcome (including a clean
-    /// compile) means #232 moved — update this pin, do not just delete it.</summary>
+    /// <summary>Task #232 (FIXED): the C# backend wrote the ByRef argument of a call inlined into an
+    /// expression with no <c>ref</c>, so <c>Console.WriteLine(Twice(a))</c> was Roslyn's CS1620 — and not
+    /// because of the lambda: <c>Twice</c>'s lambda captures only the LOCAL copy, and the same defect hit a
+    /// function with no lambda at all (#232's title named the wrong shape). The argument is passed by
+    /// <c>ref</c> now, and the program prints vbc's 8 through the standard and the aggressive pipeline
+    /// (what C++ and MSIL always did, above). R5, below, is a different shape — its lambda captures the
+    /// ByRef parameter ITSELF — and the C# backend still refuses it (CS1628).</summary>
     [Test]
-    public void R3_ByRefCopiedIntoLocalFirst_CSharp_PinsThePreExistingCompileFailure_Against232()
+    public void R3_ByRefCopiedIntoLocalFirst_CSharpRuns8()
     {
-        var csharp = ReturnCoercionTests.EmitCSharpForTest(R3);
-        var (failed, diagnostics) = CSharpCompileFails(csharp);
-        Assert.That(failed, Is.True,
-            "task #232 (pre-existing, unrelated to #174): the emitted C# must still fail to "
-            + "compile. A clean compile here means #232 moved — update this pin, do not just "
-            + "delete it.\n" + diagnostics);
-        Assert.That(diagnostics, Does.Contain("CS1620"), diagnostics);
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(R3))), Is.EqualTo("8"), "standard");
+        Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(R3))), Is.EqualTo("8"), "aggressive");
     }
 
     /// <summary>BL7002, by DESIGN, not a defect: JavaScript has no reference parameters, so
@@ -617,8 +613,10 @@ public class LambdaBoundaryDiagnosticsExecutionTests
     }
 
     // ====================================================================================
-    // 4. The C#-backend ByRef+lambda bug underneath R5 (#232) is STILL there, even though the
-    // front end now correctly refuses R5 before any backend ever sees it — proved the same way
+    // 4. The C#-backend ByRef+lambda bug underneath R5 is STILL there (CS1628: Roslyn refuses a ref
+    // parameter inside a lambda; it was #232's title, but #232's own defect — the inlined call's missing
+    // `ref`, R3 above — is fixed), even though the front end now correctly refuses R5 before any backend
+    // ever sees it — proved the same way
     // #178 kept its own pre-#178 backend-refusal coverage: feed the shape through IR built
     // WITHOUT the front end's gate.
     // ====================================================================================
@@ -648,20 +646,21 @@ public class LambdaBoundaryDiagnosticsExecutionTests
             "expected BC36639; got: " + string.Join(" | ", analyzer.Errors.Select(e => $"{e.ErrorCode}:{e.Message}")));
     }
 
-    /// <summary>Task #232 (pre-existing, unrelated to #174): fed through IR that bypasses the
-    /// front end's own gate — the one place left that can still reach this backend defect, now
-    /// that a checked compile never does — the C# backend's ByRef+lambda mishandling is still
-    /// there for a class method too (CS1628, then CS1620 at the call site). A different outcome
-    /// means #232 moved — update this pin, do not just delete it.</summary>
+    /// <summary>Fed through IR that bypasses the front end's own gate — the one place left that can still
+    /// reach this backend defect, now that a checked compile never does — the C# backend still refuses a
+    /// lambda that captures a ByRef parameter of a class method: CS1628 ("cannot use ref parameter inside
+    /// an anonymous method"). Since #232 the call site is written correctly (`b.Twice(ref a)`), so CS1628 is
+    /// the ONLY diagnostic (it used to be accompanied by CS1620 at the call). A different outcome — a clean
+    /// compile, or any other code — means this limitation moved: update this pin, do not just delete it.</summary>
     [Test]
-    public void R5_ByRefParameterOfAClassMethod_CSharp_PinsThePreExistingCompileFailure_Against232_WhenFedUncheckedIr()
+    public void R5_ByRefParameterOfAClassMethod_CSharp_PinsTheLambdaCaptureRefusal_CS1628_WhenFedUncheckedIr()
     {
         var csharp = EmitCSharpFromUncheckedIr(R5);
         var (failed, diagnostics) = CSharpCompileFails(csharp);
         Assert.That(failed, Is.True,
-            "task #232 (pre-existing, unrelated to #174): the emitted C# must still fail to "
-            + "compile. A clean compile here means #232 moved — update this pin, do not just "
-            + "delete it.\n" + diagnostics);
-        Assert.That(diagnostics, Does.Contain("CS1628").Or.Contain("CS1620"), diagnostics);
+            "the emitted C# must still fail to compile (CS1628). A clean compile here means this "
+            + "pre-existing C# limitation moved — update this pin, do not just delete it.\n" + diagnostics);
+        Assert.That(diagnostics, Does.Contain("CS1628"), diagnostics);
+        Assert.That(diagnostics, Does.Not.Contain("CS1620"), "#232: the call site passes the argument by ref\n" + diagnostics);
     }
 }
