@@ -4851,10 +4851,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// inline and the statement path. Preserve goes through a one-shot lambda so the array
         /// and the count are each evaluated once; Array.Resize on the lambda's own copy returns
         /// a new array (or allocates one for a Nothing array) and leaves the original alone.
+        /// <para>#228: also a sized <c>Dim</c>'s storage in a loop body
+        /// (IRBuilder.SizedArrayDimIntrinsic) — the declaration's own initializer, re-run.</para>
         /// </summary>
         private bool TryRenderArrayResize(IRCall call, IReadOnlyList<string> argExprs, out string expression)
         {
             expression = null;
+            if (call.FunctionName == IR.IRBuilder.SizedArrayDimIntrinsic && call.Arguments.Count == 0)
+            {
+                expression = SizedArrayInitializer(call.Type) ?? GetDefaultValue(call.Type);
+                return true;
+            }
             if (call.FunctionName != IR.IRBuilder.ArrayResizeIntrinsic || call.Arguments.Count != 3)
                 return false;
 
