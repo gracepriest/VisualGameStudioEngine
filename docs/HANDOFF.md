@@ -17,6 +17,12 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #225 FIXED — on MSIL a generic type in a type-token position is `class [mscorlib]System.Func`1<int32>` (`MSILCodeGenerator.TryBclToken`, shared with the call receiver), `ldelema` asks the token speller like `newarr`/`stelem`, an array of a BCL generic is spelled from its element, and an array token is its whole type (`int32[]`): a sized array of `Func`/`Action`/`List`, a For Each over a List of one and over a `List(Of Integer())` assemble and print vbc's answer (`git log --grep '#225'`)
+- **Tests (7 new, 2 moved):** `MsilGenericTypeTokenExecutionTests` (Integration, 5: 9 vbc programs on MSIL and C# x CLI / `--optimize` / `CompileProjectFiles`) + `MsilGenericTypeTokenTextTests` (fast, 2); K1/K2 `_Msil_DoesNotAssemble_PinnedForTask225` moved to `_Msil_RunsAndPrintsVbsAnswer_BothPipelines`, FE1 gained its MSIL leg; JS roster stays 129. ⛔ Gaps, no test: MSIL `CType(o, T)` / `TypeOf o Is T` to a reference type emit no `castclass` / `isinst` (a wrong object passes; `TypeOf` is `IsNot Nothing`); `TypeOf o Is Func(Of …)` is refused on every backend; a user generic class on MSIL is #239.
+- **Gates (Linux):** fast 0 failed / 12,755 passed / 94 skipped; one filter each, 0 failed: `Msil` 1,245, `Delegate` 247 (+3 skipped), `Lambda` 800, `ForEach` 242, `JsExecutionTierRoster` 5. Byte compare (1,164 programs x 5 backends x CLI / `-O`): 50 of 11,640 cells differ, all MSIL, in 25 programs (18 only the `ldelema` operand, now the token `newarr`/`stelem` already used; 7 the generic-array/For Each programs), 0 rc changes. Full suite NOT run.
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #224 FIXED — a LINQ query expression (`From x In xs Where x > 2 Select x * 10`) RUNS on C# (lazy, System.Linq) and JavaScript (eager Array methods) and is REFUSED by name on C++ and MSIL, which have no LINQ in either syntax: it lowers to the method syntax's lambda chain through the shared `IRBuilder.BuildLambda` (`git log --grep '#224'`)
 - **Scope:** one `From` over a 1-D array, `List(Of T)` or `IEnumerable(Of T)`, then `Where`/`Select`/`Order By [Descending]`/`Take`/`Skip`/`Distinct`; `Group By`/`Join`/`Aggregate`/`Let`, a second range variable and a String/Dictionary source are refused with a stated message, BC36533 for a ByRef parameter in a clause. **Tests (14 new):** `LinqQueryExpressionExecutionTests` (Integration, 7; JS roster 130) + `LinqQueryExpressionRefusalTests` (fast, 6) + `TempMintingFacilityTests.ALinqRangeVariable_…RunsOn…`; `E17_LinqQuery_…` (was `…BrokenEverywhere…`) is the unchanged #169 front-end contract. Gates (Linux), 0 failed: fast 12,772 (+94 skipped), one filter each: `LinqQueryExpression` 13, `Linq` 57, `Query` 27 (+1), `ForEach` 240, `Lambda` 800, `NameReservation` 443, `TempMinting` 122, `JsExecutionTierRosterTests` 5. Full suite NOT run.
 - ⛔ **Gaps, NO test pins them** (fixture headers): JS is eager (a source mutated after the query prints the old result; C# and VB are lazy); method-syntax results are typed Object on C# (CS1579); `Select New With` does not parse; a ByRef inside a nested call in a clause is CS1620 (#232); `Join` also reports a cascaded "Undefined identifier" after its stated refusal; the unarmed `CompileProjectFiles` (`TempExec`'s project leg) refuses a `List` passed as an `IEnumerable(Of T)` argument, the CLI and `.blproj` build accept it.
@@ -7388,8 +7394,8 @@ single new failure against the 170-name baseline.
     iteration); **#229** (the one-declaration rule: a name with two `Dim`s in one function —
     sibling loops, or a lambda's OWN local of the same name — stays function-level by
     construction, on purpose, rather than taking one loop's per-iteration identity from the
-    other); **#225** (pre-existing, MSIL: `newarr` of a `Func`N`` array type does not assemble —
-    unrelated to #172, hits K1/K2 only because their fixed array happens to hold delegates).
+    other); **#225** — ✅ FIXED (2026-10-07; was: MSIL `newarr` of a `Func`N`` array type does not
+    assemble — a generic type token without its `class`; K1/K2 run on MSIL now, their pins moved).
   - **Tests:** the two files named above (execution on all four backends × both pipelines + a
     Release `.blproj`/`CompileProjectFiles` leg for headline probes; byte-identity, IR-fact and
     verifier fixtures in the fast subset) plus `Msil/ClosureLoweringTests.cs`'s `L15` pin, MOVED

@@ -798,6 +798,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// <c>box [{mapped}]</c>, and in IL <c>[X]</c> means "assembly X", so <c>box [int32]</c>
         /// reads as a type in an assembly named <c>int32</c> and does not parse at all. That
         /// single mistake blocked every <c>CStr</c> of a number.</para>
+        ///
+        /// <para>⛔ #225: ilasm takes a token as either a bare class NAME (<c>[mscorlib]System.String</c>,
+        /// <c>'Foo'</c>) or a whole TYPE, and only the second can be constructed. So an ARRAY is its whole
+        /// type spec here (<c>int32[]</c>, <c>class 'Foo'[]</c>): the name with <c>[]</c> appended,
+        /// <c>unbox.any [mscorlib]System.Int32[]</c>, is a syntax error at the <c>[</c>, and was what every
+        /// <c>For Each</c> over a <c>List(Of Integer())</c> emitted. A generic instantiation is the same rule,
+        /// in <see cref="IlTypeToken(TypeInfo)"/>.</para>
         /// </summary>
         private string IlTypeToken(string typeName)
         {
@@ -805,7 +812,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             var trimmed = typeName.Trim();
             if (trimmed.EndsWith("[]", StringComparison.Ordinal))
-                return IlTypeToken(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+                return IlTypeSpec(trimmed);
 
             var mapped = MapTypeName(trimmed);
             return PrimitiveTokens.TryGetValue(mapped, out var bcl)
@@ -827,13 +834,63 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         private string IlTypeSpec(TypeInfo type) =>
             TryCollectionToken(type, out var token) ? "class " + token
             : TryDelegateToken(type, out var delegateToken, out _) ? "class " + delegateToken
+            : IsArrayOfBclType(type) ? IlTypeSpec(type.ElementType) + "[]"
             : IlTypeSpec(MapType(type));
 
-        /// <inheritdoc cref="IlTypeToken(string)"/>
+        /// <summary>
+        /// <see cref="IlTypeToken(string)"/> for a resolved <c>TypeInfo</c> — THE type-token speller every
+        /// operand position asks: <c>newarr</c>, <c>stelem</c>, <c>ldelema</c>, <c>unbox.any</c>, <c>box</c>.
+        ///
+        /// <para>⛔ #225: a GENERIC INSTANTIATION is spelled with its <c>class</c> keyword here —
+        /// <c>class [mscorlib]System.Func`1&lt;int32&gt;</c> — through <see cref="TryBclToken"/>, the same answer
+        /// a call's receiver gets. A token is a bare class NAME or a whole TYPE (see
+        /// <see cref="IlTypeToken(string)"/>), and type arguments exist only in the second form, so
+        /// <c>newarr [mscorlib]System.Func`1&lt;int32&gt;</c> is a syntax error at the <c>&lt;</c>. Before this,
+        /// <c>Dim fs(2) As Func(Of Integer)</c>, <c>For Each f As Func(Of Integer) In list</c> and an array of
+        /// <c>List(Of Integer)</c> never assembled. Everything else keeps the bare form: a value type
+        /// (<c>[mscorlib]System.Int32</c>, a Structure, an Enum) must never be spelled <c>class</c>.</para>
+        /// </summary>
         private string IlTypeToken(TypeInfo type) =>
-            TryCollectionToken(type, out var token) ? token
-            : TryDelegateToken(type, out var delegateToken, out _) ? delegateToken
+            TryBclToken(type, out var token) ? token
+            : IsArrayOfBclType(type) ? IlTypeSpec(type)
             : IlTypeToken(MapType(type));
+
+        /// <summary>
+        /// ⭐ #225: an array whose element only its <c>TypeInfo</c> can name — a BCL collection or delegate, or
+        /// an array of one. The array's NAME (<c>Func[]</c>) has lost the type arguments, so
+        /// <c>Dim fs(2) As Func(Of Integer)</c> declared its local <c>class 'Func'[] 'fs'</c>, an undefined class.
+        /// Such an array is spelled from its ELEMENT (<c>class [mscorlib]System.Func`1&lt;int32&gt;[]</c>); every
+        /// other array keeps the name path it always took.
+        /// </summary>
+        private bool IsArrayOfBclType(TypeInfo type) =>
+            type?.Kind == TypeKind.Array && type.ElementType != null
+            && (TryBclToken(type.ElementType, out _) || IsArrayOfBclType(type.ElementType));
+
+        /// <summary>
+        /// ⭐ #225: the token of a BCL collection or a BCL delegate, in an OPERAND position — the one answer
+        /// <see cref="IlTypeToken(TypeInfo)"/> and <see cref="IlReceiverToken"/> share. A generic instantiation
+        /// carries <c>class</c> (<c>class [mscorlib]System.Collections.Generic.List`1&lt;int32&gt;</c>); the
+        /// non-generic <c>Action</c> is a bare name (<c>[mscorlib]System.Action</c>), as every non-generic BCL
+        /// token in this file is. Two copies of this rule are how the receiver got it right and the type token
+        /// got it wrong. False for anything else, which the caller spells its own way.
+        /// </summary>
+        private bool TryBclToken(TypeInfo type, out string token)
+        {
+            if (TryCollectionToken(type, out var collection))
+            {
+                token = "class " + collection;
+                return true;
+            }
+
+            if (TryDelegateToken(type, out var delegateToken, out var isGenericDelegate))
+            {
+                token = isGenericDelegate ? "class " + delegateToken : delegateToken;
+                return true;
+            }
+
+            token = null;
+            return false;
+        }
 
         /// <summary>
         /// ⭐ ADR-0010 D7: <c>Action</c>, <c>Action(Of …)</c> and <c>Func(Of …)</c> are the BCL
@@ -1092,9 +1149,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         {
             if (type?.Name == null) return "[mscorlib]System.Object";
 
-            if (TryCollectionToken(type, out var collection)) return "class " + collection;
-            if (TryDelegateToken(type, out var delegateToken, out var isGenericDelegate))
-                return isGenericDelegate ? "class " + delegateToken : delegateToken;
+            if (TryBclToken(type, out var bclToken)) return bclToken;
 
             var mapped = MapTypeName(type.Name);
             return PrimitiveTokens.TryGetValue(mapped, out var bcl) ? bcl : mapped;
@@ -8128,9 +8183,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (gep.Indices.Count > 0)
             {
                 EmitLoadValue(gep.Indices[0]);
+
+                // ⛔ #225: the element's TYPE TOKEN, from the one speller, as `newarr` and `stelem` take it.
+                // This read MapType, which knows neither a generic argument nor a BCL delegate, so an
+                // array of `Func(Of Integer)` took `ldelema Func` and one of `Action` `ldelema Action`:
+                // "Reference to undefined class", the moment the `newarr` above it assembled.
                 var elemType = gep.BasePointer.Type?.ElementType;
-                var ilType = elemType != null ? MapType(elemType) : "object";
-                WriteLine($"    ldelema {ilType}");
+                WriteLine($"    ldelema {IlTypeToken(elemType)}");
                 _currentStack--; // array + index -> address
             }
 
@@ -9413,7 +9472,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             WriteLine("    callvirt instance object [mscorlib]System.Collections.IEnumerator::get_Current()");
 
             // ⛔ IlTypeToken, not MapType: `unbox.any` takes a TOKEN, so `[mscorlib]System.Int32`
-            // and never `class`-prefixed. One instruction covers both halves — ECMA-335 III.4.33
+            // and never `class`-prefixed — except a generic instantiation, which a token can only
+            // name as `class …Func`1<int32>` (#225). One instruction covers both halves — ECMA-335 III.4.33
             // makes `unbox.any` on a reference type behave exactly as `castclass` — so the
             // element type does not have to be classified here to be handled correctly.
             var elementToken = IlTypeToken(forEach.ElementType);

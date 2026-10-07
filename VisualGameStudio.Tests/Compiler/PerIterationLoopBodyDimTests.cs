@@ -58,10 +58,10 @@ namespace VisualGameStudio.Tests.Compiler;
 //         E16, a lambda's OWN local of the same name for E20 — stays function-level rather than
 //         per-iteration, by construction, so it keeps its pre-#172 behaviour instead of taking
 //         one loop's per-iteration identity away from the other declaration.)
-//    MSIL K1, K2                                                                -> #225
-//         (pre-existing: the MSIL backend emits `newarr [mscorlib]System.Func`1<int32>` for an
-//         array of delegate type, and ilasm rejects the nested-generic syntax. Unrelated to
-//         #172 — neither K1 nor K2's array is captured differently by this fix.)
+//    MSIL K1, K2   (none since #225: they were pinned here as ILASM-FAIL — the MSIL backend
+//         emitted `newarr [mscorlib]System.Func`1<int32>` for an array of a generic delegate,
+//         without the `class` a generic token needs. Both now run on MSIL and print VB's answer,
+//         through both pipelines; see K1_Msil_… / K2_Msil_… below.)
 //    MSIL E20                                                                   pre-existing, N9
 //         (ClosureLoweringRefusalTests' own D9 backstop: a lambda that declares its own local of
 //         a name an ENCLOSING scope also captures is refused by the front end today — #155/
@@ -813,9 +813,8 @@ internal static class PerIterationLoopBodyDimProbes
     /// <summary>A captured loop-body local READ but never called through — before A2, LICM
     /// hoisted the pure read `x` out of the loop (no call in the body), and JavaScript's `-O`
     /// then threw `ReferenceError: x is not defined` because the hoisted read ran before any
-    /// iteration declared `x`. MSIL's own `newarr Func\`1&lt;int32&gt;` array-of-delegate
-    /// declaration is a PRE-EXISTING, unrelated compile gap (#225) that stops it from RUNNING at
-    /// all, on every pipeline, with or without #172.</summary>
+    /// iteration declared `x`. Its array of `Func(Of Integer)` did not assemble on MSIL until #225
+    /// (`newarr Func\`1&lt;int32&gt;` without `class`); it runs there now.</summary>
     internal const string K1 = """
         Sub Main()
             Dim fs(2) As Func(Of Integer)
@@ -832,7 +831,7 @@ internal static class PerIterationLoopBodyDimProbes
         """;
     internal const string K1Expected = "0\n0";
 
-    /// <summary>Same array-of-delegate MSIL gap as K1 (#225); every other backend correct.</summary>
+    /// <summary>K1's array of `Func(Of Integer)` on a `While` loop (on MSIL since #225, like K1).</summary>
     internal const string K2 = """
         Sub Main()
             Dim fs(2) As Func(Of Integer)
@@ -1395,8 +1394,8 @@ public class PerIterationLoopBodyDimExecutionTests
 //  pipelines. Before A2: LICM hoisted a pure read of a captured-but-never-called-through
 //  per-iteration local out of the loop (no call in the body), which threw
 //  "ReferenceError: x is not defined" on JavaScript `-O` and tripped Invariant S' on MSIL `-O`.
-//  K1/K2's MSIL leg is EXCLUDED — a pre-existing, unrelated array-of-delegate compile gap (#225)
-//  stops it from assembling at all, on every pipeline, independent of #172.
+//  K1/K2's MSIL leg is its own test per probe: their array of `Func(Of Integer)` did not assemble
+//  on MSIL until #225 (they were pinned here as ILASM-FAIL), and now runs on both pipelines.
 // =====================================================================================
 
 [TestFixture]
@@ -1405,8 +1404,8 @@ public class PerIterationLoopBodyDimExecutionTests
 public class PerIterationLoopBodyDimOptimizerExecutionTests
 {
     /// <summary>K1/K3/K5's own shape (and K2/K4's siblings): C#, C++ and JavaScript, both
-    /// pipelines, no MSIL leg. MSIL is asserted separately per probe below (K1/K2 pinned #225,
-    /// K3-K5 included in the full four-backend assertion).</summary>
+    /// pipelines, no MSIL leg. MSIL is asserted separately per probe below (K1/K2 by their own
+    /// MSIL test since #225, K3-K5 included in the full four-backend assertion).</summary>
     private static void AssertCSharpCppJs(string source, string expected, bool aggressive) => Assert.Multiple(() =>
     {
         Assert.That(FourBackends.Norm(aggressive ? FourBackends.RunEmittedCSharpAggressive(source) : FourBackends.RunEmittedCSharp(source)),
@@ -1417,7 +1416,7 @@ public class PerIterationLoopBodyDimOptimizerExecutionTests
             Is.EqualTo(expected), "JavaScript — must not throw ReferenceError under -O (A2's own regression)");
     });
 
-    // ---- K1/K2: MSIL is a pre-existing, unrelated compile gap (#225) ------------------------
+    // ---- K1/K2: MSIL by its own test (pinned as ILASM-FAIL until #225) ----------------------
 
     [Test]
     public void K1_CapturedNeverCalledThrough_StandardPipeline_CSharpCppJsAgree()
@@ -1427,16 +1426,18 @@ public class PerIterationLoopBodyDimOptimizerExecutionTests
     public void K1_CapturedNeverCalledThrough_AggressivePipeline_CSharpCppJsAgree()
         => AssertCSharpCppJs(PerIterationLoopBodyDimProbes.K1, PerIterationLoopBodyDimProbes.K1Expected, aggressive: true);
 
-    /// <summary>Task #225, pre-existing and unrelated to #172: MSIL emits
-    /// <c>newarr [mscorlib]System.Func\`1&lt;int32&gt;</c> for a fixed array of a delegate type,
-    /// and ilasm rejects the nested-generic syntax — ILASM-FAIL on every pipeline.</summary>
+    /// <summary>MOVED from the #225 pin (<c>K1_Msil_DoesNotAssemble_PinnedForTask225</c>): MSIL emitted
+    /// <c>newarr [mscorlib]System.Func\`1&lt;int32&gt;</c> for the fixed array of a generic delegate —
+    /// no <c>class</c>, a syntax error to ilasm — on every pipeline. It assembles and prints VB's
+    /// answer now, through the standard and the aggressive pipeline.</summary>
     [Test]
-    public void K1_Msil_DoesNotAssemble_PinnedForTask225()
+    public void K1_Msil_RunsAndPrintsVbsAnswer_BothPipelines() => Assert.Multiple(() =>
     {
-        var run = MsilHarness.Run(PerIterationLoopBodyDimProbes.K1);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed),
-            "task #225 (array-of-delegate-type newarr) — re-measure before touching:\n" + run.Report);
-    }
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.K1)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.K1Expected), "MSIL, standard pipeline");
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(PerIterationLoopBodyDimProbes.K1)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.K1Expected), "MSIL, aggressive pipeline");
+    });
 
     [Test]
     public void K2_WhileLoop_StandardPipeline_CSharpCppJsAgree()
@@ -1446,13 +1447,15 @@ public class PerIterationLoopBodyDimOptimizerExecutionTests
     public void K2_WhileLoop_AggressivePipeline_CSharpCppJsAgree()
         => AssertCSharpCppJs(PerIterationLoopBodyDimProbes.K2, PerIterationLoopBodyDimProbes.K2Expected, aggressive: true);
 
+    /// <summary>MOVED from the #225 pin (<c>K2_Msil_DoesNotAssemble_PinnedForTask225</c>), as K1.</summary>
     [Test]
-    public void K2_Msil_DoesNotAssemble_PinnedForTask225()
+    public void K2_Msil_RunsAndPrintsVbsAnswer_BothPipelines() => Assert.Multiple(() =>
     {
-        var run = MsilHarness.Run(PerIterationLoopBodyDimProbes.K2);
-        Assert.That(run.Outcome, Is.EqualTo(MsilHarness.MsilOutcome.AssembleFailed),
-            "task #225 (array-of-delegate-type newarr) — re-measure before touching:\n" + run.Report);
-    }
+        Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.K2)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.K2Expected), "MSIL, standard pipeline");
+        Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(PerIterationLoopBodyDimProbes.K2)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.K2Expected), "MSIL, aggressive pipeline");
+    });
 
     // ---- K3/K4/K5: all four backends, both pipelines -----------------------------------------
 
