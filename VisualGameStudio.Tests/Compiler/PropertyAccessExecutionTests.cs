@@ -236,22 +236,25 @@ public class PropertyAccessExecutionTests
             "task #219: the same through the aggressive pipeline");
     }
 
-    /// <summary>#220 — <c>Exception.Message</c> is a real .NET ReadOnly property, but the .NET
-    /// resolver does not carry that fact into a <see cref="Symbol.IsReadOnly"/> the analyzer can
-    /// see (task #178's own rule 5: silence, never a guess, when the resolver does not positively
-    /// know). So BasicLang's OWN front end accepts the write — the same shape as N1/N2 below, one
-    /// more member the resolver's accessor metadata does not reach.</summary>
+    // (#220's pin, `ExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against220`, stood
+    // here. #220 is fixed — the built-in Exception's Message / StackTrace / InnerException are
+    // ReadOnly at their SymbolTable declaration — and the pin moved to the fast fixture as its
+    // positive row, PropertyAccessDiagnosticsTests.Write_ExceptionMessage_InACatch_IsRefused.)
+
+    /// <summary>#222 — the half of #220 that is NOT fixed: an exception typed as a .NET exception
+    /// CLASS (<c>ArgumentException</c>, and every <c>System.*Exception</c> but the built-in
+    /// <c>Exception</c>) does not bind <c>Message</c> to the built-in symbol #220 marked ReadOnly,
+    /// so its write is accepted like N1/N2 below (vbc: BC30526). Measured, the same before and after
+    /// #220 (<c>S/t220/probes/EArg.bas</c>): C# CS0200, MSIL MissingFieldException, JavaScript runs
+    /// and prints the old message, C++ does not compile.</summary>
     [Test]
-    public void ExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against220()
+    public void ArgumentExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against222()
     {
         const string source = """
             Sub Main()
-                Try
-                    Throw New Exception("boom")
-                Catch ex As Exception
-                    ex.Message = "changed"
-                    Console.WriteLine("done")
-                End Try
+                Dim a As ArgumentException = New ArgumentException("m")
+                a.Message = "x"
+                Console.WriteLine(a.Message)
             End Sub
             """;
         var parser = new Parser(new Lexer(source).Tokenize());
@@ -261,11 +264,11 @@ public class PropertyAccessExecutionTests
         analyzer.Analyze(ast);
 
         Assert.That(analyzer.Errors.Where(e => e.ErrorCode is "BC30526" or "BC30524"), Is.Empty,
-            "task #220 (pre-existing, unrelated to #178): BasicLang's front end must still accept "
-            + "`ex.Message = ...` — the .NET resolver does not carry Exception.Message's real "
-            + "ReadOnly-ness. A BC30526 here means the resolver now DOES carry that fact for at "
-            + "least this member — update this pin (and check whether #220 is now closed), do not "
-            + "just delete it.\nerrors: " + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
+            "task #222 (pre-existing; #220 fixed only the BUILT-IN Exception's members): BasicLang's "
+            + "front end must still accept `a.Message = ...` on an ArgumentException. A BC30526 here "
+            + "means a .NET exception class's Message now carries ReadOnly-ness — update this pin "
+            + "(and check whether #222 moved), do not just delete it.\nerrors: "
+            + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
     }
 
     /// <summary>#221 — a bare <c>For P = …</c> loop over a ReadWrite property DRIVES it (as it

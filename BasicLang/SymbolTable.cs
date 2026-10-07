@@ -549,9 +549,11 @@ public class TypeInfo
 
         /// <summary>
         /// For a <see cref="SymbolKind.Property"/> declared in BasicLang source — a class's or an
-        /// INTERFACE's: declared <c>ReadOnly</c> / <c>WriteOnly</c>. False for every other symbol,
-        /// a built-in or .NET property included (task #178, rule 5: those are left to csc unless
-        /// the .NET resolver positively knows, and it does not carry the fact).
+        /// INTERFACE's: declared <c>ReadOnly</c> / <c>WriteOnly</c>; and the built-in
+        /// <c>Exception</c>'s hand-built <c>Message</c> / <c>StackTrace</c> / <c>InnerException</c>,
+        /// ReadOnly as in .NET (#220). False for every other symbol, a .NET property included
+        /// (task #178, rule 5: those are left to csc unless the .NET resolver positively knows,
+        /// and it does not carry the fact — #222).
         ///
         /// <para>⭐ Read by the analyzer's two access judgments: a write of a ReadOnly property is
         /// VB's BC30526 (<c>SemanticAnalyzer.CheckPropertyWrite</c>) and a read of a WriteOnly one
@@ -878,10 +880,12 @@ public class TypeInfo
             UIntegerType = DefineBuiltInType("UInteger", TypeKind.Primitive);
             ULongType = DefineBuiltInType("ULong", TypeKind.Primitive);
 
-            // Add members to Exception type
-            ExceptionType.Members["Message"] = new Symbol("Message", SymbolKind.Property, StringType, 0, 0);
-            ExceptionType.Members["StackTrace"] = new Symbol("StackTrace", SymbolKind.Property, StringType, 0, 0);
-            ExceptionType.Members["InnerException"] = new Symbol("InnerException", SymbolKind.Property, ExceptionType, 0, 0);
+            // Add members to Exception type. All three are ReadOnly in .NET (#220): a write is VB's
+            // BC30526 through the same CheckPropertyWrite as a user ReadOnly property, and a ByRef
+            // argument is copied in and never written back (IsCopyOutPropertyArgument).
+            ExceptionType.Members["Message"] = new Symbol("Message", SymbolKind.Property, StringType, 0, 0) { IsReadOnly = true };
+            ExceptionType.Members["StackTrace"] = new Symbol("StackTrace", SymbolKind.Property, StringType, 0, 0) { IsReadOnly = true };
+            ExceptionType.Members["InnerException"] = new Symbol("InnerException", SymbolKind.Property, ExceptionType, 0, 0) { IsReadOnly = true };
         }
         
         private TypeInfo DefineBuiltInType(string name, TypeKind kind)

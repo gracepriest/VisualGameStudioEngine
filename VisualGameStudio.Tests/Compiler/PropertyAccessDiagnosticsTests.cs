@@ -682,6 +682,143 @@ public class PropertyAccessDiagnosticsTests
         """);
 
     // ====================================================================================
+    // #220 — the built-in Exception's Message, StackTrace and InnerException are ReadOnly, as in
+    // .NET: SymbolTable's hand-built members carry Symbol.IsReadOnly, so a write reaches the SAME
+    // CheckPropertyWrite a user ReadOnly property does — no use-site special case. Every source
+    // here is vbc-answered (S/t220/probes2/F1-F6.bas): BC30526 on the asserted line, F6 runs.
+    // Mutants (one flag removed at a time, measured): Message -> F1, F4, F5 red (and
+    // PropertyByRefCopyOutExecutionTests.AnExceptionsMessage_…: C# CS0200, C++ does not compile);
+    // StackTrace -> F2 only; InnerException -> F3 only. A .NET exception CLASS (ArgumentException)
+    // is #222, pinned in PropertyAccessExecutionTests.
+    // ====================================================================================
+
+    /// <summary>F1 — <c>ex.Message = …</c> on a Catch variable. Was the #220 gap pin
+    /// (<c>PropertyAccessExecutionTests.ExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against220</c>),
+    /// moved here as the positive row. Before #220: C# CS0200, MSIL MissingFieldException, JavaScript
+    /// ran and silently kept the old message.</summary>
+    [Test]
+    public void Write_ExceptionMessage_InACatch_IsRefused() => AssertRefused("""
+        Module M
+            Sub Main()
+                Try
+                    Throw New Exception("boom")
+                Catch ex As Exception
+                    ex.Message = "changed"
+                End Try
+            End Sub
+        End Module
+        """, "BC30526", "Message", 6);
+
+    /// <summary>F2 — <c>StackTrace</c>, through a local <c>Dim e As New Exception(…)</c>.</summary>
+    [Test]
+    public void Write_ExceptionStackTrace_OnALocal_IsRefused() => AssertRefused("""
+        Module M
+            Sub Main()
+                Dim e As New Exception("m")
+                e.StackTrace = "s"
+            End Sub
+        End Module
+        """, "BC30526", "StackTrace", 4);
+
+    /// <summary>F3 — <c>InnerException = Nothing</c>, through a parameter.</summary>
+    [Test]
+    public void Write_ExceptionInnerException_OnAParameter_IsRefused() => AssertRefused("""
+        Module M
+            Sub Clear(e As Exception)
+                e.InnerException = Nothing
+            End Sub
+            Sub Main()
+                Clear(New Exception("m"))
+            End Sub
+        End Module
+        """, "BC30526", "InnerException", 3);
+
+    /// <summary>F4 — <c>Me.Message = …</c> in a user exception's OWN constructor, right after
+    /// <c>MyBase.New(msg)</c>. VB's constructor exception to BC30526 covers only a ReadOnly
+    /// AUTO-property declared by this class; Message is neither.</summary>
+    [Test]
+    public void Write_MeDotMessage_InAUserExceptionsConstructor_IsRefused() => AssertRefused("""
+        Class MyErr
+            Inherits Exception
+            Public Sub New(msg As String)
+                MyBase.New(msg)
+                Me.Message = msg
+            End Sub
+        End Class
+
+        Module M
+            Sub Main()
+                Dim e As New MyErr("m")
+            End Sub
+        End Module
+        """, "BC30526", "Message", 5);
+
+    /// <summary>F5 — the bare inherited <c>Message = …</c> inside a user exception's method.
+    /// Before #220 (S/t220/probes/EUbare.bas) JavaScript threw "Cannot set property Message of
+    /// Error which has only a getter" and MSIL InvalidProgramException.</summary>
+    [Test]
+    public void Write_BareMessage_InAUserExceptionsMethod_IsRefused() => AssertRefused("""
+        Class MyErr
+            Inherits Exception
+            Public Sub Rename()
+                Message = "x"
+            End Sub
+        End Class
+
+        Module M
+            Sub Main()
+                Dim e As New MyErr()
+                e.Rename()
+            End Sub
+        End Module
+        """, "BC30526", "Message", 4);
+
+    /// <summary>F6 — the controls, which compile with NO error at all (vbc runs it: <c>m True True m</c>
+    /// then <c>e 4</c>): a READ of each of the three, <c>ex.Message</c> passed ByRef (a copy, never
+    /// written back — VB's rule for a ReadOnly property, #209), <c>Throw New Exception("m")</c>,
+    /// <c>MyBase.New(msg)</c> in a user exception's constructor, and a user exception's own
+    /// ReadWrite property written in the constructor and from a Catch.</summary>
+    [Test]
+    public void Legal_ExceptionMembersRead_PassedByRef_AndAUserExceptionsOwnProperty_CompileClean()
+    {
+        var errors = Analyze("""
+            Class MyErr
+                Inherits Exception
+                Public Property Code As Integer
+                Public Sub New(msg As String, c As Integer)
+                    MyBase.New(msg)
+                    Me.Code = c
+                End Sub
+            End Class
+
+            Module M
+                Sub Change(ByRef s As String)
+                    s = "changed"
+                End Sub
+                Sub Main()
+                    Try
+                        Throw New Exception("m")
+                    Catch ex As Exception
+                        Dim s As String = ex.Message
+                        Dim t As String = ex.StackTrace
+                        Dim i As Exception = ex.InnerException
+                        Change(ex.Message)
+                        Console.WriteLine(s & " " & (t IsNot Nothing) & " " & (i Is Nothing) & " " & ex.Message)
+                    End Try
+                    Try
+                        Throw New MyErr("e", 3)
+                    Catch e As MyErr
+                        e.Code = e.Code + 1
+                        Console.WriteLine(e.Message & " " & e.Code)
+                    End Try
+                End Sub
+            End Module
+            """);
+        Assert.That(errors, Is.Empty,
+            "expected no diagnostic at all; got: " + string.Join(" | ", errors.Select(e => $"{e.ErrorCode}:{e.Message}")));
+    }
+
+    // ====================================================================================
     // LSP — the diagnostic surfaces through the LSP's own diagnostics path, with a REAL span
     // on the use line (not (0,0), and not only present in the CLI's console text).
     // ====================================================================================
