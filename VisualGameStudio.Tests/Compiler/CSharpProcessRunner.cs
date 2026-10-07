@@ -46,9 +46,9 @@ internal sealed record CSharpProcessResult(
 ///
 /// <para>Use it for every C# run of a program that holds a <c>While</c>/<c>Do</c> loop whose condition has
 /// control flow (<c>AndAlso</c>, <c>OrElse</c>, <c>If()</c>), and for any loop a bug could leave without an
-/// exit: #256 is fixed, but #227 (a bottom-tested loop's second copy of its body drops blocks, so
-/// <c>Do … Loop Until</c> over a nested loop never ends) still hangs on C#, and a regression of the fix
-/// hangs every such loop. ⚠ Not for everything: a process per run costs about 0.2 s, which the ~40 other
+/// exit: #256 and #227 are both fixed (#227: a bottom-tested loop's second copy of its body dropped blocks, so
+/// <c>Do … Loop Until</c> over a nested loop never ended; the loop is written once now), and a regression of
+/// either fix hangs every such loop. ⚠ Not for everything: a process per run costs about 0.2 s, which the ~40 other
 /// fixtures that use the in-process runner would pay for nothing.</para>
 ///
 /// <para>⚠ Limit: the child sees only the shared framework and what is beside the dll, so a program that

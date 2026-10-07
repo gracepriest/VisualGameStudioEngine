@@ -14,7 +14,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⭐ WHY TEXT TESTS EXIST FOR THIS ONE. The runs prove the answer; these prove the PROPERTIES the fix is made of, and they kill the mutants of
 //  the fix in the fast tier without a single spin: a condition emitted once above the loop, twice per iteration, in the wrong polarity, or after
-//  the body; a counted For pulled into the new shape; a bottom-tested loop that lost its peeled first iteration.
+//  the body; a counted For pulled into the new shape; a bottom-tested loop written as a peeled first iteration plus a copy of the body (#227).
+//
+//  ⭐ #227: a bottom-tested loop (`Do … Loop While/Until`) is written ONCE, from its body — `do { body } while (c);` for a condition that is one
+//  block and writes nothing, `while (true) { body; …condition…; if (!c) break; }` for everything else. It used to be a peeled first iteration
+//  followed by `while (c) { body }`, and the second copy dropped every block the first had written. The LW/LU rows below pin the new shapes.
 //
 //  The three entry points that stay in process: the standard passes (what the CLI does), the aggressive passes (`--optimize`), and
 //  `CompileProjectFiles` (the IDE / Release project build). Every case reads all three.
@@ -41,8 +45,8 @@ public class LoopConditionEmissionShapeTests
         => Regex.Replace(Regex.Replace(csharp, @"^[ \t]*#line.*$", "", RegexOptions.Multiline), @"\s+", " ").Trim();
 
     /// <summary>
-    /// The LOOP of a grid program: what the emitter wrote between `i = 0; body = 0;` and the closing `Console.WriteLine(` — the peeled first
-    /// iteration of a bottom-tested loop, then the loop.
+    /// The LOOP of a grid program: what the emitter wrote between `i = 0; body = 0;` and the closing `Console.WriteLine(` — the loop and nothing
+    /// else, a bottom-tested loop included (#227: it is written once, with no peeled first iteration above it).
     /// </summary>
     private static string Loop(string csharp)
     {
@@ -70,8 +74,12 @@ public class LoopConditionEmissionShapeTests
 
     /// <summary>
     /// ⭐ A plain compare (ctl), one call (se), `Not` (not), `And` (and) and `Or` (or) are ONE block, so the loop keeps `while (cond)` exactly as
-    /// before #256 — measured: each of these 25 loops emits the same bytes on 1ba6af20 (master) and on the fix, standard and `--optimize`.
-    /// The expected text is that text; a loop pulled into the new shape by accident (every `while` rewritten, say) fails here.
+    /// before #256 — measured: each of the 15 top-tested loops (W, DW, DU) emits the same bytes on 1ba6af20 (master) and on the fix, standard
+    /// and `--optimize`. The expected text is that text; a loop pulled into the new shape by accident (every `while` rewritten, say) fails here.
+    ///
+    /// <para>#227: the 10 bottom-tested rows (LW, LU) are `do { body } while (cond);` — the condition is still written byte for byte (and still
+    /// once: `while (cond);` is the loop's only test), but the body is written ONCE, above it, in the loop's braces. They used to be
+    /// `body while (cond) { body }`, a peeled first iteration plus a copy. Until is `while (!(cond));`, the polarity the old text had.</para>
     /// </summary>
     private static readonly object[][] OneBlock =
     {
@@ -90,16 +98,16 @@ public class LoopConditionEmissionShapeTests
         new object[] { "DU", "not", "while (!(!(i < 3))) { i = i + 1; body = body + 1; }" },
         new object[] { "DU", "and", "while (!((i >= 3) & (i < 9))) { i = i + 1; body = body + 1; }" },
         new object[] { "DU", "or", "while (!((i >= 3) | (i < 0))) { i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "ctl", "i = i + 1; body = body + 1; while (i < 3) { i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "se", "i = i + 1; body = body + 1; while (P(\"a\", i < 3)) { i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "not", "i = i + 1; body = body + 1; while (!(i >= 3)) { i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "and", "i = i + 1; body = body + 1; while ((i < 3) & (i < 9)) { i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "or", "i = i + 1; body = body + 1; while ((i < 1) | (i < 3)) { i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "ctl", "i = i + 1; body = body + 1; while (!(i >= 3)) { i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "se", "i = i + 1; body = body + 1; while (!(P(\"a\", i >= 3))) { i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "not", "i = i + 1; body = body + 1; while (!(!(i < 3))) { i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "and", "i = i + 1; body = body + 1; while (!((i >= 3) & (i < 9))) { i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "or", "i = i + 1; body = body + 1; while (!((i >= 3) | (i < 0))) { i = i + 1; body = body + 1; }" },
+        new object[] { "LW", "ctl", "do { i = i + 1; body = body + 1; } while (i < 3);" },
+        new object[] { "LW", "se", "do { i = i + 1; body = body + 1; } while (P(\"a\", i < 3));" },
+        new object[] { "LW", "not", "do { i = i + 1; body = body + 1; } while (!(i >= 3));" },
+        new object[] { "LW", "and", "do { i = i + 1; body = body + 1; } while ((i < 3) & (i < 9));" },
+        new object[] { "LW", "or", "do { i = i + 1; body = body + 1; } while ((i < 1) | (i < 3));" },
+        new object[] { "LU", "ctl", "do { i = i + 1; body = body + 1; } while (!(i >= 3));" },
+        new object[] { "LU", "se", "do { i = i + 1; body = body + 1; } while (!(P(\"a\", i >= 3)));" },
+        new object[] { "LU", "not", "do { i = i + 1; body = body + 1; } while (!(!(i < 3)));" },
+        new object[] { "LU", "and", "do { i = i + 1; body = body + 1; } while (!((i >= 3) & (i < 9)));" },
+        new object[] { "LU", "or", "do { i = i + 1; body = body + 1; } while (!((i >= 3) | (i < 0)));" },
     };
 
     [TestCaseSource(nameof(OneBlock))]
@@ -127,10 +135,12 @@ public class LoopConditionEmissionShapeTests
     /// <summary>
     /// The structure, for every form x kind, in every entry point:
     /// (1) ONE `while`, and it is `while (true)` — the stale `while (__sc0)` over a carrier nothing rewrites is the bug;
-    /// (2) NOTHING of the condition is written before it (a bottom-tested loop's peel is just the body: no `P(` and no carrier write);
+    /// (2) NOTHING is written before it — not the condition, and (#227) not a copy of the body either: a bottom-tested loop used to be a peeled
+    ///     first iteration followed by the loop, and is written once, inside it;
     /// (3) every operand is written EXACTLY once (a condition emitted twice runs its left operand twice per iteration);
     /// (4) exactly ONE `break;`, the exit test, `if (!(c)) break;` for While and `if (c) break;` for Until — c is the carrier, or `!carrier` for Not;
-    /// (5) the exit test comes AFTER every operand and BEFORE the body, which is the last thing in the loop.
+    /// (5) the exit test comes AFTER every operand. A top-tested loop (W, DW, DU) is `condition; exit test; body` and the body ends the loop; a
+    ///     bottom-tested one (LW, LU — #227) is `body; condition; exit test` and the exit test ends the loop, with the body written ONCE.
     /// </summary>
     [TestCaseSource(nameof(ShortCircuitCells))]
     public void AConditionHoldingControlFlow_IsWrittenInsideWhileTrue_WithOneExitTest(string form, string kind)
@@ -150,9 +160,9 @@ public class LoopConditionEmissionShapeTests
                 Assert.That(open, Is.GreaterThanOrEqualTo(0), "opens `while (true)` — " + label);
                 Assert.That(Count(loop, @"\bwhile \("), Is.EqualTo(1), "the only `while` is `while (true)` (the stale `while (__sc0)` is #256) — " + label);
 
-                var peel = loop.Substring(0, open);
-                Assert.That(peel, Is.EqualTo(IsBottomTested(form) ? Body + " " : ""),
-                    "above the loop there is nothing of the condition — only a bottom-tested loop's peeled first iteration — " + label);
+                Assert.That(loop.Substring(0, open), Is.EqualTo(""),
+                    "above the loop there is nothing — no condition, and no peeled copy of the body of a bottom-tested loop (#227) — " + label);
+                Assert.That(Count(loop, Regex.Escape(Body)), Is.EqualTo(1), "the body is written exactly once (#227: a peel plus a copy is two) — " + label);
 
                 Assert.That(Count(loop, @"\bP\("), Is.EqualTo(OperandCalls(kind)), "every operand is written exactly once — " + label);
                 Assert.That(Count(loop, @"\bbreak;"), Is.EqualTo(1), "exactly one break, the exit test — " + label);
@@ -160,30 +170,40 @@ public class LoopConditionEmissionShapeTests
 
                 var exitAt = loop.IndexOf(exit, StringComparison.Ordinal);
                 Assert.That(loop.LastIndexOf("P(", exitAt, StringComparison.Ordinal), Is.GreaterThan(open), "every operand is inside the loop, before the exit test — " + label);
-                Assert.That(loop, Does.EndWith(exit + " " + Body + " }"), "the exit test is followed by the body, which ends the loop — " + label);
+                if (IsBottomTested(form))
+                {
+                    Assert.That(loop, Does.StartWith("while (true) { " + Body + " "), "the body is the first thing in the loop — " + label);
+                    Assert.That(loop, Does.EndWith(exit + " }"), "the exit test is the last thing in the loop, after the condition (#227) — " + label);
+                    Assert.That(loop.IndexOf(Body, StringComparison.Ordinal), Is.LessThan(loop.IndexOf("P(", StringComparison.Ordinal)),
+                        "the condition is written after the body, never before it — " + label);
+                }
+                else
+                {
+                    Assert.That(loop, Does.EndWith(exit + " " + Body + " }"), "the exit test is followed by the body, which ends the loop — " + label);
+                }
             }
         });
     }
 
     /// <summary>
     /// ⭐ The text of the headline shapes, EXACT. What the structure test cannot see — the carrier's name, the order of the operand blocks, the
-    /// If's `{ } else { … }` for OrElse, the peeled first iteration's position — is pinned here. The expected text is what the fix emits.
+    /// If's `{ } else { … }` for OrElse, where the body sits (first in a bottom-tested loop, #227) — is pinned here. The expected text is what the fix emits.
     /// </summary>
     private static readonly object[][] Exact =
     {
         new object[] { "W", "aa", "while (true) { __sc0 = P(\"a\", i < 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
         new object[] { "DW", "oe", "while (true) { __sc0 = P(\"a\", i < 1); if (__sc0) { } else { __sc0 = P(\"b\", i < 3); } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
         new object[] { "DU", "aa", "while (true) { __sc0 = P(\"a\", i >= 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (__sc0) break; i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "aa", "i = i + 1; body = body + 1; while (true) { __sc0 = P(\"a\", i < 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "aa", "i = i + 1; body = body + 1; while (true) { __sc0 = P(\"a\", i >= 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (__sc0) break; i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "oe", "i = i + 1; body = body + 1; while (true) { __sc0 = P(\"a\", i >= 3); if (__sc0) { } else { __sc0 = P(\"b\", i < 0); } if (__sc0) break; i = i + 1; body = body + 1; }" },
+        new object[] { "LW", "aa", "while (true) { i = i + 1; body = body + 1; __sc0 = P(\"a\", i < 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (!(__sc0)) break; }" },
+        new object[] { "LU", "aa", "while (true) { i = i + 1; body = body + 1; __sc0 = P(\"a\", i >= 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (__sc0) break; }" },
+        new object[] { "LU", "oe", "while (true) { i = i + 1; body = body + 1; __sc0 = P(\"a\", i >= 3); if (__sc0) { } else { __sc0 = P(\"b\", i < 0); } if (__sc0) break; }" },
         new object[] { "W", "iff", "while (true) { if (P(\"c\", (i % 2) == 0)) { __sc0 = P(\"a\", i < 3); } else { __sc0 = P(\"b\", i < 3); } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
         new object[] { "DU", "iff", "while (true) { if (P(\"c\", (i % 2) == 0)) { __sc0 = P(\"a\", i >= 3); } else { __sc0 = P(\"b\", i >= 3); } if (__sc0) break; i = i + 1; body = body + 1; }" },
-        new object[] { "LW", "iff", "i = i + 1; body = body + 1; while (true) { if (P(\"c\", (i % 2) == 0)) { __sc0 = P(\"a\", i < 3); } else { __sc0 = P(\"b\", i < 3); } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
+        new object[] { "LW", "iff", "while (true) { i = i + 1; body = body + 1; if (P(\"c\", (i % 2) == 0)) { __sc0 = P(\"a\", i < 3); } else { __sc0 = P(\"b\", i < 3); } if (!(__sc0)) break; }" },
         new object[] { "W", "nt", "while (true) { __sc0 = P(\"a\", i >= 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (!(!__sc0)) break; i = i + 1; body = body + 1; }" },
         new object[] { "DU", "nt", "while (true) { __sc0 = P(\"a\", i < 3); if (__sc0) { __sc0 = P(\"b\", i < 9); } if (!__sc0) break; i = i + 1; body = body + 1; }" },
         new object[] { "W", "cx", "while (true) { __sc1 = P(\"a\", i < 2); if (__sc1) { __sc1 = P(\"b\", i < 9); } __sc0 = __sc1; if (__sc0) { } else { __sc2 = P(\"c\", i == 2); if (__sc2) { __sc2 = P(\"d\", i < 9); } __sc0 = __sc2; } if (!(__sc0)) break; i = i + 1; body = body + 1; }" },
-        new object[] { "LU", "cx", "i = i + 1; body = body + 1; while (true) { __sc1 = P(\"a\", i >= 3); if (__sc1) { __sc1 = P(\"b\", i < 9); } __sc0 = __sc1; if (__sc0) { } else { __sc2 = P(\"c\", i == 1); if (__sc2) { __sc2 = P(\"d\", i > 9); } __sc0 = __sc2; } if (__sc0) break; i = i + 1; body = body + 1; }" },
+        new object[] { "LU", "cx", "while (true) { i = i + 1; body = body + 1; __sc1 = P(\"a\", i >= 3); if (__sc1) { __sc1 = P(\"b\", i < 9); } __sc0 = __sc1; if (__sc0) { } else { __sc2 = P(\"c\", i == 1); if (__sc2) { __sc2 = P(\"d\", i > 9); } __sc0 = __sc2; } if (__sc0) break; }" },
     };
 
     [TestCaseSource(nameof(Exact))]
@@ -377,7 +397,7 @@ public class LoopConditionEmissionShapeTests
 
     /// <summary>
     /// i4loop's three loops, each over an If(): `While`, `Do While` and `Loop Until` all become `while (true)` with the If's blocks inside and ONE exit
-    /// test, while its counted For (with If() bounds) keeps computing both bounds before its `while (j &lt;= __sc4)`.
+    /// test (the `Loop Until`'s after its body, #227), while its counted For (with If() bounds) keeps computing both bounds before its `while (j &lt;= __sc4)`.
     /// </summary>
     [Test]
     public void IfInEveryLoopForm_AndInAForBound_I4loop()
@@ -390,7 +410,8 @@ public class LoopConditionEmissionShapeTests
                 Assert.That(Count(flat, @"\bwhile \(true\)"), Is.EqualTo(3), $"While, Do While and Loop Until — {name}:\n{flat}");
                 Assert.That(Count(flat, @"\bbreak;"), Is.EqualTo(3), $"one exit test each — {name}");
                 Assert.That(flat, Does.Contain("while (true) { if (i < 3) { __sc0 = true; } else { __sc0 = false; } if (!(__sc0)) break; Console.WriteLine(\"while \" + i); i = i + 1; }"), name);
-                Assert.That(flat, Does.Contain("while (true) { if (k < 0) { __sc2 = true; } else { __sc2 = k == 1; } if (__sc2) break; k = k - 3; }"), $"Loop Until — {name}");
+                Assert.That(flat, Does.Contain("while (true) { k = k - 3; if (k < 0) { __sc2 = true; } else { __sc2 = k == 1; } if (__sc2) break; }"),
+                    $"Loop Until (#227: the body first, then the condition, then the exit test — written once) — {name}");
                 Assert.That(flat, Does.Contain(
                     "if (useTick) { __sc3 = 1; } else { __sc3 = 5; } j = __sc3; if (useTick) { __sc4 = 3; } else { __sc4 = 9; } while (j <= __sc4) {"),
                     $"the For's bounds are computed once, before its loop — {name}");
@@ -399,12 +420,15 @@ public class LoopConditionEmissionShapeTests
     }
 
     // ============================================================================================
-    // 5. THE GUARD: the InvalidOperationException ("never reached the loop's own branch") must never fire.
+    // 5. THE GUARD: the InvalidOperationException ("never reached the loop's own branch"; #227's "never reached its condition's own branch")
+    //    must never fire.
     // ============================================================================================
 
     /// <summary>
     /// <c>GenerateStructuredBlockCore</c> throws when it opens a `while (true)` and the walk out of the condition never reaches the loop's own branch
-    /// (it would leave the loop open — broken C#). That must NEVER happen for a program the compiler accepts: every probe goes through all three
+    /// (it would leave the loop open — broken C#); so does <c>GenerateBottomTestedLoop</c> (#227) when the walk out of a bottom-tested loop's body
+    /// never reaches its condition's own branch (the exit test, without which the `while (true)` hangs). That must NEVER happen for a program the
+    /// compiler accepts: every probe goes through all three
     /// entry points here, and every emitted program is handed to Roslyn. ALL of them compile: l_fn (a loop inside a Function lambda) was the
     /// one that did not until #136 (CS1643: a lambda's body lost every block after its entry block, its return paths with them) and was
     /// skipped here; it is compiled like the rest now.
@@ -425,7 +449,7 @@ public class LoopConditionEmissionShapeTests
             {
                 string csharp;
                 try { csharp = emit(source); }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("never reached the loop's own branch"))
+                catch (InvalidOperationException ex) when (IsTheGuard(ex))
                 {
                     failures.Add($"{id} ({name}): THE GUARD FIRED — {ex.Message}");
                     continue;
@@ -437,6 +461,13 @@ public class LoopConditionEmissionShapeTests
 
         Assert.That(failures, Is.Empty, string.Join("\n", failures));
     }
+
+    /// <summary>
+    /// The two guards of this work: #256's (a pre-test loop's condition whose walk never reached the loop's own branch) and #227's (a bottom-tested
+    /// loop's body that never reached its condition's own branch — `GenerateBottomTestedLoop`). Either leaves a `while (true)` that never ends.
+    /// </summary>
+    private static bool IsTheGuard(InvalidOperationException ex)
+        => ex.Message.Contains("never reached the loop's own branch") || ex.Message.Contains("never reached its condition's own branch");
 
     /// <summary>
     /// The three entry points emit the SAME text but for the module class's name (Prog, Program, ReturnCoercionProbe), and Roslyn is the cost of
@@ -482,7 +513,7 @@ public class LoopConditionEmissionShapeTests
                 {
                     string csharp;
                     try { csharp = emit(source); }
-                    catch (InvalidOperationException ex) when (ex.Message.Contains("never reached the loop's own branch"))
+                    catch (InvalidOperationException ex) when (IsTheGuard(ex))
                     {
                         failures.Add($"{form}_{kind} ({name}): THE GUARD FIRED — {ex.Message}");
                         continue;
@@ -505,7 +536,7 @@ public class LoopConditionEmissionShapeTests
     /// <summary>
     /// ⛔⛔ The in-process runner has no timeout, and a C# loop that hangs there freezes the whole host. So no test file of THIS work may call it for
     /// a program: every C# run goes through <c>CSharpProcessRunner</c> (a child process, killed), directly or as <c>hangSafe: true</c>. This reads
-    /// the other three files (code only, comments dropped) and fails on a call to the in-process runner — except the ONE equivalence test in
+    /// the other four files (code only, comments dropped) and fails on a call to the in-process runner — except the ONE equivalence test in
     /// <c>CSharpProcessRunnerTests</c>, which runs a program that is not a loop — and on an <c>AssertMatchesInEveryEntryPoint</c> call that is not
     /// hang-safe. (This file runs nothing: it only emits text.) A guard on the rule is cheaper than a frozen run.
     /// </summary>
@@ -513,7 +544,7 @@ public class LoopConditionEmissionShapeTests
     public void NoLoopTestRunsEmittedCSharpInTheTestHost()
     {
         var dir = Path.Combine(SampleSources.RepoRoot(), "VisualGameStudio.Tests", "Compiler");
-        string[] files = { "LoopConditionReevaluationExecutionTests.cs", "LoopConditionProbes.cs", "CSharpProcessRunnerTests.cs" };
+        string[] files = { "LoopConditionReevaluationExecutionTests.cs", "LoopConditionProbes.cs", "CSharpProcessRunnerTests.cs", "BottomTestedLoopCSharpExecutionTests.cs" };
 
         static string Code(string path)
             => string.Join("\n", File.ReadAllLines(path).Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));

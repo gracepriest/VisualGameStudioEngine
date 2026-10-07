@@ -47,7 +47,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //         pre-existing multi-statement-lambda-body defect; a lambda body is written by the
 //         function-body emitter now, cl and E08 print VB's answer and L8 prints D2's recorded
 //         divergence, 11|21|31, like the other three backends.)
-//    C#   E07w, P226b                                                          -> #227
+//    C#   (none since #227: E07w was pinned here as the C# backend writing a bottom-tested loop as a peeled first iteration plus a copy of
+//         its body, the copy dropping the rest of the iteration — C# printed 1|2 for VB's 1|2|3|4. The loop is written once now; E07w prints
+//         VB's answer, see E07w_ExitDoInsideWhile_RunsOnEveryBackend below.)
 //    E15, E15n   (none since #228: they were pinned here as 6|6|6 and 1|3|6 on all four backends, because a
 //         sized array `Dim a(2)` in a loop body was not an IR instruction — every backend allocated it once,
 //         at function top, with or without a lambda. It lowers to IRBuilder.SizedArrayDimIntrinsic at the
@@ -412,7 +414,7 @@ internal static class PerIterationLoopBodyDimProbes
     internal const string E07fCppActual = "1\n102\n203\n304";
 
     /// <summary>E07's own shape, `Exit Do` out of an inner Do, the OUTER `While` re-enters —
-    /// still A1's fix, not D3's loop-kind coverage: C# alone stays known-wrong (#227).</summary>
+    /// still A1's fix, not D3's loop-kind coverage. C# printed 1|2 until #227 (the inner `Do … Loop` was written as a peel plus a copy).</summary>
     internal const string E07w = """
         Sub Main()
             Dim fs As New List(Of Func(Of Integer))()
@@ -435,7 +437,6 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E07wExpected = "1\n2\n3\n4";
-    internal const string E07wCSharpActual = "1\n2";
 
     /// <summary>E07's own shape via the EXCEPTION route: the loop is left by a thrown exception
     /// (not an Exit), caught by an enclosing Try, and the outer loop re-enters — A1's own "the
@@ -1134,7 +1135,7 @@ public class PerIterationLoopBodyDimExecutionTests
     // were REFUSED BY NAME on C++ by #170's by-copy rule (ADR-0016 D3/W2: a Finally that runs after the
     // lambda is created for E03/E04/E07f, the For loop's own control-variable increment for E12/E18, a
     // second lambda that writes what it captures for E17). #140 lowers them, and they run on all four
-    // backends; E07w stays #227 on C# only.
+    // backends; E07w ran wrong on C# alone until #227 and prints VB's answer on all four now.
     // ============================================================================================
 
     /// <summary>⭐ MOVED PIN (#140). USED TO print 1\n12\n123 for 10\n120\n1230 (C++ losing the
@@ -1155,13 +1156,29 @@ public class PerIterationLoopBodyDimExecutionTests
     public void E07f_ExitInsideUserTryFinally_OuterLoopReenters()
         => AssertAllFourAgree_CppLowered(PerIterationLoopBodyDimProbes.E07f, PerIterationLoopBodyDimProbes.E07fExpected);
 
-    /// <summary>Task #227: C# alone prints 1|2 instead of VB's 1|2|3|4 for this exact
-    /// Do-inside-While Exit-and-re-entry shape — re-measure before touching (S/t172/m-r2c.txt).
-    /// Unaffected by #170 — no lambda writes a captured variable anywhere in this probe.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#227). USED TO print 1|2 on C# for VB's 1|2|3|4 (`E07w_ExitDoInsideWhile_KnownWrongOnCSharp_PinnedForTask227`): the inner
+    /// `Do … Loop` (no condition, left by `Exit Do`) was written as a peeled first iteration plus a copy of its body, and the copy dropped the
+    /// rest of the iteration, so the outer `While` ran its body twice, not four times. The loop is written once now (#227, #293) and C# prints
+    /// VB's answer like the other three backends. Unaffected by #170 — no lambda writes a captured variable anywhere in this probe.
+    /// Hang-safe runner for C# (standard and aggressive): the body holds a bottom-tested loop, the family that hung.
+    /// </summary>
     [Test]
-    public void E07w_ExitDoInsideWhile_KnownWrongOnCSharp_PinnedForTask227()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E07w, PerIterationLoopBodyDimProbes.E07wExpected,
-            csharp: PerIterationLoopBodyDimProbes.E07wCSharpActual);
+    public void E07w_ExitDoInsideWhile_RunsOnEveryBackend()
+    {
+        var source = PerIterationLoopBodyDimProbes.E07w;
+        var expected = PerIterationLoopBodyDimProbes.E07wExpected;
+        Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(source))),
+                Is.EqualTo(expected), "C#");
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpAggressiveForTest(source))),
+                Is.EqualTo(expected), "C#, aggressive");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(expected), "C++");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), "JavaScript");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL");
+        });
+    }
 
     /// <summary>⭐ MOVED PIN (#140). USED TO print 1\n2\n3 for 4\n4\n4: the counted For's OWN
     /// control variable <c>i</c> is not a body <c>Dim</c> (it is NOT in <c>BodyLocals</c>), so there is

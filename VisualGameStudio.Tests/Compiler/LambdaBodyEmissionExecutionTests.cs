@@ -36,7 +36,6 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⛔ CELLS WITH NO EXPECTATION — each is a defect that is NOT #136's, measured on the fixed build and on the one before it. Asserting one would
 //  pin the defect. They are not rows here:
 //
-//    C#  #227   E07w                          a bottom-tested loop (`Do … Loop While/Until`) over a nested loop never ends.
 //    C#  #228   E15, E15n                     ⚠ FIXED (2026-10-07): a sized array `Dim a(2)` in a loop body was allocated once, at function top; it is a new array
 //                                             every pass now and both print vbc's 1|2|3 (moved pins, PerIterationLoopBodyDimExecutionTests; SizedArrayDimInLoopExecutionTests).
 //    C#/JS #229 E16, E20                      a name with two `Dim`s in one function stays function-level. E20 on C# prints 50|2|2 now (JavaScript's

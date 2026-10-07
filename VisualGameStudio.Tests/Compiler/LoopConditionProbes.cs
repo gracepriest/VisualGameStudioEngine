@@ -215,7 +215,7 @@ internal static class LoopConditionProbes
     };
 
     /// <summary>
-    /// The stress conditions in two forms — While (top-tested) and Do … Loop While (bottom-tested, peeled) — for C# and C++ (MSIL's `Not` is bitwise,
+    /// The stress conditions in two forms — While (top-tested) and Do … Loop While (bottom-tested, written once since #227) — for C# and C++ (MSIL's `Not` is bitwise,
     /// #257, and two of the ten have one; JavaScript refuses every one).
     /// </summary>
     internal static readonly IReadOnlyList<LoopProbe> Stress = new[] { "W", "LW" }
@@ -319,7 +319,7 @@ internal static class LoopConditionProbes
         i=3 seen=abababa
         """,
         Bk.CSharp | Bk.Cpp | Bk.Msil, true);
-    // ADR-0014: a per-iteration Dim captured by a lambda, Do … Loop While … AndAlso (the peeled shape)
+    // ADR-0014: a per-iteration Dim captured by a lambda, Do … Loop While … AndAlso (a bottom-tested loop: the iteration's try/finally opens at the top of its single body, #227)
     internal static readonly LoopProbe d_LW = new("d_LW", """
         Dim seen As String = ""
 
@@ -403,7 +403,7 @@ internal static class LoopConditionProbes
         i=3 body=103 seen=
         """,
         Bk.All, false);
-    // an If inside a Do … Loop While body: ⛔ C# is #227 (the loop's copy of the body drops the If's continuation) — no C# expectation
+    // an If inside a Do … Loop While body: C# ran the statement after the If in the FIRST iteration only until #227 (the loop's copy of the body dropped the If's continuation)
     internal static readonly LoopProbe f_LW_aa = new("f_LW_aa", """
         Dim seen As String = ""
 
@@ -428,8 +428,8 @@ internal static class LoopConditionProbes
         """
         i=3 body=103 seen=ababa
         """,
-        Bk.Cpp | Bk.Msil, true);
-    // …its plain-condition control: ⛔ C# is the same #227 — no C# expectation
+        Bk.CSharp | Bk.Cpp | Bk.Msil, true);
+    // …its plain-condition control: the same #227 (body=101 for vbc's 103 on C#), now fixed; JavaScript runs it too
     internal static readonly LoopProbe f_LW_ctl = new("f_LW_ctl", """
         Dim seen As String = ""
 
@@ -454,7 +454,7 @@ internal static class LoopConditionProbes
         """
         i=3 body=103 seen=
         """,
-        Bk.Cpp | Bk.JavaScript | Bk.Msil, false);
+        Bk.All, false);
     // a short-circuit loop inside a Function lambda: C# printed nothing right until #136 (CS1643: the lambda lost its return paths); it runs now
     internal static readonly LoopProbe l_fn = new("l_fn", """
         Dim seen As String = ""
@@ -533,7 +533,7 @@ internal static class LoopConditionProbes
         i=3 body=6 seen=abcdcdcabcdcdcabcdcdca
         """,
         Bk.CSharp | Bk.Cpp | Bk.Msil, true);
-    // a Do … Loop Until around a Do While, both with AndAlso: ⛔ C# is #227 (the inner loop is dropped from the loop's copy) — no C# expectation
+    // a Do … Loop Until around a Do While, both with AndAlso: C# lost the inner loop from the loop's copy of the body until #227
     internal static readonly LoopProbe n_LD = new("n_LD", """
         Dim seen As String = ""
 
@@ -560,8 +560,8 @@ internal static class LoopConditionProbes
         """
         i=3 body=6 seen=cdcdcacdcdcacdcdcab
         """,
-        Bk.Cpp | Bk.Msil, true);
-    // …the same nesting with PLAIN conditions: ⛔ C# HANGS before and after #256 (#227) — no C# expectation
+        Bk.CSharp | Bk.Cpp | Bk.Msil, true);
+    // …the same nesting with PLAIN conditions: C# HUNG before #256 and after it, until #227 (the copy lost the inner loop); every backend prints vbc's answer now
     internal static readonly LoopProbe n_LDctl = new("n_LDctl", """
         Sub Main()
             Dim i As Integer = 0
@@ -581,7 +581,7 @@ internal static class LoopConditionProbes
         """
         i=3 body=6
         """,
-        Bk.Cpp | Bk.JavaScript | Bk.Msil, false);
+        Bk.All, false);
     // a counted For whose To bound is an If(): C# computes it ONCE (VB's rule); ⛔ C++ and MSIL re-evaluate it every iteration (#261) — C# only
     internal static readonly LoopProbe o_for = new("o_for", """
         Dim seen As String = ""
@@ -710,7 +710,7 @@ internal static class LoopConditionProbes
         i=3 body=2 seen=ababab
         """,
         Bk.CSharp | Bk.Cpp | Bk.Msil, true);
-    // Exit Do in a Do … Loop While: ⛔ C# is #227 — no C# expectation
+    // Exit Do in a Do … Loop While: C# printed the wrong answer until #227 (the copy of the body dropped the rest of the iteration)
     internal static readonly LoopProbe x_LW = new("x_LW", """
         Dim seen As String = ""
 
@@ -733,7 +733,7 @@ internal static class LoopConditionProbes
         """
         i=3 body=2 seen=abab
         """,
-        Bk.Cpp | Bk.Msil, true);
+        Bk.CSharp | Bk.Cpp | Bk.Msil, true);
     // Exit Do from inside a Select Case (a C# switch's break would leave the switch, not the loop)
     internal static readonly LoopProbe x_sel = new("x_sel", """
         Dim seen As String = ""
