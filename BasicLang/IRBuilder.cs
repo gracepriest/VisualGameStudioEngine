@@ -3276,6 +3276,43 @@ namespace BasicLang.Compiler.IR
                 lambdaFunc.Parameters.Add(paramVar);
             }
 
+            // The result is a reference to the lambda function (delegate)
+            _expressionResult = BuildLambda(lambdaFunc,
+                lambdaType ?? new TypeInfo("Delegate", TypeKind.Delegate), () =>
+            {
+                // Generate body
+                if (node.Body != null)
+                {
+                    node.Body.Accept(this);
+                    // Return the expression result (Sub lambdas don't return a value)
+                    EmitInstruction(new IRReturn(node.IsFunction ? _expressionResult : null));
+                }
+                else if (node.StatementBody != null)
+                {
+                    node.StatementBody.Accept(this);
+                    // Ensure we have a return for void lambdas
+                    if (!_currentBlock.IsTerminated())
+                    {
+                        // A Function lambda that falls off its end returns its type's default, exactly
+                        // as a named Function does (Visit(FunctionNode)). A bare `ret` from a non-void
+                        // lambda was an InvalidProgramException on MSIL (#164).
+                        EmitInstruction(new IRReturn(node.IsFunction ? CreateDefaultValue(returnType) : null));
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Builds a lambda around a body <paramref name="emitBody"/> emits — the ONE place a lambda's
+        /// function is made current, its parameters registered, its capture set recorded and the function
+        /// added to the module: for a written lambda (<see cref="Visit(LambdaExpressionNode)"/>) and for
+        /// each clause of a query (#224, <see cref="Visit(LinqQueryExpressionNode)"/>). Returns the
+        /// reference to it — the delegate value — typed <paramref name="delegateType"/>.
+        /// </summary>
+        private IRVariable BuildLambda(IRFunction lambdaFunc, TypeInfo delegateType, Action emitBody)
+        {
+            var lambdaName = lambdaFunc.Name;
+
             // Save current context. ⚠ NOT a name scope (#199, ADR-0013 D4): the body is built inside
             // its creator's scope because it captures the creator's names, so neither
             // `_variableVersions` nor `_locals` is saved here — only the parameters below are
@@ -3295,25 +3332,7 @@ namespace BasicLang.Compiler.IR
                 PushVariableVersion(paramVar.Name, paramVar);
             }
 
-            // Generate body
-            if (node.Body != null)
-            {
-                node.Body.Accept(this);
-                // Return the expression result (Sub lambdas don't return a value)
-                EmitInstruction(new IRReturn(node.IsFunction ? _expressionResult : null));
-            }
-            else if (node.StatementBody != null)
-            {
-                node.StatementBody.Accept(this);
-                // Ensure we have a return for void lambdas
-                if (!_currentBlock.IsTerminated())
-                {
-                    // A Function lambda that falls off its end returns its type's default, exactly
-                    // as a named Function does (Visit(FunctionNode)). A bare `ret` from a non-void
-                    // lambda was an InvalidProgramException on MSIL (#164).
-                    EmitInstruction(new IRReturn(node.IsFunction ? CreateDefaultValue(returnType) : null));
-                }
-            }
+            emitBody();
 
             // ⭐ THE CAPTURE SET (task #122, ADR-0006 D1's Obligation), read off the lambda's IR
             // now that its body — and every lambda nested in it, each already recorded on this
@@ -3350,8 +3369,7 @@ namespace BasicLang.Compiler.IR
                 PopVariableVersion(paramVar.Name);
             }
 
-            // The result is a reference to the lambda function (delegate)
-            _expressionResult = new IRVariable(lambdaName, lambdaType ?? new TypeInfo("Delegate", TypeKind.Delegate));
+            return new IRVariable(lambdaName, delegateType);
         }
 
         public void Visit(CollectionInitializerNode node)
@@ -3802,16 +3820,25 @@ namespace BasicLang.Compiler.IR
         public void Visit(LinqQueryExpressionNode node)
         {
             TrackSourceLine(node);
-            // LINQ queries are converted to method chain calls
-            // Store the query as a special IR node for code generation
-            IRValue result = null;
 
-            // ⭐ #169 (ADR-0013 D5): the range variables, registered as each clause brings them into
-            // scope — the order the analyzer defines them in, after the clause's own expressions
-            // — and dropped when the query ends. The lowering evaluates each clause's expressions
-            // inline rather than in a lambda, so these are the names those expressions read;
-            // before, each was minted by its first reference.
-            var rangeVariables = new List<string>();
+            // ⭐ #224: a query lowers to the IR METHOD SYNTAX already produces — a chain of instance
+            // calls on the running sequence, each clause's expression a LAMBDA whose parameter is the
+            // range variable: `From x In xs Where x > 2 Select x * 10` is
+            // `xs.Where(Function(x) x > 2).Select(Function(x) x * 10)`. No IR node of its own, so each
+            // backend runs a query exactly as far as it runs that method syntax (C# through System.Linq,
+            // JavaScript onto Array methods) and refuses it where it refuses that.
+            //
+            // Before, each clause's expression was evaluated ONCE, inline in the creator, and handed to
+            // a free call named after the clause (`Where(xs, x > 2)`): no backend could run it.
+            //
+            // The range variable (#169, ADR-0013 D5) is "registered where the lowering introduces the
+            // parameter that carries it": each clause's lambda pushes it as its parameter
+            // (BuildLambda). It is reserved in the creator too, as before (ADR-0018 D1): C# inlines
+            // the lambda into the creator's body, where a temp of the same name would collide.
+            var objectType = new TypeInfo("Object", TypeKind.Class);
+            IRValue sequence = null;
+            Symbol range = null;
+            TypeInfo element = objectType;
 
             foreach (var clause in node.Clauses)
             {
@@ -3819,184 +3846,97 @@ namespace BasicLang.Compiler.IR
                 {
                     case FromClause from:
                         from.Collection?.Accept(this);
-                        result = _expressionResult;
+                        sequence = _expressionResult;
+                        range = _semanticAnalyzer.LinqRangeVariables.TryGetValue(from, out var declared)
+                                && declared.Count > 0
+                            ? declared[0]
+                            : new Symbol(from.VariableName, SymbolKind.Variable, objectType, from.Line, from.Column);
+                        element = range.Type ?? objectType;
+                        ReserveInCurrentFunction(range.Name);
                         break;
 
                     case WhereClause where:
-                        where.Condition?.Accept(this);
-                        var whereCondition = _expressionResult;
-                        var whereCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Where",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) whereCall.Arguments.Add(result);
-                        whereCall.Arguments.Add(whereCondition);
-                        EmitInstruction(whereCall);
-                        result = whereCall;
+                        sequence = QueryOperator(sequence, "Where", element,
+                            QueryLambda(range, where.Condition, new TypeInfo("Boolean", TypeKind.Primitive)));
                         break;
 
                     case SelectClause select:
-                        select.Selector?.Accept(this);
-                        var selectExpr = _expressionResult;
-                        var selectCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Select",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) selectCall.Arguments.Add(result);
-                        selectCall.Arguments.Add(selectExpr);
-                        EmitInstruction(selectCall);
-                        result = selectCall;
+                        var projected = _semanticAnalyzer.GetNodeType(select.Selector) ?? objectType;
+                        sequence = QueryOperator(sequence, "Select", projected,
+                            QueryLambda(range, select.Selector, projected));
+                        element = projected;
                         break;
 
                     case OrderByClause orderBy:
-                        orderBy.KeySelector?.Accept(this);
-                        var orderKey = _expressionResult;
-                        var orderMethod = orderBy.Descending ? "OrderByDescending" : "OrderBy";
-                        var orderCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            orderMethod,
-                            new TypeInfo("IOrderedEnumerable", TypeKind.Interface));
-                        if (result != null) orderCall.Arguments.Add(result);
-                        orderCall.Arguments.Add(orderKey);
-                        EmitInstruction(orderCall);
-                        result = orderCall;
+                        var key = _semanticAnalyzer.GetNodeType(orderBy.KeySelector) ?? objectType;
+                        sequence = QueryOperator(sequence, orderBy.Descending ? "OrderByDescending" : "OrderBy",
+                            element, QueryLambda(range, orderBy.KeySelector, key));
                         break;
 
-                    case GroupByClause groupBy:
-                        groupBy.KeySelector?.Accept(this);
-                        var groupKey = _expressionResult;
-
-                        var groupCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "GroupBy",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) groupCall.Arguments.Add(result);
-                        groupCall.Arguments.Add(groupKey);
-
-                        // If there's an element selector
-                        if (groupBy.ElementSelector != null)
-                        {
-                            groupBy.ElementSelector.Accept(this);
-                            groupCall.Arguments.Add(_expressionResult);
-                        }
-
-                        EmitInstruction(groupCall);
-                        result = groupCall;
-                        break;
-
-                    case JoinClause join:
-                        join.Collection?.Accept(this);
-                        var innerCollection = _expressionResult;
-
-                        join.OuterKeySelector?.Accept(this);
-                        var outerKey = _expressionResult;
-
-                        join.InnerKeySelector?.Accept(this);
-                        var innerKey = _expressionResult;
-
-                        var joinMethod = !string.IsNullOrEmpty(join.IntoVariable) ? "GroupJoin" : "Join";
-                        var joinCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            joinMethod,
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) joinCall.Arguments.Add(result);
-                        joinCall.Arguments.Add(innerCollection);
-                        joinCall.Arguments.Add(outerKey);
-                        joinCall.Arguments.Add(innerKey);
-
-                        EmitInstruction(joinCall);
-                        result = joinCall;
-                        break;
-
-                    case AggregateClause aggregate:
-                        aggregate.Collection?.Accept(this);
-                        var aggCollection = _expressionResult;
-
-                        var aggCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Aggregate",
-                            new TypeInfo("Object", TypeKind.Class));
-                        if (result != null) aggCall.Arguments.Add(result);
-                        aggCall.Arguments.Add(aggCollection);
-
-                        if (aggregate.Selector != null)
-                        {
-                            aggregate.Selector.Accept(this);
-                            aggCall.Arguments.Add(_expressionResult);
-                        }
-
-                        EmitInstruction(aggCall);
-                        result = aggCall;
-                        break;
-
-                    case LetClause let:
-                        // Let clauses create projection with additional property
-                        // We'll represent this as a Select that creates an anonymous type
-                        let.Value?.Accept(this);
-                        var letValue = _expressionResult;
-
-                        var letCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Select",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) letCall.Arguments.Add(result);
-                        letCall.Arguments.Add(letValue);
-
-                        EmitInstruction(letCall);
-                        result = letCall;
-                        break;
-
+                    // A count is a VALUE, evaluated once where the query is built — as VB evaluates it.
                     case TakeClause take:
                         take.Count?.Accept(this);
-                        var takeCount = _expressionResult;
-                        var takeCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Take",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) takeCall.Arguments.Add(result);
-                        takeCall.Arguments.Add(takeCount);
-                        EmitInstruction(takeCall);
-                        result = takeCall;
+                        sequence = QueryOperator(sequence, "Take", element, _expressionResult);
                         break;
 
                     case SkipClause skip:
                         skip.Count?.Accept(this);
-                        var skipCount = _expressionResult;
-                        var skipCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Skip",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) skipCall.Arguments.Add(result);
-                        skipCall.Arguments.Add(skipCount);
-                        EmitInstruction(skipCall);
-                        result = skipCall;
+                        sequence = QueryOperator(sequence, "Skip", element, _expressionResult);
                         break;
 
                     case DistinctClause:
-                        var distinctCall = new IRCall(
-                            _currentFunction.GetNextTempName(),
-                            "Distinct",
-                            new TypeInfo("IEnumerable", TypeKind.Interface));
-                        if (result != null) distinctCall.Arguments.Add(result);
-                        EmitInstruction(distinctCall);
-                        result = distinctCall;
+                        sequence = QueryOperator(sequence, "Distinct", element);
                         break;
-                }
 
-                if (_semanticAnalyzer.LinqRangeVariables.TryGetValue(clause, out var declared))
-                {
-                    foreach (var symbol in declared)
-                    {
-                        PushVariableVersion(symbol.Name, CreateVariable(symbol.Name, symbol.Type, _nextVersion++));
-                        rangeVariables.Add(symbol.Name);
-                    }
+                    default:
+                        // Group By, Join, Aggregate, Let: SemanticAnalyzer.RefuseUnloweredQueryClause.
+                        throw new InvalidOperationException(
+                            $"Internal compiler error: the query clause '{clause.GetType().Name}' (line {clause.Line}) "
+                            + "reached the IR builder, but the analyzer refuses it (#224); refusing to lower it.");
                 }
             }
 
-            foreach (var name in rangeVariables)
-                PopVariableVersion(name);
+            _expressionResult = sequence;
+        }
 
-            _expressionResult = result;
+        /// <summary>#224: one query operator — <c>sequence.Method(arguments)</c>, an IEnumerable(Of element).</summary>
+        private IRValue QueryOperator(IRValue sequence, string method, TypeInfo element, params IRValue[] arguments)
+        {
+            var call = new IRInstanceMethodCall(_currentFunction.GetNextTempName(), sequence, method,
+                _semanticAnalyzer.QuerySequenceType(element));
+            foreach (var argument in arguments)
+            {
+                call.Arguments.Add(argument);
+                call.ByRefArguments.Add(false);
+            }
+            EmitInstruction(call);
+            return call;
+        }
+
+        /// <summary>
+        /// #224: a clause's expression as <c>Function(range) expression</c> — a <c>Func(Of T, R)</c>
+        /// whose one parameter is the range variable, built by <see cref="BuildLambda"/> exactly as a
+        /// written lambda is.
+        /// </summary>
+        private IRVariable QueryLambda(Symbol range, ExpressionNode body, TypeInfo returnType)
+        {
+            var parameterType = range.Type ?? new TypeInfo("Object", TypeKind.Class);
+            var lambdaFunc = new IRFunction($"__lambda_{_lambdaCounter++}", returnType)
+            {
+                IsLambda = true,
+                ModuleName = _currentModuleName ?? _module?.Name,
+            };
+            lambdaFunc.Parameters.Add(new IRVariable(range.Name, parameterType) { IsParameter = true });
+
+            var delegateType = new TypeInfo("Func", TypeKind.Delegate);
+            delegateType.GenericArguments.Add(parameterType);
+            delegateType.GenericArguments.Add(returnType);
+
+            return BuildLambda(lambdaFunc, delegateType, () =>
+            {
+                body.Accept(this);
+                EmitInstruction(new IRReturn(_expressionResult));
+            });
         }
 
         public void Visit(InlineCodeNode node)

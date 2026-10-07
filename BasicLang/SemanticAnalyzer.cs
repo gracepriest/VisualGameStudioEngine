@@ -5429,6 +5429,22 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             if (receiver?.Name == null) return null;
             var lowerType = receiver.Name.ToLowerInvariant();
+
+            // #224: an IEnumerable(Of T) — what a query is — ended the usual ways. Without these the
+            // result of `q.ToList()` was Object, and `l.Count` / `l(0)` on it failed to compile (C#) or
+            // ran as a call of an Array (JavaScript).
+            if (lowerType == "ienumerable" && receiver.GenericArguments?.Count == 1)
+            {
+                var element = receiver.GenericArguments[0];
+                return memberName.ToLowerInvariant() switch
+                {
+                    "tolist" => MakeListOf(element),
+                    "toarray" => _typeManager.CreateArrayType(element, 1),
+                    "count" => _typeManager.IntegerType,
+                    _ => null,
+                };
+            }
+
             if (lowerType is not ("list" or "dictionary" or "hashset")) return null;
 
             var lowerMember = memberName.ToLowerInvariant();
@@ -9651,13 +9667,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         from.Collection?.Accept(this);
                         var collectionType = GetNodeType(from.Collection);
 
-                        // Try to infer element type from collection
+                        // #224: the range variable is the ELEMENT of the source — an array's element
+                        // type, or the T of a List(Of T) / IEnumerable(Of T). Only arrays were read
+                        // before, so a List's range variable was Object and `x * 10` was refused.
                         TypeInfo elementType = _typeManager.ObjectType;
-                        RefuseWholeMultiDimensionalArrayUse(
+                        var multiDimensional = RefuseWholeMultiDimensionalArrayUse(
                             collectionType, "as a query source", from.Line, from.Column);
-                        if (collectionType?.Kind == TypeKind.Array)
+                        if (QuerySourceElementType(collectionType) is TypeInfo sourceElement)
                         {
-                            elementType = collectionType.ElementType ?? _typeManager.ObjectType;
+                            elementType = sourceElement;
+                        }
+                        else if (!multiDimensional && collectionType != null)
+                        {
+                            Error($"A query source must be an array, a List(Of T) or an IEnumerable(Of T); " +
+                                  $"'{collectionType}' is not supported as a query source", from.Line, from.Column);
                         }
 
                         // Define the range variable with inferred type
@@ -9667,7 +9690,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
 
                     case WhereClause where:
-                        where.Condition?.Accept(this);
+                        AnalyzeQueryLambdaBody(where.Condition);
                         var condType = GetNodeType(where.Condition);
                         if (condType != null && !condType.Equals(_typeManager.BooleanType))
                         {
@@ -9676,15 +9699,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
 
                     case SelectClause select:
-                        select.Selector?.Accept(this);
+                        AnalyzeQueryLambdaBody(select.Selector);
                         currentResultType = GetNodeType(select.Selector) ?? _typeManager.ObjectType;
                         break;
 
                     case OrderByClause orderBy:
-                        orderBy.KeySelector?.Accept(this);
+                        AnalyzeQueryLambdaBody(orderBy.KeySelector);
                         break;
 
                     case GroupByClause groupBy:
+                        RefuseUnloweredQueryClause("Group By", groupBy);
                         groupBy.KeySelector?.Accept(this);
                         if (groupBy.ElementSelector != null)
                         {
@@ -9702,6 +9726,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
 
                     case JoinClause join:
+                        RefuseUnloweredQueryClause("Join", join);
                         join.Collection?.Accept(this);
                         join.OuterKeySelector?.Accept(this);
                         join.InnerKeySelector?.Accept(this);
@@ -9737,6 +9762,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
 
                     case AggregateClause aggregate:
+                        RefuseUnloweredQueryClause("Aggregate", aggregate);
                         aggregate.Collection?.Accept(this);
                         if (aggregate.Selector != null)
                         {
@@ -9763,6 +9789,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         break;
 
                     case LetClause let:
+                        RefuseUnloweredQueryClause("Let", let);
                         let.Value?.Accept(this);
                         var letType = GetNodeType(let.Value) ?? _typeManager.ObjectType;
                         var letSymbol = new Symbol(let.VariableName, SymbolKind.Variable, letType, let.Line, let.Column);
@@ -9793,13 +9820,94 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 }
             }
 
-            // Set the result type of the query expression (usually IEnumerable<T>)
-            // For simplification, we use an array type
-            var resultArrayType = new TypeInfo($"{currentResultType.Name}[]", TypeKind.Array);
-            resultArrayType.ElementType = currentResultType;
-            SetNodeType(node, resultArrayType);
+            // #224: a query is an IEnumerable(Of T) of its last projection — VB's own type for it,
+            // and what its lowering (IRBuilder: a chain of Where/Select/OrderBy calls) produces. It
+            // was typed as an ARRAY, which no lowering ever produced: `Return From …` in a Function
+            // `As IEnumerable(Of Integer)` was refused, and C# declared the local `object[]`.
+            SetNodeType(node, QuerySequenceType(currentResultType));
 
             ExitScope();
+        }
+
+        /// <summary>
+        /// #224 — the element type a query over <paramref name="source"/> ranges over, or null when
+        /// the source is not one the lowering supports: a one-dimensional array (its element type), or a
+        /// <c>List(Of T)</c> / <c>IEnumerable(Of T)</c> (its T — a query's own result is the latter). A
+        /// String, a Dictionary, a HashSet and the rest are refused: the lowering calls the source's LINQ
+        /// operators, and the JavaScript backend lowers those onto Array methods for exactly these shapes
+        /// (a JS string or Set has no <c>filter</c>, so admitting one would be a run-time TypeError).
+        /// </summary>
+        internal static TypeInfo QuerySourceElementType(TypeInfo source)
+        {
+            if (source == null) return null;
+            if (source.Kind == TypeKind.Array)
+                return source.ArrayRank <= 1 ? source.ElementType : null;
+
+            var bare = source.Name ?? "";
+            var dot = bare.LastIndexOf('.');
+            if (dot >= 0) bare = bare.Substring(dot + 1);
+            var isSequence = bare.Equals("List", StringComparison.OrdinalIgnoreCase)
+                || bare.Equals("IEnumerable", StringComparison.OrdinalIgnoreCase);
+            return isSequence && source.GenericArguments?.Count == 1 ? source.GenericArguments[0] : null;
+        }
+
+        /// <summary>
+        /// #224 — <c>IEnumerable(Of element)</c>, built the way a written <c>IEnumerable(Of T)</c> resolves
+        /// (<see cref="ResolveTypeReference"/>'s generic arm), so a query assigns to and returns as one.
+        /// </summary>
+        internal TypeInfo QuerySequenceType(TypeInfo element)
+        {
+            var arguments = new List<TypeInfo> { element ?? _typeManager.ObjectType };
+            var sequence = _typeManager.CreateGenericType("IEnumerable", arguments);
+            if (sequence == null)
+            {
+                sequence = WithNetWidening(new TypeInfo("IEnumerable", TypeKind.Class));
+                sequence.GenericArguments.AddRange(arguments);
+            }
+            return sequence;
+        }
+
+        /// <summary>
+        /// #224 — a query clause the lowering does not build (it needs a composite or grouped range
+        /// variable). Refused here, once, for every backend: before, each was lowered to a call of a
+        /// free function of the clause's name, which no backend could run.
+        /// </summary>
+        private void RefuseUnloweredQueryClause(string clause, LinqClause node)
+        {
+            Error($"The '{clause}' query clause is not supported. Queries support From (one range " +
+                  "variable), Where, Select, Order By [Descending], Take, Skip and Distinct.",
+                  node.Line, node.Column);
+        }
+
+        /// <summary>
+        /// #224 — the query scope whose clause LAMBDA is being analyzed (a Where condition, a Select
+        /// selector, an Order By key — each lowers to a lambda over the range variable), or null.
+        /// A From collection and a Take/Skip count are values evaluated where the query is built,
+        /// and are analyzed outside it, as VB does.
+        /// </summary>
+        private Scope _queryLambdaScope;
+
+        /// <summary>#224 — analyzes a clause expression that lowers to a lambda (see <see cref="_queryLambdaScope"/>).</summary>
+        private void AnalyzeQueryLambdaBody(ExpressionNode body)
+        {
+            var saved = _queryLambdaScope;
+            _queryLambdaScope = _currentScope;
+            try { body?.Accept(this); }
+            finally { _queryLambdaScope = saved; }
+        }
+
+        /// <summary>
+        /// #224 — VB's BC36533, "'ByRef' parameter 'n' cannot be used in a query expression.": a ByRef
+        /// parameter read inside a clause that lowers to a lambda. Without it C# failed with CS1628
+        /// (a ref parameter inside a lambda) — the query twin of <see cref="CheckByRefParameterInLambda"/>.
+        /// </summary>
+        private void CheckByRefParameterInQuery(Symbol symbol, ASTNode at)
+        {
+            if (_queryLambdaScope == null || symbol == null || symbol.Kind != SymbolKind.Parameter || !symbol.IsByRef) return;
+            if (!IsStrictAncestor(symbol.DeclaringScope, _queryLambdaScope)) return;
+
+            LambdaBoundaryError(
+                "BC36533", $"'ByRef' parameter '{symbol.Name}' cannot be used in a query expression.", at);
         }
 
         /// <summary>
@@ -12526,6 +12634,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
                 CheckPropertyRead(node, symbol);   // task #178: bare `W` read
                 CheckByRefParameterInLambda(symbol, node);   // task #174: BC36639, read or write
+                CheckByRefParameterInQuery(symbol, node);    // #224: BC36533
                 if (_inBaseConstructorArguments && IsInstanceMemberUnderConstruction(symbol, node.Name))
                     ReportReferenceToObjectUnderConstruction(node, implicitReference: true);   // ADR-0016 D4
             }
