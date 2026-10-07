@@ -55,21 +55,20 @@ namespace VisualGameStudio.Tests.Compiler;
 //         at function top, with or without a lambda. It lowers to IRBuilder.SizedArrayDimIntrinsic at the
 //         statement now (ADR-0014 Amendment A-228), so both print VB's 1|2|3 on every backend; see E15_… and
 //         E15n_… below, and SizedArrayDimInLoopExecutionTests for the rest of the shapes.)
-//    E16, E20                                                                   -> #229 (E16 on all four backends since #140; E20 on C# prints
-//                                                                                  JavaScript's 50|2|2 since #136: the h() line is right, the loop's y is not)
-//         (the one-declaration rule: a name with two `Dim`s in one function — sibling loops for
-//         E16, a lambda's OWN local of the same name for E20 — stays function-level rather than
-//         per-iteration, by construction, so it keeps its pre-#172 behaviour instead of taking
-//         one loop's per-iteration identity away from the other declaration.)
+//    E16, E20    (none since #229: they were pinned here as 20|20|20|20 on all four backends (E16) and 50|2|2 on C# and JavaScript with a
+//         MSIL refusal (E20), because a name with two `Dim`s in one function — sibling loops for E16, a lambda's OWN local of the same
+//         name for E20 — stayed ONE function-level variable (the one-declaration rule), so neither declaration took per-iteration
+//         identity. A second declaration of a spelling is its own variable now: it gets the IR name `x_1` (ADR-0014 Amendment A-229),
+//         so E16 prints vbc's 1|2|10|20 and E20 vbc's 50|1|2 on every backend, MSIL included, and C++ lowers E20 instead of falling
+//         back to by-copy; see E16_… and E20_… below, the IR facts at `SiblingLoopsSameName_…` / `ALambdasOwnLocal_…`, and
+//         SiblingDimSameNameExecutionTests for the other shapes.)
 //    MSIL K1, K2   (none since #225: they were pinned here as ILASM-FAIL — the MSIL backend
 //         emitted `newarr [mscorlib]System.Func`1<int32>` for an array of a generic delegate,
 //         without the `class` a generic token needs. Both now run on MSIL and print VB's answer,
 //         through both pipelines; see K1_Msil_… / K2_Msil_… below.)
-//    MSIL E20                                                                   pre-existing, N9
-//         (ClosureLoweringRefusalTests' own D9 backstop: a lambda that declares its own local of
-//         a name an ENCLOSING scope also captures is refused by the front end today — #155/
-//         ADR-0010, unrelated to #172's mechanism; E20's lambda `h` is not even created inside
-//         the loop ADR-0014 governs.)
+//    MSIL E20    (none since #229: MSIL refused it at ClosureLowering's N9 backstop, because the lambda `h` declared a local spelled
+//         like the creator's captured `y`. `h`'s `y` is `y_1` now, so nothing is declared twice and E20 runs on MSIL; the backstop is
+//         still reachable, and pinned, through a lambda's own For Each / Catch variable: ClosureLoweringRefusalTests R5_…X1 / …X3.)
 // =====================================================================================
 
 /// <summary>Every BASIC source this file runs, named after the architect's own probe letters.
@@ -644,13 +643,10 @@ internal static class PerIterationLoopBodyDimProbes
         """;
     internal const string E15nExpected = "1\n2\n3";
 
-    /// <summary>#229 (the one-declaration rule): TWO SIBLING loops each declare their own `Dim x`
-    /// — the IR is flat and every backend spells both by the same NAME, so `x` has two
-    /// declarations in one function and stays function-level rather than taking one loop's
-/// per-iteration identity away from the other. C++ did not even compile it before #140 (it declared
-    /// every local at function top by name regardless of BodyLocals, and two locals spelled `x` at one
-    /// scope is a plain C++ redefinition — the SAME one-name-one-declaration fact, a compile error instead
-    /// of a wrong value). Since #140 C++ runs it and prints the SAME wrong answer as the other three.</summary>
+    /// <summary>#229: TWO SIBLING loops each declare their own `Dim x` — the IR is flat and every backend spells a local
+    /// by its NAME, so before #229 `x` was ONE function-level variable (every closure printed the second loop's 20; C++ did not
+    /// even compile it before #140, a plain redefinition). The second `x` is the IR local `x_1` now (ADR-0014 Amendment A-229):
+    /// each loop's body claims its own variable and each closure keeps its own iteration's value, as in VB.</summary>
     internal const string E16 = """
         Sub Main()
             Dim fs As New List(Of Func(Of Integer))()
@@ -669,7 +665,6 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E16Expected = "1\n2\n10\n20";
-    internal const string E16ActualAllBackends = "20\n20\n20\n20";
 
     /// <summary>L7's own shape but SUB, not Function — a lambda writes the previous iteration's
     /// variable through a mutating Action. C++ loses the write (#140).</summary>
@@ -741,15 +736,12 @@ internal static class PerIterationLoopBodyDimProbes
         """;
     internal const string E19Expected = "10\n15\n20";
 
-    /// <summary>#229 again, the LAMBDA-owns-the-name half of the one-declaration rule: a SECOND,
-    /// unrelated lambda `h` (created OUTSIDE any loop) declares its OWN local `y`, the same
-    /// spelling the loop's captured body Dim `y` uses. `IRBuilder.AssignBodyLocals` excludes any
-    /// name a lambda the function creates declares as ITS OWN local (the C# backend does not
-    /// declare a lambda's locals — they bind to the creator's spelling), so the loop's `y` stays
-    /// function-level. On MSIL the front end refuses the program outright before #172 or after it
-    /// (a pre-existing D9 backstop, task #155/ADR-0010's own N9: "a lambda declares its own name
-    /// while an enclosing scope's same name is captured" — `h`'s `y` and the loop's captured `y`
-    /// collide the same way regardless of #172).</summary>
+    /// <summary>#229 again, the LAMBDA-owns-the-name half: a SECOND, unrelated lambda `h` (created OUTSIDE any loop)
+    /// declares its OWN local `y`, the same spelling the loop's captured body Dim `y` uses. Before #229 the two were ONE
+    /// variable (`IRBuilder.AssignBodyLocals` excluded the loop's `y` from per-iteration identity because a lambda declared the same
+    /// name; C# and JavaScript printed 50|2|2, and MSIL refused the program at ClosureLowering's N9 backstop, ADR-0010).
+    /// The lambda's `y` is the IR local `y_1` now (ADR-0014 Amendment A-229): the loop's `y` is per-iteration, and every
+    /// backend prints vbc's 50|1|2.</summary>
     internal const string E20 = """
         Sub Main()
             Dim fs As New List(Of Func(Of Integer))()
@@ -770,10 +762,6 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E20Expected = "50\n1\n2";
-    /// <summary>What C# and JavaScript print (known-wrong, #229). C# printed 2|2|2 until #136: `h()`'s 50 is right now, the loop's
-    /// per-iteration `y` (1, 2) is still one shared variable.</summary>
-    internal const string E20CSharpJsActual = "50\n2\n2";
-    internal const string E20CppActual = "50\n1\n2";
 
     /// <summary>Required group 7 (D2's own recorded divergence, all backends): `f`, the loop's
     /// own condition, is REASSIGNED inside the body to a NEW lambda that writes the previous
@@ -1271,88 +1259,75 @@ public class PerIterationLoopBodyDimExecutionTests
         => AssertAllFourAgreeHangSafe(PerIterationLoopBodyDimProbes.E15n, PerIterationLoopBodyDimProbes.E15nExpected);
 
     // ============================================================================================
-    // #229 (the one-declaration rule, by construction): E16 (sibling loops, same name) and E20
-    // (a lambda's own local of the same name) both stay function-level rather than per-iteration.
+    // #229 (ADR-0014 Amendment A-229): a second `Dim` of a spelling is its OWN variable (`x_1`), so E16 (sibling loops, same
+    // name) and E20 (a lambda's own local of the same name) are per-iteration like any other body Dim.
     // ============================================================================================
 
     /// <summary>
-    /// ⭐ Task #229, ONE test over all FOUR backends (#140 moved the C++ leg in here from two pins:
-    /// <c>E16_SiblingSameName_CppDoesNotCompile</c> and BaseConstructorCallCppRefusalTests'
-    /// <c>E16_StaysANamedClangFailure_NeitherRefusedNorRun</c>). C#, JavaScript, MSIL and, since #140, C++
-    /// all print 20|20|20|20 — the SECOND loop's final value, function-level — where VB prints 1|2|10|20
-    /// (<see cref="PerIterationLoopBodyDimProbes.E16Expected"/>, documented here and NEVER asserted as a
-    /// backend's actual output): the one-declaration rule leaves a name declared twice in one function
-    /// function-level (ADR-0014 D2 / IRBuilder.AssignBodyLocals). C++ used to fail clang on it (two sibling
-    /// <c>x</c> locals are a C++ redefinition); lowering gives each its environment field, so it compiles
-    /// and prints the #229 answer. When #229 is fixed the four rows flip TOGETHER, to
-    /// <c>E16Expected</c>.
-    ///
-    /// <para><b>Owner decision (ADR-0019 D4, 2026-10-01): ADMIT.</b> C++ runs E16 and is pinned to the #229
-    /// output with the other three backends; rule one is read per class of wrong answer, so fixing #229
-    /// flips all four rows together. The rejected alternative (C++ refuses E16 by name until #229) is
-    /// recorded in ADR-0019 D4.</para>
+    /// ⭐ MOVED PIN (#229), ONE test over all FOUR backends. USED TO print 20|20|20|20 on all four (the pin the ADR-0019 D4 owner
+    /// ruling "ADMIT", 2026-10-01, set for C++): a name declared twice in one function was ONE function-level variable, so every
+    /// closure read the second loop's last value. The second `x` is `x_1` now, each loop's body claims its own, and
+    /// all four rows flip together to vbc's 1|2|10|20 (<see cref="PerIterationLoopBodyDimProbes.E16Expected"/>), as ADR-0019 D4's
+    /// revisit-if foresaw. C++ takes the LOWERED path (each environment holds its own iteration's variable).
+    /// ⛔ The C# leg runs in a child process with a time limit (#256): this program loops.
     /// </summary>
-    [TestCase("csharp", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_csharp")]
-    [TestCase("javascript", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_javascript")]
-    [TestCase("msil", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_msil")]
-    [TestCase("cpp", TestName = "E16_SiblingLoopsSameName_KnownWrong_PinnedForTask229_cpp")]
-    public void E16_SiblingLoopsSameName_KnownWrongOnAllFourBackends_PinnedForTask229(string backend)
+    [TestCase("csharp", TestName = "E16_SiblingLoopsSameName_PrintsVbcsAnswer_csharp")]
+    [TestCase("javascript", TestName = "E16_SiblingLoopsSameName_PrintsVbcsAnswer_javascript")]
+    [TestCase("msil", TestName = "E16_SiblingLoopsSameName_PrintsVbcsAnswer_msil")]
+    [TestCase("cpp", TestName = "E16_SiblingLoopsSameName_PrintsVbcsAnswer_cpp")]
+    public void E16_SiblingLoopsSameName_EachLoopsClosuresKeepTheirOwnValue_OnAllFourBackends(string backend)
     {
         var source = PerIterationLoopBodyDimProbes.E16;
-        var expected = PerIterationLoopBodyDimProbes.E16ActualAllBackends;
+        var expected = PerIterationLoopBodyDimProbes.E16Expected;
         switch (backend)
         {
             case "csharp":
-                Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(source)), Is.EqualTo(expected), "C# (PINNED known-wrong, task #229)");
+                Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(source))), Is.EqualTo(expected), "C#");
                 break;
             case "javascript":
-                Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), "JavaScript (PINNED known-wrong, task #229)");
+                Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(expected), "JavaScript");
                 break;
             case "msil":
-                Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL (PINNED known-wrong, task #229)");
+                Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(expected), "MSIL");
                 break;
             case "cpp":
-                // The owner may instead rule that C++ refuses this by name; flip ONLY this row.
                 Assert.That(CppClosures.Compile(source).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
-                CppClosures.RunsInAllModes(source, expected, "C++ (PINNED known-wrong, task #229)");
+                CppClosures.RunsInAllModes(source, expected, "C++");
                 break;
             default: throw new ArgumentException(backend);
         }
     }
 
-    /// <summary>Task #229: C# and JavaScript print the loop's `y` as though it were never
-    /// per-iteration (excluded because the unrelated lambda `h` declares its OWN `y`), where VB
-    /// prints 50|1|2. ⭐ MOVED PIN (#136): C# printed 2|2|2 — `h()`'s own local `y = 50` was never declared, so
-    /// `h()` read the loop's `y` (2) — and now prints 50|2|2, JavaScript's pinned answer. The `h()` line is right
-    /// (vbc: 50); the loop's `y`, 2 for 1, is #229 and stays known-wrong. C++ runs it correctly: ClosureLowering refuses N9 (a lambda declares a name its creator
-    /// also captures), so the root takes the by-copy FALLBACK, whose capture gives per-iteration behaviour
-    /// for free — the fallback W2 admits it onto (#140 ruling D3; the regression fence runs it too, and
-    /// asserts the path). MSIL refuses the program outright — a pre-existing #155/ADR-0010 front-end
-    /// backstop (N9), unrelated to #172.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#229). USED TO print 50|2|2 on C# and JavaScript (the loop's `y` excluded from per-iteration identity because the
+    /// unrelated lambda `h` declares its OWN `y`: ONE variable), where VB prints 50|1|2; C++ printed 50|1|2 only because
+    /// ClosureLowering refused the N9 shape and the root fell back to by-copy `[=]`. `h`'s `y` is `y_1` now: C# and JavaScript print
+    /// vbc's 50|1|2, and the C++ root is LOWERED (the fallback set shrank by this program). ⛔ The C# leg is hang-safe (#256).
+    /// </summary>
     [Test]
-    public void E20_LambdaOwnLocalSameNameAsCapturedBodyDim_KnownWrongOnCSharpJs_PinnedForTask229()
+    public void E20_LambdaOwnLocalSameNameAsCapturedBodyDim_PrintsVbcsAnswerOnCSharpJsAndCpp()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(PerIterationLoopBodyDimProbes.E20))),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CSharpJsActual), "C# (PINNED known-wrong, task #229)");
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E20Expected), "C#");
             Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(PerIterationLoopBodyDimProbes.E20)),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CSharpJsActual), "JavaScript (PINNED known-wrong, task #229)");
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E20Expected), "JavaScript");
             Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(PerIterationLoopBodyDimProbes.E20))),
-                Is.EqualTo(PerIterationLoopBodyDimProbes.E20CppActual), "C++ (correct here, by the by-copy fallback)");
-            Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.E20).PathOf("Main"), Is.EqualTo(CppClosurePath.ByCopy),
-                "C++: the N9 shape is a lowering refusal that W2 admits — the fallback");
+                Is.EqualTo(PerIterationLoopBodyDimProbes.E20Expected), "C++");
+            Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.E20).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered),
+                "C++: the lambda's own `y` is `y_1`, so ClosureLowering no longer refuses the N9 shape and the root is lowered, not the by-copy fallback");
         });
 
-    /// <summary>MSIL's own pre-existing D9/N9 refusal (#155/ADR-0010), unrelated to #172: `h`
-    /// declares its own `y` while the loop's `y` is captured elsewhere in the same function.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#229). USED TO assert MSIL REFUSES this program (ClosureLowering's N9 backstop, ADR-0010: `h` declared its own
+    /// `y` while the loop's `y` was captured elsewhere in the function). `h`'s `y` is `y_1` now, nothing is declared twice, and MSIL
+    /// builds and prints vbc's 50|1|2. The backstop itself is still reachable, and pinned, through a lambda's own For Each / Catch
+    /// variable (ClosureLoweringRefusalTests R5_…X1 / …X3).
+    /// </summary>
     [Test]
-    public void E20_LambdaOwnLocal_MsilRefusesToBuild_PreExisting()
-    {
-        var run = MsilHarness.Run(PerIterationLoopBodyDimProbes.E20);
-        Assert.That(run.Outcome, Is.Not.EqualTo(MsilHarness.MsilOutcome.Ran),
-            "expected MSIL to REFUSE this program (pre-existing N9 backstop) — if it now runs, " +
-            "re-measure and update this pin");
-    }
+    public void E20_LambdaOwnLocalSameNameAsCapturedBodyDim_RunsOnMsilAndPrintsVbcsAnswer()
+        => Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(PerIterationLoopBodyDimProbes.E20)),
+            Is.EqualTo(PerIterationLoopBodyDimProbes.E20Expected), "MSIL");
 
     // ============================================================================================
     // Group 7: L8's own D2 divergence (documented, never asserted as VB-correct on any backend)
@@ -1653,28 +1628,41 @@ public class PerIterationLoopBodyDimIrFactTests
         });
     }
 
-    /// <summary>The one-declaration rule (#229): E16's two SIBLING loops each declare their own
-    /// `Dim x` — a name declared twice in one function keeps today's function-level behaviour on
-    /// EVERY loop that shares it, by construction (IRBuilder.AssignBodyLocals' own
-    /// <c>declarations[…] != 1</c> guard), never just one of the two.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#229; was <c>OneDeclarationRule_NeitherSiblingLoopClaimsASharedName</c>). E16's two SIBLING loops each declare
+    /// their own `Dim x`. The pin used to assert that NEITHER loop claims `x` (a name with two declarations stayed function-level, by
+    /// <c>AssignBodyLocals</c>' <c>declarations[…] != 1</c> guard). The second declaration is the IR local `x_1` now
+    /// (<c>IRBuilder.EmittedLocalName</c>, ADR-0014 Amendment A-229), so each name has ONE declaration: one loop claims `x`, the OTHER
+    /// claims `x_1`, and both are locals of the function.
+    /// </summary>
     [Test]
-    public void OneDeclarationRule_NeitherSiblingLoopClaimsASharedName()
+    public void SiblingLoopsSameName_EachLoopClaimsItsOwnVariable_TheSecondIsX_1()
     {
         var module = JsTestSupport.BuildModule(PerIterationLoopBodyDimProbes.E16, sourceFilePath: "prog.bas");
         var function = MainOf(module);
         var loops = IRLoops.Of(function).Where(l => l.Kind == IRLoopKind.For).ToList();
+        var claimingX = loops.Where(l => l.Body.BodyLocals.Any(v => v.Name == "x")).ToList();
+        var claimingX1 = loops.Where(l => l.Body.BodyLocals.Any(v => v.Name == "x_1")).ToList();
 
-        Assert.That(loops, Has.Count.GreaterThanOrEqualTo(2), "E16 declares two sibling For loops");
-        foreach (var loop in loops)
-            Assert.That(loop.Body.BodyLocals.Select(v => v.Name), Does.Not.Contain("x"),
-                $"{loop.Body.Name} must not claim 'x' — it has two declarations in this function");
+        Assert.Multiple(() =>
+        {
+            Assert.That(loops, Has.Count.GreaterThanOrEqualTo(2), "E16 declares two sibling For loops");
+            Assert.That(function.LocalVariables.Select(v => v.Name), Is.SupersetOf(new[] { "x", "x_1" }),
+                "the function declares both variables, the second under its own name");
+            Assert.That(claimingX, Has.Count.EqualTo(1), "exactly one loop claims 'x'");
+            Assert.That(claimingX1, Has.Count.EqualTo(1), "exactly one loop claims 'x_1'");
+            Assert.That(claimingX.Single(), Is.Not.SameAs(claimingX1.Single()), "and they are two different loops");
+        });
     }
 
-    /// <summary>The one-declaration rule's other half (#229): E20's loop-body `Dim y` is excluded
-    /// because a SECOND, unrelated lambda the same function creates (`h`) declares its OWN local
-    /// also spelled `y` — <c>LambdaLocalNames</c>' own exclusion.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#229; was <c>OneDeclarationRule_ExcludesANameALambdaDeclaresAsItsOwnLocal</c>). E20's loop-body `Dim y` used to
+    /// be excluded from per-iteration identity because a SECOND, unrelated lambda the same function creates (`h`) declared its OWN
+    /// `y` (<c>LambdaLocalNames</c>' exclusion). `h`'s local is `y_1` now, so the loop claims its `y` like any body Dim and the
+    /// lambda's own local is the one with the new name.
+    /// </summary>
     [Test]
-    public void OneDeclarationRule_ExcludesANameALambdaDeclaresAsItsOwnLocal()
+    public void ALambdasOwnLocal_BesideTheLoopsDim_IsY_1_AndTheLoopClaimsItsOwnY()
     {
         var module = JsTestSupport.BuildModule(PerIterationLoopBodyDimProbes.E20, sourceFilePath: "prog.bas");
         var function = MainOf(module);
@@ -1682,9 +1670,17 @@ public class PerIterationLoopBodyDimIrFactTests
         // the one whose body actually assigns 'y' — the OTHER For loop's body never mentions it.
         var loop = IRLoops.Of(function).Single(l =>
             l.Kind == IRLoopKind.For && l.Body.Instructions.Any(i => IRLoops.VariableMentions(i).Contains("y")));
+        var lambda = module.Functions.Single(f => f.IsLambda && f.LocalVariables.Any(v => v.Name == "y_1"));
 
-        Assert.That(loop.Body.BodyLocals.Select(v => v.Name), Does.Not.Contain("y"),
-            "the loop's own 'y' must be excluded — a lambda this function creates declares its OWN 'y'");
+        Assert.Multiple(() =>
+        {
+            Assert.That(loop.Body.BodyLocals.Select(v => v.Name), Does.Contain("y"),
+                "the loop's own 'y' is per-iteration: no lambda declares a local of that name any more");
+            Assert.That(lambda.LocalVariables.Select(v => v.Name), Does.Not.Contain("y"),
+                "the lambda's own local is 'y_1'; a 'y' beside it would be the creator's variable again");
+            Assert.That(function.LocalVariables.Select(v => v.Name), Does.Not.Contain("y_1"),
+                "and the creator does not declare it");
+        });
     }
 
     // ----------------------------------------------------------------------------------------

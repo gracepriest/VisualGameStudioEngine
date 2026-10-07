@@ -359,6 +359,8 @@ revisit-if "probe L8 prints differently on any two backends") is unchanged, and 
   every program's bytes and every user-visible name. This renames only a second declaration of a spelling, so a procedure
   without such a pair is byte-identical; the second variable does appear under its IR name in the generated source and the
   debugger.
+- **Owner ruling 2026-10-07:** accepted — the second declaration's IR name (`x_1`) is visible in generated source and the
+  debugger; a follow-up maps it back in the debugger.
 - **Measured** (Linux; probes `S/t229/probes` p01–p20 with vbc expectations, C#/C++/JavaScript/MSIL x CLI / `--optimize` /
   Release `.blproj`): 219 of 240 cells print vbc's answer, from 84; the rest are p13 (a `For x` with no `As` after two
   sibling `Dim x` of different types reuses the second's storage: compile failure before and after, MSIL now a run failure)

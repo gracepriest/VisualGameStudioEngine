@@ -38,9 +38,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //    C#  #228   E15, E15n                     ⚠ FIXED (2026-10-07): a sized array `Dim a(2)` in a loop body was allocated once, at function top; it is a new array
 //                                             every pass now and both print vbc's 1|2|3 (moved pins, PerIterationLoopBodyDimExecutionTests; SizedArrayDimInLoopExecutionTests).
-//    C#/JS #229 E16, E20                      a name with two `Dim`s in one function stays function-level. E20 on C# prints 50|2|2 now (JavaScript's
-//                                             answer, vbc's is 50|1|2): `h()` is right since #136, the loop's `y` is #229. It is pinned in
-//                                             PerIterationLoopBodyDimExecutionTests.E20_…_PinnedForTask229.
+//    C#/JS #229 E16, E20                      ⚠ FIXED (2026-10-07): a name with two `Dim`s in one function was ONE function-level variable (E20 on C# printed 50|2|2,
+//                                             vbc's is 50|1|2). The second declaration is its own IR local (`x_1`, ADR-0014 Amendment A-229): both print vbc's answer on every
+//                                             backend (moved pins, PerIterationLoopBodyDimExecutionTests E16_… / E20_…; SiblingDimSameNameExecutionTests).
 //    C#  #232   R3, and m3/h166_inline        a ByRef call INSIDE AN EXPRESSION loses `ref` (CS1620): `Console.WriteLine(Twice(a))`, or
 //                                             `Dim r = Bump(n) + 1`. ⚠ It is NOT lambda-specific and #232's title ("a ByRef parameter plus a lambda")
 //                                             names the wrong shape: the same program with NO lambda anywhere fails identically on 0f6d2ced and now
