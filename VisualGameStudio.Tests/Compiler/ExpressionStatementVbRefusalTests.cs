@@ -38,7 +38,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //    1. `b.CbP()` — a delegate-typed PROPERTY called with parentheses: vbc says BC30545, BasicLang ACCEPTS it, because the call goes through `_delegateMemberInvocations` (the delegate-member call path)
 //       before the property check. The same property written WITHOUT parentheses (`b.CbP`, and `CbP` inside the class) IS a row; `b.Cb()` (a delegate FIELD) is accepted by both.
 //    2. .NET members and .NET-typed values bind no symbol, so these stay ACCEPTED and vbc refuses them: `l.Count` / `s.Length` / `l.Count()` (BC30545), a local of a .NET class or of DateTime standing
-//       alone (BC30454). The analyzer has no .NET property facts (#222 family).
+//       alone (BC30454). The analyzer's .NET property facts (#222: ReadOnly-ness, asked for a write or a ByRef argument) are not consulted by any expression-statement rule.
 //    3. `CDec(x)`, `CChar(s)`, `CObj(x)`, `CDate(s)` (vbc BC30454) stay accepted: nothing registers them as intrinsics, so no symbol says they are casts. The other twelve are rows.
 //    4. `Color.Red` (an enum member binds no symbol). `TypeOf o Is Animal` keeps its generic refusal ("Expression is not a statement"), not vbc's BC30035.
 //    5. Side findings, NOT this fix and NOT pinned by any row: C# drops a parameterless call written without parentheses (`Tag`, `b.Bump`); a delegate `f` standing alone prints 0 on all four backends

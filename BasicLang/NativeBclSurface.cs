@@ -50,10 +50,21 @@ namespace BasicLang
         /// (→ <c>TicksValue</c>). Consumed by Task 9/10 codegen.
         /// </summary>
         public string CppName { get; }
+        /// <summary>
+        /// #222: the .NET member is a PROPERTY with no setter — VB's <c>ReadOnly</c>, so a write
+        /// to it is vbc's BC30526 on every backend (<c>SemanticAnalyzer.ReadOnlyNetPropertyName</c>).
+        /// Set row by row from .NET's own metadata, never from the row's kind: a
+        /// <see cref="NativeBclMemberKind.StaticProperty"/> row is a FIELD in .NET as often as not
+        /// (<c>DateTime.MinValue</c>, <c>TimeSpan.Zero</c>, <c>Guid.Empty</c>, the Decimal
+        /// constants), which vbc refuses under another code, and <c>StringBuilder.Length</c> /
+        /// <c>Capacity</c> have public setters. False means "not known ReadOnly", which is never
+        /// refused.
+        /// </summary>
+        public bool IsReadOnly { get; }
 
         public NativeBclMember(string typeName, string memberName, NativeBclMemberKind kind,
             int[] paramCounts, string returnTypeName,
-            bool requiresCSharpIntCast = false, string cppName = null)
+            bool requiresCSharpIntCast = false, string cppName = null, bool readOnly = false)
         {
             TypeName = typeName;
             MemberName = memberName;
@@ -62,6 +73,7 @@ namespace BasicLang
             ReturnTypeName = returnTypeName;
             RequiresCSharpIntCast = requiresCSharpIntCast;
             CppName = cppName;
+            IsReadOnly = readOnly;
         }
     }
 
@@ -123,39 +135,46 @@ namespace BasicLang
         private static readonly int[] NoParams = Array.Empty<int>();
         private static int[] P(params int[] counts) => counts;
 
+        /// <summary>
+        /// ⚠ <c>readOnly: true</c> (#222, <see cref="NativeBclMember.IsReadOnly"/>) is written on
+        /// exactly the rows whose .NET member is a property with no setter, each checked against
+        /// .NET 8's reflection metadata. A row without it is a method, a constructor, a settable
+        /// property (<c>StringBuilder.Length</c>) or a .NET FIELD (<c>DateTime.MinValue</c>).
+        /// </summary>
         private static NativeBclMember M(string type, string name, NativeBclMemberKind kind,
-            int[] paramCounts, string returns, bool intCast = false, string cppName = null)
-            => new NativeBclMember(type, name, kind, paramCounts, returns, intCast, cppName);
+            int[] paramCounts, string returns, bool intCast = false, string cppName = null,
+            bool readOnly = false)
+            => new NativeBclMember(type, name, kind, paramCounts, returns, intCast, cppName, readOnly);
 
         /// <summary>The v1 member surfaces, verbatim from spec §5.</summary>
         public static readonly IReadOnlyList<NativeBclMember> Members = new[]
         {
             // ---------------- DateTime ----------------
-            M(DT, "Now", NativeBclMemberKind.StaticProperty, NoParams, DT),
-            M(DT, "UtcNow", NativeBclMemberKind.StaticProperty, NoParams, DT),
-            M(DT, "Today", NativeBclMemberKind.StaticProperty, NoParams, DT),
+            M(DT, "Now", NativeBclMemberKind.StaticProperty, NoParams, DT, readOnly: true),
+            M(DT, "UtcNow", NativeBclMemberKind.StaticProperty, NoParams, DT, readOnly: true),
+            M(DT, "Today", NativeBclMemberKind.StaticProperty, NoParams, DT, readOnly: true),
             M(DT, "MinValue", NativeBclMemberKind.StaticProperty, NoParams, DT),
             M(DT, "MaxValue", NativeBclMemberKind.StaticProperty, NoParams, DT),
             M(DT, "Parse", NativeBclMemberKind.StaticMethod, P(1), DT),
             M(DT, "IsLeapYear", NativeBclMemberKind.StaticMethod, P(1), "Boolean"),
             M(DT, "DaysInMonth", NativeBclMemberKind.StaticMethod, P(2), "Integer"),
             M(DT, CtorName, NativeBclMemberKind.Constructor, P(3, 6), DT),
-            M(DT, "Year", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Month", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Day", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Hour", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Minute", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Second", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Millisecond", NativeBclMemberKind.Property, NoParams, "Integer"),
+            M(DT, "Year", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Month", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Day", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Hour", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Minute", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Second", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Millisecond", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
             // v1 divergence (spec §5): Integer, not the .NET enums; numeric
             // values match .NET exactly (Sunday=0…Saturday=6; Unspecified=0,
             // Utc=1, Local=2), so a later native-enum upgrade is
             // value-compatible. The flag drives the C# backend's (int) cast.
-            M(DT, "DayOfWeek", NativeBclMemberKind.Property, NoParams, "Integer", intCast: true),
-            M(DT, "Kind", NativeBclMemberKind.Property, NoParams, "Integer", intCast: true),
-            M(DT, "DayOfYear", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(DT, "Ticks", NativeBclMemberKind.Property, NoParams, "Long"),
-            M(DT, "Date", NativeBclMemberKind.Property, NoParams, DT),
+            M(DT, "DayOfWeek", NativeBclMemberKind.Property, NoParams, "Integer", intCast: true, readOnly: true),
+            M(DT, "Kind", NativeBclMemberKind.Property, NoParams, "Integer", intCast: true, readOnly: true),
+            M(DT, "DayOfYear", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(DT, "Ticks", NativeBclMemberKind.Property, NoParams, "Long", readOnly: true),
+            M(DT, "Date", NativeBclMemberKind.Property, NoParams, DT, readOnly: true),
             M(DT, "AddDays", NativeBclMemberKind.InstanceMethod, P(1), DT),
             M(DT, "AddHours", NativeBclMemberKind.InstanceMethod, P(1), DT),
             M(DT, "AddMinutes", NativeBclMemberKind.InstanceMethod, P(1), DT),
@@ -186,17 +205,17 @@ namespace BasicLang
             M(TS, "MinValue", NativeBclMemberKind.StaticProperty, NoParams, TS),
             M(TS, "MaxValue", NativeBclMemberKind.StaticProperty, NoParams, TS),
             M(TS, CtorName, NativeBclMemberKind.Constructor, P(3, 4), TS),
-            M(TS, "Days", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(TS, "Hours", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(TS, "Minutes", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(TS, "Seconds", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(TS, "Milliseconds", NativeBclMemberKind.Property, NoParams, "Integer"),
-            M(TS, "TotalDays", NativeBclMemberKind.Property, NoParams, "Double"),
-            M(TS, "TotalHours", NativeBclMemberKind.Property, NoParams, "Double"),
-            M(TS, "TotalMinutes", NativeBclMemberKind.Property, NoParams, "Double"),
-            M(TS, "TotalSeconds", NativeBclMemberKind.Property, NoParams, "Double"),
-            M(TS, "TotalMilliseconds", NativeBclMemberKind.Property, NoParams, "Double"),
-            M(TS, "Ticks", NativeBclMemberKind.Property, NoParams, "Long"),
+            M(TS, "Days", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(TS, "Hours", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(TS, "Minutes", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(TS, "Seconds", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(TS, "Milliseconds", NativeBclMemberKind.Property, NoParams, "Integer", readOnly: true),
+            M(TS, "TotalDays", NativeBclMemberKind.Property, NoParams, "Double", readOnly: true),
+            M(TS, "TotalHours", NativeBclMemberKind.Property, NoParams, "Double", readOnly: true),
+            M(TS, "TotalMinutes", NativeBclMemberKind.Property, NoParams, "Double", readOnly: true),
+            M(TS, "TotalSeconds", NativeBclMemberKind.Property, NoParams, "Double", readOnly: true),
+            M(TS, "TotalMilliseconds", NativeBclMemberKind.Property, NoParams, "Double", readOnly: true),
+            M(TS, "Ticks", NativeBclMemberKind.Property, NoParams, "Long", readOnly: true),
             M(TS, "Add", NativeBclMemberKind.InstanceMethod, P(1), TS),
             M(TS, "Subtract", NativeBclMemberKind.InstanceMethod, P(1), TS),
             M(TS, "Negate", NativeBclMemberKind.InstanceMethod, NoParams, TS),
@@ -247,8 +266,8 @@ namespace BasicLang
             M(DEC, "CompareTo", NativeBclMemberKind.InstanceMethod, P(1), "Integer"),
 
             // ---------------- DateTimeOffset ----------------
-            M(DTO, "Now", NativeBclMemberKind.StaticProperty, NoParams, DTO),
-            M(DTO, "UtcNow", NativeBclMemberKind.StaticProperty, NoParams, DTO),
+            M(DTO, "Now", NativeBclMemberKind.StaticProperty, NoParams, DTO, readOnly: true),
+            M(DTO, "UtcNow", NativeBclMemberKind.StaticProperty, NoParams, DTO, readOnly: true),
             M(DTO, "FromUnixTimeSeconds", NativeBclMemberKind.StaticMethod, P(1), DTO),
             M(DTO, "FromUnixTimeMilliseconds", NativeBclMemberKind.StaticMethod, P(1), DTO),
             M(DTO, CtorName, NativeBclMemberKind.Constructor, P(1, 2), DTO),
@@ -256,11 +275,11 @@ namespace BasicLang
             // cannot be named after its enclosing type, and Ticks collides
             // with the runtime struct's field naming — pinned here so Task 9
             // codegen maps by table, not by name convention.
-            M(DTO, "DateTime", NativeBclMemberKind.Property, NoParams, DT, cppName: "ClockDateTime"),
-            M(DTO, "UtcDateTime", NativeBclMemberKind.Property, NoParams, DT),
-            M(DTO, "LocalDateTime", NativeBclMemberKind.Property, NoParams, DT),
-            M(DTO, "Offset", NativeBclMemberKind.Property, NoParams, TS),
-            M(DTO, "Ticks", NativeBclMemberKind.Property, NoParams, "Long", cppName: "TicksValue"),
+            M(DTO, "DateTime", NativeBclMemberKind.Property, NoParams, DT, cppName: "ClockDateTime", readOnly: true),
+            M(DTO, "UtcDateTime", NativeBclMemberKind.Property, NoParams, DT, readOnly: true),
+            M(DTO, "LocalDateTime", NativeBclMemberKind.Property, NoParams, DT, readOnly: true),
+            M(DTO, "Offset", NativeBclMemberKind.Property, NoParams, TS, readOnly: true),
+            M(DTO, "Ticks", NativeBclMemberKind.Property, NoParams, "Long", cppName: "TicksValue", readOnly: true),
             M(DTO, "ToOffset", NativeBclMemberKind.InstanceMethod, P(1), DTO),
             M(DTO, "ToUniversalTime", NativeBclMemberKind.InstanceMethod, NoParams, DTO),
             M(DTO, "ToLocalTime", NativeBclMemberKind.InstanceMethod, NoParams, DTO),

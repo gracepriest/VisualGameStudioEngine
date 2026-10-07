@@ -4893,6 +4893,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// compiles the same source into C# where <c>csc</c> reports CS0200 at the user's own line
         /// — a manufactured warning there would be noise (§6.3's permissive row).</para>
         ///
+        /// <para>⚠ #222: a property with NO setter at all is also VB's own BC30526, which
+        /// <see cref="CheckPropertyWrite"/> reports on EVERY backend from the same descriptor
+        /// (<see cref="NetMemberDescriptor.IsGetOnly"/>) — a language rule, not a lowering limit,
+        /// so it is not this finding's to keep native-only. This finding stays as it was: it is
+        /// the native backend's own fact (there is no setter export to generate), it also covers
+        /// what BC30526 does not — a non-public or <c>init</c> setter and a read-only field — and
+        /// on a get-only property the native build reports both.</para>
+        ///
         /// <para><b>BL6017, not a new code.</b> §11.4 reads it as ".NET member not found / no
         /// matching overload", and the member this write needs — the setter — is exactly what does
         /// not exist. A read of the same property is perfectly legal, which is why the finding
@@ -10771,13 +10779,20 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// BC30526, "Property 'P' is 'ReadOnly'." — a store into a property declared
         /// <c>ReadOnly</c>, as seen through the receiver's STATIC type (the symbol the target
         /// bound to): an interface's ReadOnly property is ReadOnly through that interface even when
-        /// the implementing class adds a setter, and writable through the class. Called by
+        /// the implementing class adds a setter, and writable through the class. A .NET property
+        /// binds no symbol; its fact is <see cref="ReadOnlyNetPropertyName"/>'s (#222). Called by
         /// <see cref="VisitWriteTarget"/> only.
         /// </summary>
         private void CheckPropertyWrite(ExpressionNode target)
         {
             var property = BoundProperty(target);
-            if (property == null || !property.IsReadOnly) return;
+            if (property == null)
+            {
+                if (ReadOnlyNetPropertyName(target) is { } netProperty)
+                    PropertyAccessError("BC30526", $"Property '{netProperty}' is 'ReadOnly'.", target);
+                return;
+            }
+            if (!property.IsReadOnly) return;
             if (IsReadOnlyAutoPropertyInitialization(target, property)) return;
 
             PropertyAccessError("BC30526", $"Property '{property.Name}' is 'ReadOnly'.", target);
@@ -10815,6 +10830,80 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 _ => null,
             };
             return symbol?.Kind == SymbolKind.Property ? symbol : null;
+        }
+
+        /// <summary>
+        /// ⭐ #222 — THE ONE ANSWER to "is this a .NET property VB calls ReadOnly": its name as .NET
+        /// spells it (for vbc's BC30526 message) when it is, else null. Asked by
+        /// <see cref="CheckPropertyWrite"/> (the write, every backend) and
+        /// <see cref="IsCopyOutPropertyArgument"/> (a ByRef argument is copied in and never written
+        /// back) for a target that bound no BasicLang symbol — a .NET member never does.
+        ///
+        /// <para>Decided from a recorded settability FACT, never from the member's spelling:</para>
+        /// <list type="bullet">
+        /// <item>metadata — the resolver's descriptor for this node, when the probe recorded an
+        /// exact one: a property with no setter at all (<see cref="NetMemberDescriptor.IsGetOnly"/>);</item>
+        /// <item>the hand-built tables, for the receivers the claim predicate keeps away from the
+        /// resolver: a P1 type's surface row (<see cref="NativeBclMember.IsReadOnly"/>), the
+        /// built-in <c>Exception</c>'s own members (#220) for a .NET exception class, which inherits
+        /// them, and <see cref="BclReadOnlyProperties"/> for String, the collections and arrays.</item>
+        /// </list>
+        /// <para>Anything else is unknown and answers null: an unresolved or <c>Object</c>-degraded
+        /// receiver (a WinForms member), a BasicLang-declared type, a settable property, a
+        /// non-public or <c>init</c> setter and a read-only field (vbc's other codes; on the native
+        /// backend <see cref="RefuseWriteToUnsettableNetMember"/>'s BL6017 still covers those).</para>
+        /// </summary>
+        private string ReadOnlyNetPropertyName(ExpressionNode target)
+        {
+            // Only `x.P`: a bare name binds a symbol or nothing, and a `With` block's `.P` on a .NET
+            // receiver is refused when it binds ("Type 'List' does not have a member 'Count'"), a
+            // read included — a gap of its own, which a second error here would only contradict.
+            if (target is not MemberAccessExpressionNode member || GetNodeSymbol(member) != null)
+                return null;
+
+            if (_netAnnotations.ResolvedMembers.TryGetValue(member, out var net))
+            {
+                var descriptor = net.Member;
+                return net.Exact
+                       && descriptor.Kind == NetMemberCategory.Property
+                       && descriptor.Parameters.Count == 0
+                       && descriptor.IsGetOnly
+                    ? descriptor.Name
+                    : null;
+            }
+
+            var receiver = GetNodeType(member.Object);
+            var memberName = member.MemberName;
+            if (receiver == null || string.IsNullOrEmpty(memberName)) return null;
+
+            // An array is named after its ELEMENT type (`Box()` is "Box"), so it is judged by kind,
+            // before the user-type check below would mistake it for a Box. A multi-dimensional
+            // array's whole-array member is already refused (RefuseWholeMultiDimensionalArrayUse).
+            if (receiver.Kind == TypeKind.Array)
+            {
+                return receiver.ArrayRank <= 1
+                       && BclReadOnlyProperties.TryGet(null, isArray: true, memberName, out var arrayProperty)
+                    ? arrayProperty
+                    : null;
+            }
+
+            var typeName = receiver.Name;
+            if (string.IsNullOrEmpty(typeName) || IsUserDefinedTypeName(typeName)) return null;
+
+            if (NativeBclSurface.TryGetMember(typeName, memberName, out var surfaceMember))
+                return surfaceMember.IsReadOnly ? surfaceMember.MemberName : null;
+
+            if (BasicLang.Compiler.CodeGen.CPlusPlus.CppExceptionTypes.IsNetException(typeName))
+            {
+                return _typeManager.ExceptionType.Members.TryGetValue(memberName, out var inherited)
+                       && inherited.Kind == SymbolKind.Property && inherited.IsReadOnly
+                    ? inherited.Name
+                    : null;
+            }
+
+            return BclReadOnlyProperties.TryGet(typeName, isArray: false, memberName, out var property)
+                ? property
+                : null;
         }
 
         /// <summary>
@@ -12441,12 +12530,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// base call (ADR-0016 D5(c)) and C++ already passes its backing field by reference and
         /// prints VB's answer; refusing it (BL4004) would break a program that runs.</para>
         ///
-        /// <para>⚠ A .NET member is never one, deliberately. A native-BCL-surface member
-        /// (<c>sb.Length</c>) is bound by a type-name table with no property symbol and no
-        /// settability, so it cannot be told from a field, and guessing "not writable" would turn a
-        /// loud CS0206 into a silently dropped write. A resolver-bound .NET property
-        /// (<c>ub.Port</c>, <c>a.Capacity</c>) types as Object on every path measured and is refused
-        /// as an argument before this is reached, so a copy-out for one could not be measured.</para>
+        /// <para>⚠ A .NET member is one ONLY when it is a known ReadOnly property
+        /// (<see cref="ReadOnlyNetPropertyName"/>, #222: <c>l.Count</c>, <c>s.Length</c>), and then
+        /// it is never written back — a fact, not a guess, and VB drops the callee's write too.
+        /// Any other .NET member is never one, deliberately: a settable native-BCL-surface member
+        /// (<c>sb.Length</c>) is bound by a type-name table with no property symbol, so it cannot be
+        /// told from a field, and guessing "not writable" would turn a loud CS0206 into a silently
+        /// dropped write. A resolver-bound .NET property (<c>ub.Port</c>, <c>a.Capacity</c>) types as
+        /// Object on every path measured and is refused as an argument before this is reached, so a
+        /// copy-out for one could not be measured. In a <c>MyBase.New(...)</c> argument list a .NET
+        /// member lowers exactly as it did before #222.</para>
         /// </summary>
         internal bool IsCopyOutPropertyArgument(ExpressionNode argument, bool inBaseConstructorArguments,
             out bool writable)
@@ -12457,6 +12550,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 case MemberAccessExpressionNode member when !NetMemberAnnotations.ContainsKey(member):
                     property = GetNodeSymbol(member);
+                    if (property == null)
+                        return !inBaseConstructorArguments && ReadOnlyNetPropertyName(member) != null;
                     break;
                 case IdentifierExpressionNode bare when !bare.IsForeignQualified:
                     property = GetNodeSymbol(bare);

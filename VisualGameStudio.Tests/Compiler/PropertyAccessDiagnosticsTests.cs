@@ -689,7 +689,8 @@ public class PropertyAccessDiagnosticsTests
     // Mutants (one flag removed at a time, measured): Message -> F1, F4, F5 red (and
     // PropertyByRefCopyOutExecutionTests.AnExceptionsMessage_…: C# CS0200, C++ does not compile);
     // StackTrace -> F2 only; InnerException -> F3 only. A .NET exception CLASS (ArgumentException)
-    // is #222, pinned in PropertyAccessExecutionTests.
+    // inherits these members, which is #222 (fixed): NetReadOnlyPropertyDiagnosticsTests and
+    // PropertyAccessExecutionTests.ArgumentExceptionMessageWrite_IsRefusedWithBC30526_Task222.
     // ====================================================================================
 
     /// <summary>F1 — <c>ex.Message = …</c> on a Catch variable. Was the #220 gap pin

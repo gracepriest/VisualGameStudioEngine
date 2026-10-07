@@ -241,14 +241,16 @@ public class PropertyAccessExecutionTests
     // ReadOnly at their SymbolTable declaration — and the pin moved to the fast fixture as its
     // positive row, PropertyAccessDiagnosticsTests.Write_ExceptionMessage_InACatch_IsRefused.)
 
-    /// <summary>#222 — the half of #220 that is NOT fixed: an exception typed as a .NET exception
-    /// CLASS (<c>ArgumentException</c>, and every <c>System.*Exception</c> but the built-in
-    /// <c>Exception</c>) does not bind <c>Message</c> to the built-in symbol #220 marked ReadOnly,
-    /// so its write is accepted like N1/N2 below (vbc: BC30526). Measured, the same before and after
-    /// #220 (<c>S/t220/probes/EArg.bas</c>): C# CS0200, MSIL MissingFieldException, JavaScript runs
-    /// and prints the old message, C++ does not compile.</summary>
+    /// <summary>#222 — was the half of #220 that was NOT fixed (the pin `..._FrontEndAccepts_PinsPreExistingGap_Against222`,
+    /// moved here as its positive row): an exception typed as a .NET exception CLASS
+    /// (<c>ArgumentException</c>, and every <c>System.*Exception</c> but the built-in <c>Exception</c>) does
+    /// not bind <c>Message</c> to the built-in symbol #220 marked ReadOnly, so its write was accepted
+    /// (vbc: BC30526). It inherits that member now (<c>SemanticAnalyzer.ReadOnlyNetPropertyName</c>).
+    /// Before: C# CS0200, MSIL MissingFieldException, JavaScript ran and printed the old message, C++ did
+    /// not compile (<c>S/t220/probes/EArg.bas</c>). The per-source rows and every entry point are
+    /// <c>NetReadOnlyPropertyDiagnosticsTests</c> / <c>NetReadOnlyPropertyExecutionTests</c>.</summary>
     [Test]
-    public void ArgumentExceptionMessageWrite_FrontEndAccepts_PinsPreExistingGap_Against222()
+    public void ArgumentExceptionMessageWrite_IsRefusedWithBC30526_Task222()
     {
         const string source = """
             Sub Main()
@@ -263,12 +265,13 @@ public class PropertyAccessExecutionTests
         var analyzer = new SemanticAnalyzer();
         analyzer.Analyze(ast);
 
-        Assert.That(analyzer.Errors.Where(e => e.ErrorCode is "BC30526" or "BC30524"), Is.Empty,
-            "task #222 (pre-existing; #220 fixed only the BUILT-IN Exception's members): BasicLang's "
-            + "front end must still accept `a.Message = ...` on an ArgumentException. A BC30526 here "
-            + "means a .NET exception class's Message now carries ReadOnly-ness — update this pin "
-            + "(and check whether #222 moved), do not just delete it.\nerrors: "
+        var refusals = analyzer.Errors.Where(e => e.ErrorCode == "BC30526").ToList();
+        Assert.That(refusals, Has.Count.EqualTo(1),
+            "task #222: `a.Message = ...` on an ArgumentException is vbc's BC30526 (it inherits the built-in "
+            + "Exception's ReadOnly Message). None means a .NET exception class stopped inheriting it.\nerrors: "
             + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
+        Assert.That(refusals[0].Message, Does.Contain("Property 'Message' is 'ReadOnly'."), "vbc's message");
+        Assert.That(refusals[0].Line, Is.EqualTo(3), "on the write's line");
     }
 
     /// <summary>#221 — a bare <c>For P = …</c> loop over a ReadWrite property DRIVES it (as it
@@ -309,10 +312,20 @@ public class PropertyAccessExecutionTests
             + "oracle for what BasicLang itself does here, since VB refuses the shape outright).");
     }
 
-    // N1 / N2 — a .NET ReadOnly property (String.Length, List(Of T).Count): the resolver does
-    // not positively know either is ReadOnly, so BasicLang's front end accepts both, and #222
-    // pins JavaScript's own silent behavior: the write is dropped (N1, string is immutable) or
-    // overwritten back by nothing meaningful (N2, Count stays the real count).
+    // N1 / N2 — a .NET ReadOnly property (String.Length, List(Of T).Count). #222 moved both: they were the
+    // two shapes BasicLang accepted (rule 5: the resolver carried no .NET settability fact) and JavaScript
+    // then RAN them silently wrong — N1 threw `TypeError: Cannot create property 'Length'` under Node's
+    // always-strict ES module, N2 printed the real count, 1, the write dropped. The write is vbc's BC30526
+    // now, on every backend (`SemanticAnalyzer.ReadOnlyNetPropertyName`), so JavaScript is never reached.
+
+    /// <summary>The JavaScript route (<c>JsTestSupport.Compile</c>: parse, analyze, IR, generate) stops at the front end, with vbc's message.</summary>
+    private static void AssertJavaScriptCompileRefuses(string source, string property)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => JsTestSupport.Compile(source),
+            "task #222: the front end must refuse the write, so no JavaScript is generated for it (before: JS ran and printed the old value)");
+        Assert.That(ex!.Message, Does.Contain($"Property '{property}' is 'ReadOnly'."),
+            "task #222: refused as vbc refuses it (BC30526), not for some other reason.\n" + ex.Message);
+    }
 
     private const string N1 = """
         Sub Main()
@@ -322,28 +335,13 @@ public class PropertyAccessExecutionTests
         End Sub
         """;
 
-    /// <summary>#222 — N1: BasicLang does not refuse this (rule 5: the resolver never carries
-    /// .NET's own ReadOnly fact). A JS string is a PRIMITIVE, not extensible, so the emitted
-    /// <c>s.Length = 3;</c> throws a real <c>TypeError</c> under Node's ES-module (always strict)
-    /// semantics — measured here, not re-derived from the implementer's own separate probe
-    /// runner, which invokes node in SCRIPT mode (sloppy) and silently no-ops the same write
-    /// instead: the two harnesses genuinely disagree, and this fixture's own
-    /// <c>JavaScriptExecutionTests.RunNodeScript</c>/<c>.mjs</c> convention is what every OTHER
-    /// JS execution test in this suite is measured against, so it is the one trusted here too.
-    /// (C# and MSIL fail differently — CS0200 from real csc, MissingFieldException from the CLR —
-    /// each already caught by their own real compiler/runtime, not by BasicLang.)</summary>
+    /// <summary>#222 — N1, was `..._NotRefused_JavaScriptThrowsTypeError_PinnedForTask222` (a JS string is a primitive, so the
+    /// emitted <c>s.Length = 3;</c> threw a real <c>TypeError</c> under Node). A String's Length is get-only
+    /// (<c>BclReadOnlyProperties</c>), so it is BC30526 before any backend. (C# said CS0200 and MSIL
+    /// MissingFieldException; <c>NetReadOnlyPropertyExecutionTests</c> takes the same write through the CLI on all four targets.)</summary>
     [Test]
-    public void N1_DotNetStringLengthWrite_NotRefused_JavaScriptThrowsTypeError_PinnedForTask222()
-    {
-        var (exitCode, _, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(JsTestSupport.Compile(N1));
-        Assert.That(exitCode, Is.Not.EqualTo(0),
-            "task #222 (pre-existing, unrelated to #178): a JS string is a primitive, so this "
-            + "write must still throw under Node. A zero exit here (including one that prints "
-            + "'abc') means #222 moved — update this pin, do not just delete it.\n" + stderr);
-        Assert.That(stderr, Does.Contain("Cannot create property 'Length'"),
-            "task #222: a different error message means #222 moved — update this pin, do not "
-            + "just delete it.\n" + stderr);
-    }
+    public void N1_DotNetStringLengthWrite_IsRefusedWithBC30526_OnJavaScript_Task222()
+        => AssertJavaScriptCompileRefuses(N1, "Length");
 
     private const string N2 = """
         Sub Main()
@@ -354,14 +352,11 @@ public class PropertyAccessExecutionTests
         End Sub
         """;
 
-    /// <summary>#222 — N2: the same gap, a List(Of Integer).Count write. JavaScript prints the
-    /// REAL count (1), meaning the write to Count never actually resized anything.</summary>
+    /// <summary>#222 — N2, was `..._NotRefused_JavaScriptPrintsRealCount_PinnedForTask222` (JavaScript printed the REAL
+    /// count, 1: the write to Count never resized anything). A List's Count is get-only, so it is BC30526.</summary>
     [Test]
-    public void N2_DotNetListCountWrite_NotRefused_JavaScriptPrintsRealCount_PinnedForTask222() =>
-        Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(N2)), Is.EqualTo("1"),
-            "task #222 (pre-existing, unrelated to #178): a different answer here means the "
-            + "JavaScript backend's handling of a .NET ReadOnly property write moved — update "
-            + "this pin, do not just delete it.");
+    public void N2_DotNetListCountWrite_IsRefusedWithBC30526_OnJavaScript_Task222()
+        => AssertJavaScriptCompileRefuses(N2, "Count");
 
     // ====================================================================================
     // #223 — the native C++ .blproj build's own error text DUPLICATES the code: BasicLang's

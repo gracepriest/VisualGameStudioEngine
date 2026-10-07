@@ -297,7 +297,8 @@ namespace BasicLang.Net
             string typeFullName,
             IReadOnlyList<NetParameterDescriptor> parameters,
             bool isSettable = true,
-            NetSyntheticKind synthesis = NetSyntheticKind.None)
+            NetSyntheticKind synthesis = NetSyntheticKind.None,
+            bool isGetOnly = false)
         {
             Name = name;
             DeclaringTypeFullName = declaringTypeFullName;
@@ -308,6 +309,7 @@ namespace BasicLang.Net
             Parameters = parameters;
             IsSettable = isSettable;
             Synthesis = synthesis;
+            IsGetOnly = isGetOnly;
         }
 
         /// <summary>
@@ -381,6 +383,19 @@ namespace BasicLang.Net
         /// they did before this bit existed.</para>
         /// </summary>
         public bool IsSettable { get; }
+
+        /// <summary>
+        /// #222: a PROPERTY with no setter at all — what VB calls <c>ReadOnly</c>, so a write to it
+        /// is vbc's BC30526 on every backend (<c>SemanticAnalyzer.ReadOnlyNetPropertyName</c>).
+        /// Narrower than <c>!</c><see cref="IsSettable"/>, which is also false for a non-public or
+        /// <c>init</c>-only setter and for a read-only field: vbc reports each of those under a
+        /// code of its own, so they are not this bit.
+        ///
+        /// <para>Defaults to <c>false</c>: a hand-constructed descriptor does not say, and an
+        /// unknown settability is never refused. Like <see cref="IsSettable"/> it is not part of
+        /// the CLR signature.</para>
+        /// </summary>
+        public bool IsGetOnly { get; }
 
         /// <summary>
         /// P2a-2 Task 9: whether this descriptor names a real metadata member or a shape the
