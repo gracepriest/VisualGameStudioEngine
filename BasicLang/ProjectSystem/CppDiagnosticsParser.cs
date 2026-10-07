@@ -129,6 +129,34 @@ namespace BasicLang.Compiler.ProjectSystem
             return $"{location}: {kind} {d.Code}: {d.Message}";
         }
 
+        /// <summary>
+        /// Task #223: a BasicLang diagnostic's message with its OWN code taken off the head, for
+        /// a carrier that holds the code in a field of its own (<see cref="CppDiagnostic.Code"/>,
+        /// the IDE's <c>DiagnosticItem.Id</c>) and a renderer that prints that field —
+        /// <see cref="FormatNormalized"/> does, so a message that also starts with the code
+        /// printed <c>error BC30526: BC30526: Property 'P' is 'ReadOnly'.</c>
+        ///
+        /// <para>The front end puts the code at the head of the message ON PURPOSE
+        /// (<c>SemanticAnalyzer.VbCodedError</c>): the CLI's other print sites render only
+        /// <c>{label}: {Message}</c> and would otherwise show no code at all. So the message is
+        /// left alone at its source and split HERE, where it is converted into a carrier that
+        /// has a code field — never by string surgery in a formatter, which would also rewrite a
+        /// toolchain line it has no business touching.</para>
+        ///
+        /// <para>Only the exact <c>"{code}:"</c> prefix is removed, plus the spaces after it.
+        /// The colon is what stops a code that is a PREFIX of another (<c>BC3052</c> against
+        /// <c>"BC30526: …"</c>) from matching; any other message is returned unchanged.</para>
+        /// </summary>
+        public static string MessageWithoutCode(string code, string message)
+        {
+            if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(message))
+                return message;
+            var prefix = code + ":";
+            return message.StartsWith(prefix, StringComparison.Ordinal)
+                ? message.Substring(prefix.Length).TrimStart(' ')
+                : message;
+        }
+
         private static string Absolutize(string file, string workingDirectory)
         {
             try
