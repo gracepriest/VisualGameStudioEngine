@@ -16,13 +16,14 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <c>t0</c>..<c>t3</c> — in twelve families. Ten of them (34 programs) print VB's answer on at least one backend and are the matrix: a
 /// <c>Catch</c> variable read before / written before the orphans (CT_rbw, CT_wbr), a <c>For Each</c> variable likewise (FE_rbw,
 /// FE_wbr), a For Each variable captured by a lambda (LC), a lambda parameter (LP), a pattern binding (PB), two For Each loops (R11), a
-/// Catch (R12) and a <c>ReDim</c>ed array (RD). The other two print it on none — LQ (a LINQ range variable) and RD2 (a <c>ReDim</c> of an
-/// undeclared array) fail on every backend, exactly as their controls do, before and after #121. Before #121 the 42 collided with a
+/// Catch (R12) and a <c>ReDim</c>ed array (RD). The other two are not in it — LQ (a LINQ range variable) and RD2 (a <c>ReDim</c> of an
+/// undeclared array) printed on no backend when #121 landed, exactly as their controls did. (Since #224 LQ runs on C# and JavaScript and is refused by name on
+/// C++ and MSIL; its reservation is pinned at the IR level and RUN in <c>TempMintingFacilityTests</c>, not in this matrix.) Before #121 the 42 collided with a
 /// minted temp on 99 backend cells (C++ 15, C# 36, JavaScript 24, MSIL 24: wrong answers, compile failures, run failures). All 99 now
 /// print VB's answer.</para>
 ///
 /// <para><b>Three rows per cell</b>, each on every backend where the CONTROL prints VB's answer (the cells that still fail — LLVM,
-/// LINQ, patterns off C#, <c>ReDim</c> on MSIL, RD2 — fail exactly as their controls do, and are not this ADR's):
+/// LINQ on C++ and MSIL (refused by name since #224), patterns off C#, <c>ReDim</c> on MSIL, RD2 — fail exactly as their controls do, and are not this ADR's):
 /// <list type="bullet">
 /// <item>the witness, spelled <c>t{K}</c>;</item>
 /// <item>the same program spelled <c>T{K}</c>: BasicLang is case-insensitive (ADR-0013), so the reservation must be too, and D2's

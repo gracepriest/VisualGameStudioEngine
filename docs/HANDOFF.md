@@ -17,6 +17,12 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #224 FIXED — a LINQ query expression (`From x In xs Where x > 2 Select x * 10`) RUNS on C# (lazy, System.Linq) and JavaScript (eager Array methods) and is REFUSED by name on C++ and MSIL, which have no LINQ in either syntax: it lowers to the method syntax's lambda chain through the shared `IRBuilder.BuildLambda` (`git log --grep '#224'`)
+- **Scope:** one `From` over a 1-D array, `List(Of T)` or `IEnumerable(Of T)`, then `Where`/`Select`/`Order By [Descending]`/`Take`/`Skip`/`Distinct`; `Group By`/`Join`/`Aggregate`/`Let`, a second range variable and a String/Dictionary source are refused with a stated message, BC36533 for a ByRef parameter in a clause. **Tests (14 new):** `LinqQueryExpressionExecutionTests` (Integration, 7; JS roster 130) + `LinqQueryExpressionRefusalTests` (fast, 6) + `TempMintingFacilityTests.ALinqRangeVariable_…RunsOn…`; `E17_LinqQuery_…` (was `…BrokenEverywhere…`) is the unchanged #169 front-end contract. Gates (Linux), 0 failed: fast 12,772 (+94 skipped), one filter each: `LinqQueryExpression` 13, `Linq` 57, `Query` 27 (+1), `ForEach` 240, `Lambda` 800, `NameReservation` 443, `TempMinting` 122, `JsExecutionTierRosterTests` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture headers): JS is eager (a source mutated after the query prints the old result; C# and VB are lazy); method-syntax results are typed Object on C# (CS1579); `Select New With` does not parse; a ByRef inside a nested call in a clause is CS1620 (#232); `Join` also reports a cascaded "Undefined identifier" after its stated refusal; the unarmed `CompileProjectFiles` (`TempExec`'s project leg) refuses a `List` passed as an `IEnumerable(Of T)` argument, the CLI and `.blproj` build accept it.
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #223 FIXED — a BasicLang diagnostic prints its code ONCE on a native `.blproj` build (CLI + IDE) and on the IDE's C# route (`Main.bas(10,5): error BC30526: Property 'P' is 'ReadOnly'.`, was `BC30526: BC30526:`): the code comes off the message's head where the error becomes a `CppDiagnostic` / `DiagnosticItem` (`CppDiagnosticsParser.MessageWithoutCode`); toolchain lines untouched (`git log --grep '#223'`)
 - **Tests:** `DiagnosticCodeOnceTests` (fast, 5) + the flipped pin `PropertyAccessExecutionTests.CppReleaseBuild_PrintsTheDiagnosticCodeOnce_Task223`; the old prepend turns 3 red. Gates (Linux), 0 failed: fast 12,750 (+94 skipped), `CppDiagnostics` 10, `Diagnostic` 457 (+3), `PropertyAccess` 81, `Build` 618 (+27). ⚠ Still doubled, form code, not touched: `DesignDiagnostic.Format` (`error BL8002: BL8002: …`, pinned by `DesignCheckCliTests`).
 
@@ -7309,7 +7315,7 @@ single new failure against the 170-name baseline.
     (`[Category("Integration")]` — the headline K-probes and edge probes on 4 backends × both
     pipelines plus a Release `.blproj` leg, the leak probes, X1's two-Subs-undeclared-`For i`, the
     multi-file module-global-vs-local case through `CompileProjectFiles` on all four backends, and
-    the K4/K9/K5/E18 pins plus E17 LINQ's "broken everywhere but never an ICE" contract). Four
+    the K4/K9/K5/E18 pins plus E17 LINQ's "never an ICE" contract, now `E17_LinqQuery_FrontEndAcceptsIt_…` since #224). Four
     pre-existing pins MOVED, promoted to the new truth rather than deleted: `LambdaCaptureSetTests
     .N4b_…` (the body's `n` now binds to the lambda's OWN `N` — shadowed, not captured);
     `ClosureLoweringRefusalTests.R6_…Task169_…` (MSIL's "differs only by case" backstop is no
@@ -7337,7 +7343,10 @@ single new failure against the 170-name baseline.
     - **#217** (✅ DONE 2026-10-05: BC36641 IS reported, ADR-0013's D2 amendment) — D2's "BC36641 is not reported" recommendation is language policy and needs an
       owner decision; #169 implements the shadowing D1 produces on its own and adds no diagnostic
       either way.
-    - **#224** — LINQ (`From`/`Where`/`Select`) is broken on every backend, a pre-existing gap
+    - **#224** (✅ FIXED 2026-10-07 — a LINQ query expression runs on C# and JavaScript and is refused
+      by name on C++ and MSIL; scope: one `From` over a 1-D array / `List(Of T)` / `IEnumerable(Of T)`,
+      then `Where`/`Select`/`Order By [Descending]`/`Take`/`Skip`/`Distinct`; see the top section) —
+      LINQ (`From`/`Where`/`Select`) was broken on every backend, a pre-existing gap
       unrelated to name binding (measured: the front end accepts it and the IR builds without
       throwing — never #169's ICE; each backend's own failure is downstream, in codegen or at run
       time).

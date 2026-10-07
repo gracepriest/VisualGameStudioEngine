@@ -201,8 +201,12 @@ public class TempMintingFacilityTests
             """, "42\n5"),
     };
 
-    /// <summary>The LINQ range variable: no backend runs a LINQ query of this shape today, before or after #121
-    /// (ADR-0017's witness `LQ_*`, and this program's own control), so its proof is at the IR level only.</summary>
+    /// <summary>The LINQ range variable. Before #224 no backend ran a LINQ query of this shape (ADR-0017's witness `LQ_*`, and
+    /// this program's own control), so its proof was at the IR level only. Since #224 the query lowers to a lambda chain and RUNS on
+    /// C# and JavaScript (vbc's `6 8`), and C++ and MSIL refuse it (they have no LINQ). It is NOT a row of <see cref="Positions"/> (the
+    /// cell table counts every row on every backend it runs on, and the other eight positions are what that count is about); its IR-level
+    /// proof stays in <see cref="TempMintingDoorTests"/>, and <see cref="ALinqRangeVariable_NeverTakesAMintedName_AndTheProgramRunsOnCSharpAndJavaScript"/>
+    /// runs it on exactly the backends <c>Runs</c> names, so that claim is checked and cannot rot.</summary>
     internal static readonly MintPosition Linq = new("LinqRange", Show + """
         Sub Run(lst As List(Of Integer))
             Dim q = From {V} In lst Select CInt({V}) * 2
@@ -217,7 +221,7 @@ public class TempMintingFacilityTests
             lst.Add(4)
             Run(lst)
         End Sub
-        """, "6\n8", Runs: 0);
+        """, "6\n8", Runs: Bk.CSharp | Bk.JavaScript);
 
     private static bool IsTarget(MintPosition position, IRFunction function)
         => position.TargetIsLambda ? function.IsLambda : function.Name == "Run";
@@ -277,7 +281,7 @@ public class TempMintingFacilityTests
             Assert.That(Cells().Count(), Is.EqualTo(Positions.Sum(p => TempExec.Backends(p.Runs).Count()) * 4),
                 "every position on each backend it runs on, in both spellings and both pipelines");
             Assert.That(Cells().Count(), Is.EqualTo(116), "seven positions on four backends and Pattern on C# only, in two spellings and two pipelines: (7 × 4 + 1) × 2 × 2");
-            Assert.That(Linq.Runs, Is.EqualTo((Bk)0), "the LINQ range variable runs on no backend: its proof is the IR-level test in TempMintingDoorTests");
+            Assert.That(Linq.Runs, Is.EqualTo(Bk.CSharp | Bk.JavaScript), "since #224 the LINQ range variable's program runs on C# and JavaScript, and on no other backend (C++ and MSIL refuse a query)");
         });
     }
 
@@ -289,6 +293,13 @@ public class TempMintingFacilityTests
     public void AMintedTemp_NeverTakesANameTheProgramOwns_AndTheProgramRuns(MintPosition position, Bk backend, bool upper, bool aggressive)
     {
         TempExec.RequireTool(backend);
+        AssertTheMintedTempStaysOut(position, backend, upper, aggressive);
+    }
+
+    /// <summary>One cell of the table above, for any position: the pass mints, the program owns the name, the program runs.
+    /// <paramref name="hangSafe"/> sends the C# run to a child process with a time limit (#256), for a position that holds a loop.</summary>
+    private static void AssertTheMintedTempStaysOut(MintPosition position, Bk backend, bool upper, bool aggressive, bool hangSafe = false)
+    {
         var witness = WitnessName(position, aggressive);
         var spelled = upper ? witness.ToUpperInvariant() : witness;
         var (module, pass) = BuildAndMint(position, spelled, aggressive);
@@ -303,9 +314,46 @@ public class TempMintingFacilityTests
             Assert.That(function.IsMintedTempName(temp.Name), Is.True, "DeclareTemp mints through the recording minter");
             Assert.That(function.IsReserved(temp.Name), Is.False, "a minted name is never a reserved one");
             Assert.That(function.IsReserved(spelled), Is.True, $"the program's '{spelled}' is reserved in {function.Name}");
-            Assert.That(TempExec.Norm(TempExec.Run(backend, Emit(backend, module))), Is.EqualTo(position.Vb),
+            Assert.That(TempExec.Norm(TempExec.Run(backend, Emit(backend, module), hangSafe)), Is.EqualTo(position.Vb),
                 $"{position.Id} with its variable spelled '{spelled}', on {backend}");
         });
+    }
+
+    /// <summary>
+    /// ⭐ ADR-0018 D2 for the LINQ range variable, RUN (it could not be before #224). The same proof as every row above - the position's
+    /// variable is spelled exactly the name the pass would take, lower and upper case, standard and aggressive passes - on C# and
+    /// JavaScript, the backends <see cref="Linq"/> runs on. The range variable is reserved in the creator AND is the lambda's parameter; without
+    /// the reservation the pass takes its name, and C# refuses the program (CS0136: the minted local and the lambda parameter clash).
+    /// One test, because the cell table is closed by a count; a failing cell is collected so every other one still reports.
+    /// </summary>
+    [Test]
+    public void ALinqRangeVariable_NeverTakesAMintedName_AndTheProgramRunsOnCSharpAndJavaScript()
+    {
+        var failures = new List<string>();
+        var ran = 0;
+        foreach (var backend in TempExec.Backends(Linq.Runs))
+        {
+            if (backend == Bk.JavaScript && BasicLang.Runtime.NodeLocator.Find() == null) continue;
+            foreach (var upper in new[] { false, true })
+            {
+                foreach (var aggressive in new[] { false, true })
+                {
+                    try
+                    {
+                        AssertTheMintedTempStaysOut(Linq, backend, upper, aggressive, hangSafe: true);
+                        ran++;
+                    }
+                    catch (AssertionException ex)
+                    {
+                        ran++;
+                        failures.Add($"{backend}, {(upper ? "T" : "t")}N, {(aggressive ? "aggressive" : "standard")}: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        Assert.That(failures, Is.Empty, string.Join("\n", failures));
+        Assert.That(ran, Is.GreaterThanOrEqualTo(4), "the C# cells always run: two spellings x two pipelines");
     }
 }
 
