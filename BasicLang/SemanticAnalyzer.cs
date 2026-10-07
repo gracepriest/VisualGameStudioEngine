@@ -1588,6 +1588,38 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         /// <summary>
+        /// ⭐ #229: every name this analysis saw the program USE — each symbol of every scope (every
+        /// local of every block, every parameter, loop and Catch variable, member, global, procedure
+        /// and type of this unit, plus the library and the sibling files' imported names) and the
+        /// spelling of every identifier it analyzed, resolved or not. Ignoring case.
+        ///
+        /// <para>The one reader is the IR builder, when it must give a local a name of its own
+        /// (<c>IRBuilder.EmittedLocalName</c>): a name in this set may denote something in the
+        /// procedure, so a local named that way could hide or merge with it. A superset is safe;
+        /// what matters is that nothing the program can name is missing. Computed on demand, and
+        /// nothing here is written.</para>
+        /// </summary>
+        internal ISet<string> SpellingsInUse()
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var scopes = new Stack<Scope>();
+            if (GlobalScope != null) scopes.Push(GlobalScope);
+            while (scopes.Count > 0)
+            {
+                var scope = scopes.Pop();
+                foreach (var entry in scope.Symbols)
+                {
+                    names.Add(entry.Key);
+                    if (!string.IsNullOrEmpty(entry.Value?.Name)) names.Add(entry.Value.Name);
+                }
+                foreach (var child in scope.Children) scopes.Push(child);
+            }
+            foreach (var node in _nodeTypes.Keys.Concat(_nodeSymbols.Keys))
+                if (node is IdentifierExpressionNode { Name: { Length: > 0 } name }) names.Add(name);
+            return names;
+        }
+
+        /// <summary>
         /// The declared type named <paramref name="name"/>, as this analysis registered it — a
         /// class's <see cref="TypeInfo.Members"/> is complete once <see cref="Analyze"/> has run
         /// (every method, Private ones included, and the sibling-file ones), which is what the

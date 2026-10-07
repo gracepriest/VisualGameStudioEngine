@@ -68,6 +68,34 @@ public class CppClosurePathTests
         });
     }
 
+    private static IEnumerable<TestCaseData> NoLongerFallbackSet() =>
+        CppClosurePrograms.NoLongerFallback().Select(p => new TestCaseData(p).SetName("Lowered_" + p.Name.Replace('/', '_')));
+
+    /// <summary>
+    /// ⭐ MOVED PINS (#229; were <c>Fallback_E20_lambda_own_local</c> and <c>Fallback_E12_later_sibling</c>, the two members the
+    /// fallback set lost). A lambda's own `Dim` of a spelling its creator declares is the IR local `y_1` / `x_1` now, so ClosureLowering no
+    /// longer refuses the N9 shape: the root takes the LOWERED path in every entry point, with an environment class and the holder
+    /// struct, and no `[=]` lambda. (That each prints VB's output is <c>CppClosureRunTests.TheFormerFallbacks_RunWithVbsOutput</c>.)
+    /// </summary>
+    [TestCaseSource(nameof(NoLongerFallbackSet))]
+    public void TheFormerFallbacks_TakeTheLoweredPath_WithAnEnvironment_AndNoByCopyLambdas(CppClosureProgram program)
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var entry in AllEntries)
+            {
+                var build = CppClosures.Compile(program.Source, entry);
+                Assert.That(build.PathOf(program.Root), Is.EqualTo(CppClosurePath.Lowered), $"{program.Name}: {entry}");
+
+                var text = build.AllText;
+                // (boolean form: a failing Does.Contain would print the whole translation unit, runtime and all)
+                Assert.That(text.Contains("c__Env"), Is.True, $"{program.Name}: {entry}: a lowered root has an environment class");
+                Assert.That(text.Contains("BasicLangClosures"), Is.True, $"{program.Name}: {entry}: ... and the holder struct");
+                Assert.That(text.Contains("[="), Is.False, $"{program.Name}: {entry}: ... and no by-copy lambda");
+            }
+        });
+    }
+
     private const string ByCopyAddressOfAClassMethod = """
         Delegate Sub Notify(msg As String)
 
@@ -184,17 +212,15 @@ public class CppClosurePathTests
     /// <summary>Every root of the corpus that is NOT lowered, by program (<c>Type.Field [root]</c>).</summary>
     private static readonly string[] ExpectedByCopy =
     {
-        // the ten fallback programs that run (ruling D1) — Fallback()
+        // the eight fallback programs that run (ruling D1; ten until #229, which lowered E20 and N9LaterSibling) — Fallback()
         "CppClosurePrograms.Iterator [Gen]",
         "CppClosurePrograms.IteratorReadOnly [Gen]",
         "CppClosurePrograms.MyBaseInLambda [Derived.Tag]",
         "CppClosurePrograms.GenericClassIntCapture [Holder.CountTo]",
         "CppClosurePrograms.WhenGuardReadOnly [Main]",
-        "CppClosurePrograms.N9LaterSibling [Main]",
         "CppClosurePrograms.TwoCatchTypes [Main]",
         "CppClosurePrograms.X1 [Main]",
         "CppClosurePrograms.X3 [Main]",
-        "PerIterationLoopBodyDimProbes.E20 [Main]",
         // fallback roots that also fail the C++ compiler, for a gap that is not the lambda's
         "CppClosurePrograms.Async [Work]",
         "CppClosurePrograms.AsyncReadOnly [Work]",

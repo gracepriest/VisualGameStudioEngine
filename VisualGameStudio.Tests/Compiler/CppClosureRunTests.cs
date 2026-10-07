@@ -49,6 +49,26 @@ public class CppClosureRunTests
         });
     }
 
+    private static IEnumerable<TestCaseData> NoLongerFallbackSet() =>
+        CppClosurePrograms.NoLongerFallback().Select(p => new TestCaseData(p).SetName("Lowered_" + p.Name.Replace('/', '_')));
+
+    /// <summary>
+    /// ⭐ MOVED PINS (#229; were <c>Fallback_E20_lambda_own_local</c> and <c>Fallback_E12_later_sibling</c>). The two programs print
+    /// VB's output through the same five entry points; they run lowered now (the path is
+    /// <c>CppClosurePathTests.TheFormerFallbacks_TakeTheLoweredPath_…</c>).
+    /// </summary>
+    [TestCaseSource(nameof(NoLongerFallbackSet))]
+    public void TheFormerFallbacks_RunWithVbsOutput(CppClosureProgram program)
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var entry in CppClosures.RunEntries)
+                Assert.That(CppClosures.Run(program.Source, entry), Is.EqualTo(program.Expected), $"{program.Name}: {entry}");
+            Assert.That(CppClosures.RunViaCli(program.Source, optimize: false), Is.EqualTo(program.Expected), $"{program.Name}: CLI");
+            Assert.That(CppClosures.RunViaCli(program.Source, optimize: true), Is.EqualTo(program.Expected), $"{program.Name}: CLI --optimize");
+        });
+    }
+
     // ---- The other falsifiers and rows that RUN ---------------------------------------------------------------
 
     /// <summary>(program, VB's output, the root's path).</summary>

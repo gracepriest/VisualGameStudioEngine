@@ -155,7 +155,7 @@ public NameBinding? Binding { get; set; }
 | Fold case only inside lambda bodies | A syntactic scope for a rule about names: the same Local would bind differently inside and outside a lambda. |
 | Record `DeclaredName` only, with no Kind or identity | K8 cannot be fixed without Kind, because the field and the parameter share a spelling. #124 and #199 need identity. |
 | A side table `Dictionary<Node, NameBinding>` | It would have to be threaded through `CompileProjectFiles`, the LSP and every test helper. The AST already travels. |
-| Uniquify IR names per declaration (`n`, `n_1`) | Changes user-visible names (DAP, generated source) and breaks byte-identity. |
+| Uniquify IR names per declaration (`n`, `n_1`) | Changes user-visible names (DAP, generated source) and breaks byte-identity. — narrowed by ADR-0014 A-229 (#229, owner-accepted 2026-10-07): only a second declaration of a spelling is renamed |
 | Bundle #199 into #169 | Makes the corpus constraint unmeasurable. |
 | D5 (B): a separate Kind for the unregistered declarations, left on the create path | Refused by the follow-up ruling. |
 | D5 (C): fall back to creating on a bound miss | Refused; D1's ICE stays. |

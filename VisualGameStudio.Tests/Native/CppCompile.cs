@@ -27,25 +27,31 @@ public static class CppCompile
     /// <summary>
     /// Run <paramref name="proc"/> to completion, capturing both streams without deadlocking.
     ///
-    /// stderr is drained on a background task while we block reading stdout, so a child that
-    /// fills one pipe buffer (~4 KB, easy for a verbose compiler error dump) while we read the
-    /// other can never wedge both sides. If the process does not exit within
-    /// <paramref name="timeoutMs"/> it is killed (whole tree) and <see cref="ProcResult.Exited"/>
-    /// is <c>false</c>.
+    /// BOTH streams are drained on background tasks and the wait comes AFTER, so a child that
+    /// fills one pipe buffer (~4 KB, easy for a verbose compiler error dump) can never wedge both
+    /// sides, and a child that never exits is killed at <paramref name="timeoutMs"/>: the
+    /// obvious ordering - a blocking <c>ReadToEnd()</c> of stdout BEFORE <c>WaitForExit</c> - makes
+    /// the timeout unreachable (the read blocks until the child closes the pipe), so a compiled
+    /// program stuck in a loop froze the whole test host (found by task #229's counted-For
+    /// mutant; the same trap <c>JavaScriptExecutionTests.RunNodeScriptForOutcome</c> documents).
+    /// If the process does not exit within <paramref name="timeoutMs"/> it is killed (whole tree)
+    /// and <see cref="ProcResult.Exited"/> is <c>false</c>.
     /// </summary>
     private static ProcResult RunToCompletion(Process proc, int timeoutMs)
     {
         var errTask = proc.StandardError.ReadToEndAsync();
-        var stdout = proc.StandardOutput.ReadToEnd();
+        var outTask = proc.StandardOutput.ReadToEndAsync();
         bool exited = proc.WaitForExit(timeoutMs);
         if (!exited)
         {
             try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            // Give the async stderr read a bounded chance to unblock after the kill.
-            try { errTask.Wait(2000); } catch { /* ignore */ }
+            // Give the async reads a bounded chance to unblock after the kill.
+            try { System.Threading.Tasks.Task.WaitAll(new System.Threading.Tasks.Task[] { outTask, errTask }, 2000); } catch { /* ignore */ }
+            var partialOut = outTask.IsCompletedSuccessfully ? outTask.Result : string.Empty;
             var partialErr = errTask.IsCompletedSuccessfully ? errTask.Result : string.Empty;
-            return new ProcResult(false, -1, stdout, partialErr);
+            return new ProcResult(false, -1, partialOut, partialErr);
         }
+        var stdout = outTask.GetAwaiter().GetResult();
         var stderr = errTask.GetAwaiter().GetResult();
         return new ProcResult(true, proc.ExitCode, stdout, stderr);
     }

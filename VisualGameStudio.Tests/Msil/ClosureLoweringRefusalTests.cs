@@ -9,6 +9,7 @@ using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
 using NUnit.Framework;
+using VisualGameStudio.Tests.Compiler;
 
 namespace VisualGameStudio.Tests.Msil;
 
@@ -150,9 +151,10 @@ public class ClosureLoweringRefusalTests
     /// <c>SemanticAnalyzer.Analyze</c> reports BC30616 directly, at the lambda's own <c>Dim n</c>
     /// (line 5), and <c>MsilHarness.CompileToIl</c>'s own front-end assertion fails first, so
     /// <c>Assert.Throws&lt;ForeignFeatureException&gt;</c> no longer holds.
-    /// <see cref="R5_BackstopStillThrows_WhenFedUncheckedIr"/> and
-    /// <see cref="R5_BackstopStillReached_ByASiblingBlockHiding_E12"/> keep the MSIL backend's own
-    /// N9 refusal covered, from the two shapes left that can still reach it.
+    /// <see cref="R5_BackstopStillReached_ByALambdasOwnForEachVariable_X1_NotByADim"/> and
+    /// <see cref="R5_BackstopStillReached_ByALambdasOwnCatchVariable_X3_NotBySiblingBlockHiding_E12"/> keep the MSIL
+    /// backend's own N9 refusal covered, from the two shapes left that can still reach it (⭐ #229: a Dim is not
+    /// one of them any more — see those tests).
     /// </summary>
     [Test]
     public void R5_LambdaDeclaresNameItAlsoUsesFromCreator_RefusedByTheFrontEnd_WithBC30616()
@@ -167,65 +169,53 @@ public class ClosureLoweringRefusalTests
         Assert.That(match!.Message, Does.Contain("'n'"));
     }
 
-    /// <summary>The MSIL backend's own N9 refusal is still THERE and still throws — reachable,
-    /// post-#174, from IR the front end's own gate was bypassed for (same
-    /// <c>CompileToIlFromUncheckedIr</c> idiom as task #178's own moved MSIL pins).</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#229; was <c>R5_BackstopStillThrows_WhenFedUncheckedIr</c>). The MSIL backend's own N9 refusal is still THERE
+    /// and still throws, but a lambda's own <c>Dim</c> no longer reaches it: R5's lambda `Dim n` beside the creator's `n` is the IR
+    /// local `n_1` now (<c>IRBuilder.EmittedLocalName</c>, ADR-0014 Amendment A-229), so nothing is declared twice and the unchecked IR
+    /// this test used to feed the generator builds. What still reaches the backstop is a lambda's own FOR EACH variable: X1
+    /// declares `For Each x` in a lambda while its creator's `x` is captured by another. BasicLang accepts X1 on purpose (VB
+    /// rejects it, BC30616; C#, JavaScript and C++ print 6), so a CHECKED compile reaches the refusal, no bypass needed.
+    /// </summary>
     [Test]
-    public void R5_BackstopStillThrows_WhenFedUncheckedIr()
+    public void R5_BackstopStillReached_ByALambdasOwnForEachVariable_X1_NotByADim()
     {
+        var ex = CompileAndCaptureRefusal(CppClosurePrograms.X1);
+        Assert.That(ex.Message, Does.Contain("N9"));
+        Assert.That(ex.Message, Does.Contain("'x'"));
+
+        // The shape that used to be the unchecked-IR pin: R5's Dim, its front-end error IGNORED. It builds now.
         var ast = new Parser(new Lexer(R5Source).Tokenize()).Parse();
         var analyzer = new SemanticAnalyzer();
-        analyzer.Analyze(ast);   // errors intentionally IGNORED -- see this test's own summary
+        analyzer.Analyze(ast);   // BC30616 intentionally IGNORED -- see this test's own summary
         var module = new IRBuilder(analyzer).Build(ast, "MsilProbe");
-
-        var ex = Assert.Throws<ForeignFeatureException>(() => new MSILCodeGenerator().Generate(module));
-        Assert.That(ex!.Message, Does.Contain("N9"));
-        Assert.That(ex.Message, Does.Contain("'n'"));
+        Assert.That(() => new MSILCodeGenerator().Generate(module), Throws.Nothing,
+            "a lambda's own Dim is the IR local 'n_1' now: the N9 backstop must not see it");
     }
 
     /// <summary>
-    /// The OTHER shape left that reaches the N9 backstop through a CHECKED compile — no bypass
-    /// needed at all. #174's own lexical-scope walk only follows the chain of blocks currently
-    /// OPEN around a lambda's declaration; a SIBLING block (declared, and closed, before the
-    /// lambda even exists) is never on that chain, so #174 correctly does not refuse this program
-    /// — measured (<c>S/t174/edge/E12_later_sibling.bas</c>; the implementer's own commit message
-    /// names it explicitly: "Only t155edge R1 and R5 are newly refused"). <c>ClosureLowering</c>'s
-    /// OWN N9 check is coarser than #174's lexical one — it looks at whether a name is BOTH
-    /// captured and re-declared ANYWHERE in the same creator FUNCTION, not only along the
-    /// lambda's own ancestor chain — so it still refuses this shape exactly as it did before
-    /// #174. Re-measured directly against this build: MSIL still throws, and C++, JS and C#
-    /// RUN, returning 8, VB's own answer. (C# silently returned the WRONG answer, 10, until
-    /// #136 wrote a lambda's own <c>Dim</c> — task #165, the gap N8/N9 used to pin in
-    /// <c>LambdaBoundaryDiagnosticsExecutionTests</c> and now run as <c>..._CSharpRuns8</c>.)
+    /// ⭐ MOVED PIN (#229; was <c>R5_BackstopStillReached_ByASiblingBlockHiding_E12</c>). #174's lexical-scope walk follows only the
+    /// blocks OPEN around a lambda's declaration, so a SIBLING block's <c>Dim x</c> (E12_later_sibling: the lambda declares `x`, and an
+    /// <c>If</c> that comes later declares another) is not refused at the front end, and <c>ClosureLowering</c>'s coarser,
+    /// whole-function N9 check used to refuse it. ⭐ The lambda's `x` is `x_1` now: E12 builds on MSIL (and runs, see
+    /// <c>SiblingDimSameNameExecutionTests</c>), and the backstop is reached instead by X3, a lambda's own CATCH variable
+    /// (`Catch ex` in a lambda while its creator's `ex` is captured by another; VB rejects it, BC30616, and BasicLang accepts it on
+    /// purpose), through a checked compile.
     /// </summary>
     [Test]
-    public void R5_BackstopStillReached_ByASiblingBlockHiding_E12()
+    public void R5_BackstopStillReached_ByALambdasOwnCatchVariable_X3_NotBySiblingBlockHiding_E12()
     {
-        const string e12 = """
-            Sub Main()
-                Dim f As Func(Of Integer) = Nothing
-                If True Then
-                    f = Function()
-                            Dim x As Integer = 3
-                            Return x
-                        End Function
-                End If
-                If True Then
-                    Dim x As Integer = 5
-                    Console.WriteLine(f() + x)
-                End If
-            End Sub
-            """;
+        var ex = CompileAndCaptureRefusal(CppClosurePrograms.X3);
+        Assert.That(ex.Message, Does.Contain("N9"));
+        Assert.That(ex.Message, Does.Contain("'ex'"));
 
-        var ast = new Parser(new Lexer(e12).Tokenize()).Parse();
+        var ast = new Parser(new Lexer(CppClosurePrograms.N9LaterSibling).Tokenize()).Parse();
         var analyzer = new SemanticAnalyzer();
         Assert.That(analyzer.Analyze(ast), Is.True,
             "#174 must NOT refuse this at the front end (E12 is a SIBLING block, not an "
             + "ancestor): " + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
-
-        var ex = Assert.Throws<ForeignFeatureException>(() => MsilHarness.CompileToIl(e12));
-        Assert.That(ex!.Message, Does.Contain("N9"));
-        Assert.That(ex.Message, Does.Contain("'x'"));
+        Assert.That(() => MsilHarness.CompileToIl(CppClosurePrograms.N9LaterSibling), Throws.Nothing,
+            "the lambda's own 'x' is 'x_1' now: the N9 backstop must not see a sibling block's Dim");
     }
 
     // ---- R6: #169/ADR-0013 — a name matches a lambda parameter case-insensitively but not

@@ -25,8 +25,8 @@ namespace VisualGameStudio.Tests.Compiler;
 /// <see cref="BaseConstructorCallCppBothRefusedTests"/>, by name, with the lowering's reason after W2's.</item>
 /// <item><b>5b — #140's REGRESSION FENCE</b>: eleven programs that C++ ran before #140 and must keep
 /// running with VB's own output. #140 binds the per-iteration instance, not a hoisted local. Each also
-/// asserts the PATH its root took, so a path shift is visible even when the output stays right: ten are
-/// lowered, E20 (the N9 shape) is the one by-copy fallback.</item>
+/// asserts the PATH its root took, so a path shift is visible even when the output stays right: all eleven are
+/// lowered (E20, the N9 shape, was the one by-copy fallback until #229 renamed its lambda's own `y` to `y_1`).</item>
 /// <item><b>5d — the witnesses</b> for the two edge families no other test covers: FE1 (the For Each back
 /// edge) and CF1 (Catch → Finally), CR1 (the creation instruction itself) — each now runs.</item>
 /// </list></para>
@@ -172,10 +172,10 @@ public class BaseConstructorCallCppRefusalTests
         yield return new TestCaseData(PerIterationLoopBodyDimProbes.E07x, PerIterationLoopBodyDimProbes.E07xExpected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E07x");
         yield return new TestCaseData(PerIterationLoopBodyDimProbes.E10, PerIterationLoopBodyDimProbes.E10Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E10");
         yield return new TestCaseData(PerIterationLoopBodyDimProbes.E13, PerIterationLoopBodyDimProbes.E13Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E13");
-        // E20: a lambda declares a local spelled like a name its creator also captures (N9). The lowering
-        // refuses N9, and W2 admits the root (nothing writes what a lambda captures), so it is the ONE
-        // by-copy fallback in the fence — still running with VB's output, as it always did.
-        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E20, PerIterationLoopBodyDimProbes.E20Expected, "Main", CppClosurePath.ByCopy).SetName("Cpp140RegressionFence_t172_E20");
+        // E20: a lambda declares a local spelled like a name its creator also captures. ⭐ MOVED PIN (#229): the lowering
+        // refused this N9 shape, W2 admitted the root, and it was the ONE by-copy fallback in the fence (ByCopy). The lambda's own `y`
+        // is `y_1` now, nothing is declared twice, and the root is LOWERED like the other ten — still with VB's output.
+        yield return new TestCaseData(PerIterationLoopBodyDimProbes.E20, PerIterationLoopBodyDimProbes.E20Expected, "Main", CppClosurePath.Lowered).SetName("Cpp140RegressionFence_t172_E20");
     }
 
     /// <summary>
@@ -185,7 +185,7 @@ public class BaseConstructorCallCppRefusalTests
     /// output before #140, and W1 (the syntactic "any write" rule) was rejected for refusing nine of
     /// them. #140 replaced <c>[=]</c> with by-reference capture and had to bind the per-iteration
     /// instance, not a hoisted local; they stay green, UNCHANGED, and now ALSO assert the path each root
-    /// took (ruling D3: "so a path shift is visible"): ten are lowered, E20 is the by-copy fallback.
+    /// took (ruling D3: "so a path shift is visible"): all eleven are lowered (E20 was the by-copy fallback until #229).
     /// Run in the standard pipeline, the aggressive pipeline, and the project entry point.
     /// </summary>
     [TestCaseSource(nameof(Fence))]

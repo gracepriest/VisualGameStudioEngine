@@ -43,7 +43,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //    p09  `Dim a(i) As Integer` with a non-constant size is refused by the front end on every backend ("Array size must be a compile-time constant"), so an in-loop one never reaches this change.
 //    p11  MSIL refuses ReDim (`__BLReDim` has no lowering), so the ReDim control below runs on C#, C++ and JavaScript only.
 //    p13  MSIL refuses a rank-2 sized array ("a 2-dimensional array has no IL lowering"); C#, C++ and JavaScript allocate it per iteration like a rank-1.
-//    p15  two SAME-NAMED sibling Dims (`#229`): C# and JavaScript re-allocate the one shared variable (VB's answer); C++ and MSIL still refuse to compile it, as before.
+//    p15  two SAME-NAMED sibling Dims (`#229`): ⚠ FIXED (2026-10-07) - the second is its own variable (`a_1`), so two sibling sized arrays are two arrays and run on C#, C++, JavaScript
+//         and MSIL (`SiblingDimSameNameExecutionTests`); this fixture's own header claim, that C++ and MSIL refuse to compile it, no longer holds.
 //    #264 a class method's or an MSIL lambda's sized array OUTSIDE a loop is allocated nowhere (`int[] a = default!`): unchanged. Only the in-loop case now works, and it is a row here.
 //    LLVM allocates no sized array anywhere, so it renders the new call as a call to an undefined `@__BLDimArray`, exactly as it does `@__BLReDim`; there is no LLVM execution row, and
 //    `SizedArrayDimInLoopTextTests` reads its text only to keep a loop-free program free of the call.

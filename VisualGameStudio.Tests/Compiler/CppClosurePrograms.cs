@@ -108,7 +108,9 @@ internal static class CppClosurePrograms
         """;
 
     /// <summary>E12_later_sibling (N9): a lambda declares a local spelled like a LATER sibling block's
-    /// local the same function declares (the name-based capture set is ambiguous: refused, never guessed).</summary>
+    /// local the same function declares (the name-based capture set was ambiguous: refused, never guessed). ⭐ #229: the
+    /// lambda's `x` is the IR local `x_1` now, so nothing is declared twice and the root is LOWERED, no longer a fallback
+    /// (<see cref="NoLongerFallback"/>).</summary>
     internal const string N9LaterSibling = """
         Sub Main()
             Dim f As Func(Of Integer) = Nothing
@@ -184,9 +186,12 @@ internal static class CppClosurePrograms
         End Sub
         """;
 
-    /// <summary>The ten programs that RUN on the by-copy fallback with VB's output (ruling D1: "the H′
+    /// <summary>The programs that RUN on the by-copy fallback with VB's output (ruling D1: "the H′
     /// fallback set (10: iterator ×3, MyBase.M() ×2, D15, D07b, the N9 pair incl. E20, two-type Catch)"),
-    /// plus X1 and X3 (the N9 backstop's other two shapes). R2 and D01 are one program, as are R14 and D06.</summary>
+    /// plus X1 and X3 (the N9 backstop's other two shapes). R2 and D01 are one program, as are R14 and D06.
+    /// ⭐ It may only SHRINK (ruling D3), and #229 shrank it by the N9 pair: a lambda's own `Dim` of a spelling its creator
+    /// declares is renamed (`x_1`) now, so E20 and E12_later_sibling are lowered (<see cref="NoLongerFallback"/>); X1 and
+    /// X3 (a lambda's own For Each / Catch variable) are not a Dim and still land here.</summary>
     internal static IEnumerable<CppClosureProgram> Fallback()
     {
         yield return new("R2/D01_iterator", Iterator, "Gen", "2");
@@ -194,11 +199,22 @@ internal static class CppClosurePrograms
         yield return new("R14/D06_mybase_in_lambda", MyBaseInLambda, "Derived.Tag", "11");
         yield return new("D15_generic_class_int_capture", GenericClassIntCapture, "Holder.CountTo", "12");
         yield return new("D07b_when_guard_readonly", WhenGuardReadOnly, "Main", "6\nbig", "hand-derived: VB has no When guard");
-        yield return new("E20_lambda_own_local", PerIterationLoopBodyDimProbes.E20, "Main", PerIterationLoopBodyDimProbes.E20Expected);
-        yield return new("E12_later_sibling", N9LaterSibling, "Main", "8");
         yield return new("E12_two_clauses_same_name", TwoCatchTypes, "Main", "A:arg1\nI:inv2");
         yield return new("X1_foreach_in_lambda", X1, "Main", "6", "VB rejects (BC30616); C#, JavaScript and C++ print 6");
         yield return new("X3_catch_in_lambda", X3, "Main", "6", "VB rejects (BC30616); C#, JavaScript and C++ print 6");
+    }
+
+    /// <summary>
+    /// ⭐ MOVED PINS (#229): the two members the by-copy fallback set LOST. A lambda that declares its own `Dim` of a spelling its
+    /// creator declares (E20: the loop's captured `y` and the lambda `h`'s own; E12_later_sibling: the lambda's `x` and a later sibling
+    /// block's) used to be an N9 shape ClosureLowering refused and W2 admitted onto `[=]`. The lambda's local is `y_1` / `x_1` now,
+    /// so nothing is declared twice and ClosureLowering lowers the root, with VB's output. Each was a `Fallback_…` case in
+    /// <c>CppClosurePathTests</c> and <c>CppClosureRunTests</c>; each is a lowered case there now.
+    /// </summary>
+    internal static IEnumerable<CppClosureProgram> NoLongerFallback()
+    {
+        yield return new("E20_lambda_own_local", PerIterationLoopBodyDimProbes.E20, "Main", PerIterationLoopBodyDimProbes.E20Expected);
+        yield return new("E12_later_sibling", N9LaterSibling, "Main", "8");
     }
 
     // ---- fallback roots that ALSO fail the C++ compiler, for a gap that is not the lambda's ------
