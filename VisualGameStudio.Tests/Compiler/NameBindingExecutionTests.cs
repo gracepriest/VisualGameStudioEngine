@@ -788,16 +788,22 @@ public class NameBindingExecutionTests
     }
 
     /// <summary>
-    /// E17 — LINQ (<c>From ... Where ... Select</c>) is broken EVERYWHERE (a pre-existing gap,
-    /// #224), but #169's own obligation is narrower and MUST hold regardless: the front end
-    /// accepts the program and the IR BUILDS without ever throwing the #169 internal compiler
-    /// error. Measured directly (front end + <c>IRBuilder.Build</c> alone, no backend): analysis
-    /// succeeds with zero errors and the IR builds with zero exceptions; every backend's own
-    /// FAILURE happens downstream, in that backend's own codegen or at run time, never inside
-    /// <c>ReferencedVariable</c>'s bound-miss check.
+    /// E17 — a LINQ query (<c>From X In xs Where x > 2 Select x</c>, the range variable written
+    /// in another case than it is used): #169's obligation is that the front end accepts the
+    /// program and the IR BUILDS without ever throwing the #169 internal compiler error, whatever
+    /// a backend later does with it. Measured directly (front end + <c>IRBuilder.Build</c> alone, no
+    /// backend): analysis succeeds with zero errors and the IR builds with zero exceptions, never
+    /// inside <c>ReferencedVariable</c>'s bound-miss check.
+    ///
+    /// <para>This was written when a query was BROKEN on every backend (#224: each clause lowered to a
+    /// free call that no backend could run), which is why the contract is only the front end's. Since
+    /// #224 a query lowers to a lambda chain and RUNS on C# and JavaScript, and C++ and MSIL refuse it
+    /// with a stated message: <c>LinqQueryExpressionExecutionTests</c> runs it, and
+    /// <c>LinqQueryExpressionRefusalTests</c> pins the refusals. This test stays the narrow #169
+    /// contract and says nothing about what a backend does.</para>
     /// </summary>
     [Test]
-    public void E17_Linq_BrokenEverywhere_ButNeverAnInternalCompilerError()
+    public void E17_LinqQuery_FrontEndAcceptsIt_AndTheIrBuildsWithoutAnInternalCompilerError()
     {
         const string e17 = """
             Sub Main()

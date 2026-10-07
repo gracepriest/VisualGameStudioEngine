@@ -8391,6 +8391,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRInstanceMethodCall methodCall)
         {
+            // #224: a query expression's operators (and the method syntax's). On a List the collection
+            // table below refused them by member name; on an array or an IEnumerable nothing did, and a
+            // query over an array emitted `callvirt 'Integer'::'Where'` — IL naming a method that exists
+            // nowhere. MSIL has no System.Linq surface, so every receiver is refused here, by one rule.
+            if (ForeignFeatureChecker.IsQueryOperatorOnSequence(methodCall))
+                throw new ForeignFeatureException(
+                    "MSIL: " + ForeignFeatureChecker.QueryOperatorRejection("MSIL", methodCall.MethodName));
+
             var hasReturn = methodCall.Type != null && !methodCall.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
             // ⛔ BasicLang lets a `Shared` member be reached through an INSTANCE — `b.Tag()` where

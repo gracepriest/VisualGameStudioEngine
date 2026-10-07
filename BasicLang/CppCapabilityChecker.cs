@@ -799,6 +799,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             CheckNativeBclSurfaceUse(inst, funcName, diags);
             CheckUserExceptionUse(inst, funcName, diags);
 
+            // #224: a query expression's operators (and the method syntax's) — no C++ runtime type
+            // has them, so emitting `xs->Where(f)` built nothing a C++ compiler would accept.
+            if (inst is IRInstanceMethodCall query && ForeignFeatureChecker.IsQueryOperatorOnSequence(query))
+                diags.Add(ForeignFeatureChecker.QueryOperatorRejection("C++", query.MethodName) + $" (in '{funcName}')");
+
             switch (inst)
             {
                 case IRTryCatch tc:

@@ -352,5 +352,56 @@ namespace BasicLang.Compiler.CodeGen
                 || string.Equals(name, "Dictionary", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "HashSet", StringComparison.OrdinalIgnoreCase);
         }
+
+        /// <summary>
+        /// #224 — the operators a query expression lowers to (IRBuilder's
+        /// <c>Visit(LinqQueryExpressionNode)</c>: <c>From x In xs Where … Select …</c> becomes
+        /// <c>xs.Where(lambda).Select(lambda)</c>), which only a backend with LINQ can run: C# through
+        /// System.Linq, JavaScript onto Array methods. None of them is a member of the C++ runtime's
+        /// List or array, nor of MSIL's recorded collection surface.
+        /// </summary>
+        private static readonly HashSet<string> QueryOperatorNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "Where", "Select", "OrderBy", "OrderByDescending", "Take", "Skip", "Distinct",
+        };
+
+        /// <summary>
+        /// #224 — whether <paramref name="call"/> is a query operator on a sequence (an array, a
+        /// <c>List(Of T)</c> or an <c>IEnumerable(Of T)</c> — every receiver a query lowering produces,
+        /// and the method syntax's own). Asked by the backends with no LINQ (C++, MSIL), which refuse it
+        /// with <see cref="QueryOperatorRejection"/> rather than emit a call to a member that does not exist.
+        /// </summary>
+        public static bool IsQueryOperatorOnSequence(IRInstanceMethodCall call) =>
+            call?.MethodName != null
+            && QueryOperatorNames.Contains(call.MethodName)
+            && SemanticAnalyzer.QuerySourceElementType(call.Object?.Type) != null;
+
+        /// <summary>
+        /// #224 — whether any function of <paramref name="module"/> calls a query operator on a sequence
+        /// (<see cref="IsQueryOperatorOnSequence"/>), Try/Catch/Finally bodies included — the C# backend's
+        /// answer to "does this program need System.Linq".
+        /// </summary>
+        public static bool ModuleCallsQueryOperators(IRModule module)
+        {
+            static bool Calls(IEnumerable<IRInstruction> instructions) =>
+                instructions != null && instructions.Any(i => i switch
+                {
+                    IRInstanceMethodCall call => IsQueryOperatorOnSequence(call),
+                    IRTryCatch tc => Calls(tc.TryBlock?.Instructions)
+                        || (tc.CatchClauses?.Any(cc => Calls(cc?.Block?.Instructions)) ?? false)
+                        || Calls(tc.FinallyBlock?.Instructions),
+                    _ => false,
+                });
+
+            return module?.Functions != null && module.Functions.Any(f =>
+                f?.Blocks != null && f.Blocks.Any(b => Calls(b?.Instructions)));
+        }
+
+        /// <summary>#224 — the refusal text for <see cref="IsQueryOperatorOnSequence"/>.</summary>
+        public static string QueryOperatorRejection(string backendName, string method) =>
+            $"the LINQ operator '{method}' is not available on the {backendName} backend. A query " +
+            "expression (From … Where … Select) and the LINQ method syntax both call LINQ operators, " +
+            "and this backend has no LINQ; they run on the C# and JavaScript backends. Use a For Each " +
+            "loop instead.";
     }
 }

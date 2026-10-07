@@ -5286,6 +5286,18 @@ namespace BasicLang.Compiler
             // Parse additional clauses
             while (true)
             {
+                // #224: a SECOND range variable (`From a In xs From b In ys`, `From a In xs, b In ys`) is a
+                // cross join — SelectMany over a composite of both variables, which the query lowering does
+                // not build. Refused by name here; without this the statement parser reported "End of
+                // statement expected, found 'From'", which names nothing the user wrote wrong.
+                if (Check(TokenType.From) || IsSecondRangeVariableAfterComma())
+                {
+                    throw new ParseException(
+                        "A query with more than one range variable (a second 'From', or 'From a In xs, b In ys') " +
+                        "is not supported", Peek(),
+                        "Use one range variable per query, or nest a For Each loop for the cross join.");
+                }
+
                 if (Check(TokenType.Where))
                 {
                     Advance();
@@ -5293,10 +5305,9 @@ namespace BasicLang.Compiler
                     whereClause.Condition = ParseExpression();
                     query.Clauses.Add(whereClause);
                 }
-                else if (Check(TokenType.OrderBy))
+                else if (MatchQueryKeywordPair(TokenType.OrderBy, "Order") is Token orderByToken)
                 {
-                    Advance();
-                    var orderByClause = new OrderByClause { Line = Previous().Line, Column = Previous().Column };
+                    var orderByClause = new OrderByClause { Line = orderByToken.Line, Column = orderByToken.Column };
                     orderByClause.KeySelector = ParseExpression();
                     if (Match(TokenType.Descending))
                         orderByClause.Descending = true;
@@ -5304,10 +5315,9 @@ namespace BasicLang.Compiler
                         Match(TokenType.Ascending);  // Optional Ascending
                     query.Clauses.Add(orderByClause);
                 }
-                else if (Check(TokenType.GroupBy))
+                else if (MatchQueryKeywordPair(TokenType.GroupBy, "Group") is Token groupByToken)
                 {
-                    Advance();
-                    var groupByClause = new GroupByClause { Line = Previous().Line, Column = Previous().Column };
+                    var groupByClause = new GroupByClause { Line = groupByToken.Line, Column = groupByToken.Column };
                     groupByClause.KeySelector = ParseExpression();
 
                     // Optional Into clause: Into g = Group
@@ -5409,6 +5419,37 @@ namespace BasicLang.Compiler
 
             return query;
         }
+
+        /// <summary>
+        /// #224: a two-word query keyword (<c>Order By</c>, <c>Group By</c>), consumed and its FIRST
+        /// token returned, or null. The lexer forms multi-word keywords only after <c>End</c>, so these
+        /// arrive as two identifiers; they are recognised here, inside a query only, which keeps
+        /// <c>Order</c> and <c>Group</c> ordinary names everywhere else. The single-token spelling is
+        /// still accepted for a lexer that does produce it.
+        /// </summary>
+        private Token MatchQueryKeywordPair(TokenType singleToken, string firstWord)
+        {
+            if (Check(singleToken)) return Advance();
+
+            if (Check(TokenType.Identifier)
+                && Peek().Lexeme.Equals(firstWord, StringComparison.OrdinalIgnoreCase)
+                && PeekNext().Type == TokenType.Identifier
+                && PeekNext().Lexeme.Equals("By", StringComparison.OrdinalIgnoreCase))
+            {
+                var first = Advance();
+                Advance();   // By
+                return first;
+            }
+
+            return null;
+        }
+
+        /// <summary>#224: <c>, b In</c> directly after a <c>From</c> collection — a second range variable.</summary>
+        private bool IsSecondRangeVariableAfterComma() =>
+            Check(TokenType.Comma)
+            && _current + 2 < _tokens.Count
+            && (_tokens[_current + 1].Type == TokenType.Identifier || IsSoftNameKeyword(_tokens[_current + 1].Type))
+            && _tokens[_current + 2].Type == TokenType.In;
 
         // ====================================================================
         // Utility Methods

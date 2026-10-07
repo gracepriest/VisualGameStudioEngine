@@ -4613,7 +4613,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
                 return collection;
 
-            if (kind == CollectionKind.List &&
+            // #224: an ARRAY is a LINQ source too (`From x In arr`, `arr.Where(f)`), and already a JS
+            // Array — but CollectionKindOf keys on the List/IEnumerable names and answers None for
+            // `Integer[]`, so `arr.Where(f)` was emitted verbatim: a TypeError at run time.
+            var linqSource = kind == CollectionKind.List || mc.Object?.Type?.Kind == TypeKind.Array;
+            if (linqSource &&
                 TryLinqMethod(mc.MethodName, receiver, args, out var linq, out var yieldsSequence))
             {
                 // Record the RESULT as a sequence so the next link in the chain resolves.

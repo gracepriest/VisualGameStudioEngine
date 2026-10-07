@@ -417,6 +417,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _usedNamespaces.Clear();
             // System is always needed (basic types, Console, etc.)
             _usedNamespaces.Add("System");
+            // #224: a query expression lowers to LINQ operator calls, which need System.Linq. Asked of
+            // the IR, not of the text: the spelling scan below finds `.Select(`/`.Where(`, but a query's
+            // `Distinct`/`Skip`/`Take`/`OrderByDescending` alone left `From x In xs Distinct` CS1061 —
+            // and matching `.Take(` by text would also claim every user method named Take.
+            if (ForeignFeatureChecker.ModuleCallsQueryOperators(module))
+                _usedNamespaces.Add("System.Linq");
             // Namespaces explicitly imported in source code are always emitted
             foreach (var netUsing in module.NetUsings)
             {
