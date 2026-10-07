@@ -162,6 +162,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
     /// </summary>
     public class CppCapabilityChecker
     {
+        private IRModule _module;
         private HashSet<string> _userDefinedNames;
         /// <summary>
         /// The current function's locals and parameters plus the module globals — the
@@ -232,6 +233,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                               "the target RUNTIME (today, JavaScript) — it is not available on " +
                               "the C++ backend");
 
+            _module = module;
             _userDefinedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in module.Classes.Keys) _userDefinedNames.Add(name);
             foreach (var name in module.Interfaces.Keys) _userDefinedNames.Add(name);
@@ -327,6 +329,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
                     // ADR-0015 E11 / D2a: MyBase.New arguments a two-phase constructor can place.
                     CheckBaseConstructorArguments(module, cls, diags);
+
+                    // #151: what a class built on BasicLang::Exception cannot do.
+                    CheckExceptionClass(module, cls, diags);
 
                     // Class field types.
                     if (cls.Fields != null)
@@ -707,11 +712,92 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             }
         }
 
+        /// <summary>
+        /// The members of .NET's <c>System.Exception</c> that <c>BasicLang::Exception</c> does NOT
+        /// provide (#151 provides <c>Message</c> and <c>ToString()</c>). Read off a user exception
+        /// object they would be a raw C++ "no member named" error.
+        /// </summary>
+        private static readonly HashSet<string> UnprovidedExceptionMembers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "InnerException", "StackTrace", "Source", "HResult", "Data", "HelpLink", "TargetSite",
+            "GetBaseException", "GetObjectData",
+        };
+
+        /// <summary>
+        /// #151: a class built on a built-in exception derives from the runtime's
+        /// <c>BasicLang::Exception</c> (<see cref="CppExceptionRuntime"/>), which offers
+        /// <c>New()</c>, <c>New(message)</c>, <c>Message</c> and an overridable <c>ToString()</c>.
+        /// What lies outside that is refused here by name rather than left to clang: a GENERIC
+        /// exception class (a <c>Catch</c> matches the thrown chain by the class's name, which
+        /// cannot tell <c>E(Of Integer)</c> from <c>E(Of String)</c>), a <c>MyBase.New</c> into the
+        /// runtime base with more than a message (the <c>InnerException</c> / <c>paramName</c>
+        /// constructors), and an <c>Overrides</c> of <c>Message</c> (the runtime's is a data
+        /// member, read by name everywhere).
+        /// </summary>
+        private static void CheckExceptionClass(IRModule module, IRClass cls, List<string> diags)
+        {
+            var root = CppObjectModel.ExceptionRootOf(module, cls);
+            if (root == null) return;
+            if (cls.GenericParameters is { Count: > 0 })
+                diags.Add($"'{cls.Name}' is a generic class built on '{root}' — on the C++ backend an " +
+                          "exception class cannot be generic, because a Catch matches the thrown " +
+                          "object by its class name alone; declare a non-generic class per type");
+            if (CppObjectModel.IsRuntimeExceptionBase(module, cls.BaseClass) && cls.Constructors != null)
+                foreach (var ctor in cls.Constructors)
+                    if (ctor?.BaseCall is { Args.Count: > 1 } baseCall)
+                        diags.Add($"'{cls.Name}' passes {baseCall.Args.Count} arguments to MyBase.New of " +
+                                  $"'{cls.BaseClass}' — on the C++ backend an exception class's built-in " +
+                                  "base takes only a message (MyBase.New() or MyBase.New(message)); " +
+                                  "InnerException and the other built-in constructors are not supported");
+            if (cls.Properties != null)
+                foreach (var prop in cls.Properties)
+                    if (prop.IsOverride && string.Equals(prop.Name, "Message", StringComparison.OrdinalIgnoreCase))
+                        diags.Add($"'{cls.Name}' overrides Exception.Message — not supported on the C++ " +
+                                  "backend; pass the message to MyBase.New instead");
+        }
+
+        /// <summary>
+        /// #151: a use of a user exception class the C++ backend cannot lower — a
+        /// <c>System.Exception</c> member the runtime base does not provide, read off a user
+        /// exception object (<see cref="UnprovidedExceptionMembers"/>, unless the user's own chain
+        /// declares one of that name), and a CONVERSION of a caught built-in exception
+        /// (<c>Catch ex As Exception</c> → <c>TypeOf ex Is MyErr</c> / <c>CType(ex, MyErr)</c>):
+        /// such a catch variable is the C++ exception the handler caught, not the object, so
+        /// there is nothing to cast.
+        /// </summary>
+        private void CheckUserExceptionUse(IRInstruction inst, string funcName, List<string> diags)
+        {
+            switch (inst)
+            {
+                case IRFieldAccess fa when IsUnprovidedExceptionMember(fa.Object, fa.FieldName):
+                    diags.Add($"'{fa.FieldName}' of Exception (read in '{funcName}') is not supported on " +
+                              "the C++ backend for a user exception class — only Message and ToString() are");
+                    break;
+                case IRInstanceMethodCall call when IsUnprovidedExceptionMember(call.Object, call.MethodName):
+                    diags.Add($"'{call.MethodName}' of Exception (called in '{funcName}') is not supported " +
+                              "on the C++ backend for a user exception class — only Message and ToString() are");
+                    break;
+                case IRCast cast when CppExceptionTypes.IsNetException(cast.Value?.Type?.Name)
+                                      && CppObjectModel.IsExceptionClass(_module, cast.Type?.Name):
+                    diags.Add($"converting a '{cast.Value.Type.Name}' to the exception class '{cast.Type.Name}' " +
+                              $"(TypeOf / CType / TryCast in '{funcName}') is not supported on the C++ backend " +
+                              $"— catch it directly with 'Catch e As {cast.Type.Name}'");
+                    break;
+            }
+        }
+
+        private bool IsUnprovidedExceptionMember(IRValue receiver, string member) =>
+            member != null
+            && UnprovidedExceptionMembers.Contains(member)
+            && CppObjectModel.IsExceptionClass(_module, receiver?.Type?.Name)
+            && !CppObjectModel.DeclaresMember(_module, _module.Classes[receiver.Type.Name], member);
+
         private void CheckInstruction(IRInstruction inst, string funcName, List<string> diags)
         {
             // P1 spec §4.1: the member-surface pass. Runs on EVERY instruction kind
             // (including the ones with their own cases below) before the switch.
             CheckNativeBclSurfaceUse(inst, funcName, diags);
+            CheckUserExceptionUse(inst, funcName, diags);
 
             switch (inst)
             {

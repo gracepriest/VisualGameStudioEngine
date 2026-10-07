@@ -455,6 +455,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (DeclaresClass(module))
                 SpliceRuntimeSource(CppObjectModelRuntime.Source);
 
+            // #151: BasicLang::Exception + the ThrownException carrier, AFTER the object model
+            // (Construct) and NetException (its base). ON DEMAND, for a module that declares an
+            // exception class (split-mode counterpart: EmitRuntimeHeader in CppCodeGenerator.Split.cs
+            // — keep in sync), so a program without one emits byte-identically.
+            if (DeclaresExceptionClass(module))
+                SpliceRuntimeSource(CppExceptionRuntime.Source);
+
             // P2a-2 Task 7a: the boundary includes, ONLY for a surface-drawing module —
             // AFTER the splices, honoring blnet_marshal.hpp's include-order contract (the
             // P1 BCL splices above put BasicLang::DateTime et al. in scope first).
@@ -1514,7 +1521,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var baseList = new List<string>();
             if (!string.IsNullOrEmpty(irClass.BaseClass))
             {
-                baseList.Add($"public {SanitizeName(irClass.BaseClass)}");
+                baseList.Add($"public {BaseClassCppName(irClass)}");
             }
             foreach (var iface in irClass.Interfaces)
             {
@@ -1644,6 +1651,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             else
             {
                 WriteLine($"~{className}() = default;");
+                WriteLine();
+            }
+
+            // #151: an exception class names its own type chain, most-derived first — what a Throw
+            // of it carries into the typed-Catch ladder (BasicLang::ThrownException). Virtual, so
+            // the chain is the DYNAMIC type's even when the object is thrown through a base.
+            if (CppObjectModel.ExceptionChainOf(_module, irClass) is { } exceptionChain)
+            {
+                WriteLine($"const char* blExceptionChain_() const override {{ return \"{exceptionChain}\"; }}");
                 WriteLine();
             }
 
@@ -1787,6 +1803,39 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         private static bool DeclaresClass(IRModule module) =>
             module?.Classes != null && module.Classes.Values.Any(c => c != null && !c.IsStruct);
 
+        /// <summary>
+        /// The C++ spelling of <paramref name="irClass"/>'s <c>Inherits</c> base: the runtime's
+        /// <c>BasicLang::Exception</c> for a built-in .NET exception (#151,
+        /// <see cref="CppObjectModel.IsRuntimeExceptionBase"/>), else the sanitized name.
+        /// </summary>
+        private string BaseClassCppName(IRClass irClass) =>
+            CppObjectModel.IsRuntimeExceptionBase(_module, irClass.BaseClass)
+                ? "BasicLang::Exception"
+                : SanitizeName(irClass.BaseClass);
+
+        /// <summary>#151: a value or Catch type that is a class of this module built on a built-in
+        /// exception — thrown through <c>BasicLang::ThrowObject</c>, caught through the ladder.</summary>
+        private bool IsUserExceptionType(TypeInfo type) =>
+            type != null && type.Kind == TypeKind.Class && CppObjectModel.IsExceptionClass(_module, type.Name);
+
+        /// <summary>
+        /// #151: <c>x.Message</c> on a user exception object where no class of its chain declares a
+        /// <c>Message</c> of its own — a read of <c>BasicLang::Exception::Message</c>, a std::string
+        /// whatever the analyzer inferred. (It infers Object when the built-in base is one it knows
+        /// only as an opaque .NET name — <c>Inherits ArgumentException</c> under a <c>Using</c> —
+        /// and a <c>void*</c> temp would not hold the string.)
+        /// </summary>
+        private bool IsInheritedExceptionMessage(IRValue value) =>
+            value is IRFieldAccess { FieldName: var name, Object: { Type: var receiverType } }
+                   && string.Equals(name, "Message", StringComparison.OrdinalIgnoreCase)
+                   && IsUserExceptionType(receiverType)
+                   && !CppObjectModel.DeclaresMember(_module, _module.Classes[receiverType.Name], name);
+
+        /// <summary>#151: true when the module declares a class built on a built-in exception.</summary>
+        private static bool DeclaresExceptionClass(IRModule module) =>
+            module?.Classes != null
+            && module.Classes.Values.Any(c => c != null && CppObjectModel.ExceptionRootOf(module, c) != null);
+
         /// <summary>The class's own type as C++ spells it inside its definition: <c>Box</c>, or
         /// <c>Box&lt;T&gt;</c> for a generic class — what <c>enable_shared_from_this</c> is keyed on.</summary>
         private string SelfTypeName(IRClass irClass) =>
@@ -1854,7 +1903,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             var foreignBase = CppObjectModel.ForeignBaseOf(_module, irClass);
             var foreignRooted = CppObjectModel.IsForeignRooted(_module, irClass);
             var userBase = !string.IsNullOrEmpty(irClass.BaseClass) && foreignBase == null
-                ? SanitizeName(irClass.BaseClass)
+                ? BaseClassCppName(irClass)
                 : null;
             var fieldDefaults = DeclaredInstanceFields(irClass).Select(f => $"{SanitizeName(f.Name)}{{}}").ToList();
 
@@ -2542,6 +2591,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                     foreach (var cc in tc.CatchClauses)
                     {
                         if (string.IsNullOrEmpty(cc.VariableName) || cc.Block == null) continue;
+                        // #151: a user exception's variable is the object itself (a shared_ptr), so
+                        // its Message is an ordinary member read, never what().
+                        if (IsUserExceptionType(cc.ExceptionType)) continue;
                         foreach (var regionBlock in ComputeInlineRegion(cc.Block, tc.EndBlock))
                             foreach (var inst in regionBlock.Instructions)
                                 if (IsCatchMessageRead(inst, cc.VariableName))
@@ -2820,7 +2872,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // §11.1: a `<catchVar>.Message` read lowers to
                 // BasicLang::String(v.what()) — its temp must be std::string
                 // regardless of what the analyzer inferred (often Object -> void*).
-                .GroupBy(t => _catchMessageAccesses.Contains(t) || IsCapturedExceptionMessage(t) ? "std::string"
+                .GroupBy(t => _catchMessageAccesses.Contains(t) || IsCapturedExceptionMessage(t) || IsInheritedExceptionMessage(t) ? "std::string"
                               : IsCapturedExceptionValue(t) ? CapturedExceptionType
                               : MapType(t.Type))
                 .ToList();
@@ -6026,7 +6078,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                         irClass.Properties.Any(p => p.Getter == _currentFunction || p.Setter == _currentFunction))
                     {
                         if (!string.IsNullOrEmpty(irClass.BaseClass))
-                            baseClassName = SanitizeName(irClass.BaseClass);
+                            baseClassName = BaseClassCppName(irClass);
                         break;
                     }
                 }
@@ -6167,7 +6219,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // analyzer's inferred type (see _catchMessageAccesses), so
                 // `ex.Message.Length` takes the String path too.
                 if (string.Equals(receiverType?.Name, "String", StringComparison.OrdinalIgnoreCase)
-                    || _catchMessageAccesses.Contains(fieldAccess.Object))
+                    || _catchMessageAccesses.Contains(fieldAccess.Object)
+                    || IsInheritedExceptionMessage(fieldAccess.Object))
                 {
                     return $"static_cast<int32_t>({GetValueName(fieldAccess.Object)}.length())";
                 }
@@ -6287,7 +6340,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private void EmitCatchBody(IRCatchClause catchClause, IRTryCatch tryCatch, string afterCatchLabel)
         {
-            var named = !string.IsNullOrEmpty(catchClause.VariableName);
+            // #151: a user exception's variable is an ordinary shared_ptr value — a lambda captures
+            // it like any other, never through the what()-copy a std::exception binding needs.
+            var named = !string.IsNullOrEmpty(catchClause.VariableName) && !IsUserExceptionType(catchClause.ExceptionType);
             if (named) _catchVariablesInScope.Add(catchClause.VariableName);
             try
             {
@@ -6400,8 +6455,11 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // OR one the analyzer RESOLVED as a .NET exception (IRCatchClause carries the
             // resolver-supplied FQ name) arms the ladder — without the second half a
             // `Catch e As FileNotFoundException` silently bound to a later Exception clause.
+            // #151: a Catch of a user exception class arms it too — its object only ever arrives
+            // as a BasicLang::ThrownException, which IS a NetException.
             if (tryCatch.CatchClauses.Any(cc => CppExceptionTypes.IsNetException(cc.ExceptionType?.Name)
-                                                || !string.IsNullOrEmpty(cc.NetExceptionFullName)))
+                                                || !string.IsNullOrEmpty(cc.NetExceptionFullName)
+                                                || IsUserExceptionType(cc.ExceptionType)))
             {
                 WriteLine("catch (const BasicLang::NetException& __nex)");
                 WriteLine("{");
@@ -6418,7 +6476,25 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 {
                     string fqName;
                     var clauseTypeName = catchClause.ExceptionType?.Name;
-                    if (clauseTypeName == null)
+                    if (IsUserExceptionType(catchClause.ExceptionType))
+                    {
+                        // #151: the class's own chain element (its declared name — the clause may
+                        // spell it in any case), and the variable is the THROWN OBJECT, cast back
+                        // to the clause's type, so its own members read back.
+                        var userClass = _module.Classes[clauseTypeName];
+                        WriteLine($"{(firstArm ? "if" : "else if")} (__nex.Matches(\"{userClass.Name}\"))");
+                        firstArm = false;
+                        WriteLine("{");
+                        Indent();
+                        if (!string.IsNullOrEmpty(catchClause.VariableName))
+                            WriteLine($"{MapType(catchClause.ExceptionType)} {SanitizeName(catchClause.VariableName)} = "
+                                      + $"BasicLang::Caught<{SanitizeName(userClass.Name)}>(__nex);");
+                        EmitCatchBody(catchClause, tryCatch, afterCatchLabel);
+                        Unindent();
+                        WriteLine("}");
+                        continue;
+                    }
+                    else if (clauseTypeName == null)
                     {
                         // An untyped Catch catches everything; every managed chain
                         // ends "System.Exception".
@@ -6500,6 +6576,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
 
             foreach (var catchClause in tryCatch.CatchClauses)
             {
+                // #151: a user exception arrives only as a ThrownException, which the ladder above
+                // has already offered to this clause — a std::exception handler here could never
+                // hold one, and its body (reading the class's own members) would not compile.
+                if (IsUserExceptionType(catchClause.ExceptionType)) continue;
                 var exType = MapCatchType(catchClause.ExceptionType?.Name);
                 var varName = !string.IsNullOrEmpty(catchClause.VariableName)
                     ? SanitizeName(catchClause.VariableName)
@@ -6852,6 +6932,16 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 // A user-defined BL exception type has no .NET chain; the ladder deliberately
                 // skips its arm, so it keeps the plain lowering and the per-clause handlers.
                 WriteLine($"throw std::runtime_error({msg});");
+                return;
+            }
+
+            // #151: an object of a class built on Exception — `Throw New MyErr(…)`, `Throw e` —
+            // throws the OBJECT, wrapped in the NetException-derived carrier with its dynamic
+            // type chain, so the typed-Catch ladder decides by type and a Catch of the user type
+            // binds this same object back (BasicLang::Caught).
+            if (IsUserExceptionType(throwInst.Exception.Type))
+            {
+                WriteLine($"BasicLang::ThrowObject({GetValueName(throwInst.Exception)});");
                 return;
             }
 
