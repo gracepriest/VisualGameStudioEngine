@@ -17,6 +17,12 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #220 FIXED — the built-in `Exception`'s `Message` / `StackTrace` / `InnerException` are ReadOnly at their `SymbolTable` declaration, so a write is BC30526 through #178's `CheckPropertyWrite` (vbc's message) and a ByRef `ex.Message` is copied in, never back (#209; was C# CS0200 / MSIL MissingField / C++ not compiling, now vbc's answer on all three; `git log --grep '#220'`)
+- **Tests (7 new, 1 moved):** `PropertyAccessDiagnosticsTests` F1-F6 (fast; F1 is the moved #220 pin, F6 the controls), `PropertyByRefCopyOutExecutionTests.AnExceptionsMessage_…` (C# / C++ / MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster still 127), `PropertyAccessExecutionTests.…_Against222` (a .NET exception CLASS, `ArgumentException`, is still accepted: #222). Mutants: no Message flag -> F1 / F4 / F5 / P06e red, no StackTrace -> F2, no InnerException -> F3.
+- **Gates (Linux):** fast 0 failed / 12,738 passed / 94 skipped; one filter each, 0 failed: `PropertyAccess` 80, `Exception` 145 (+1 skipped), `TryCatch` 20 (+1 skipped), `UserException` 20, `PropertyByRefCopyOut` 16, `JsExecutionTierRoster` 5. Byte compare (1,095 programs x 5 backends x CLI / `-O`): 0 of 10,950 cells differ, 0 rc changes, 0 verifier fires. Full suite NOT run.
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #151 (C++ half) TESTED — a user class that `Inherits Exception` builds and runs on C++, the owner's option (b): the runtime's `BasicLang::Exception` base, `BasicLang::ThrowObject` / `ThrownException`, a user arm in the typed-Catch ladder (`CppExceptionRuntime`, `CppObjectModel`; `git log --grep '#151'`)
 - **Tests (14 new, 1 renamed):** `CppUserExceptionExecutionTests` (Integration, 10 cases / 12 vbc-answered programs on C++ with C# as the reference x CLI / `--optimize` / `CompileProjectFiles`; X2 is C++ only; under `NotJavaScriptExecution`, roster still 127) + `CppUserExceptionRefusalTests` (fast, 4: an unprovided member, a generic class, `MyBase.New(msg, inner)`, `Overrides Message`, each refused BY NAME). MOVED: `BarePropertyLowering` P15 is `…_AllBackendsPrintVbcsAnswer_Task151`, its C++ leg positive. Mutants M1-M5 (+M6-M8, the other refusals) all killed.
 - **Gates (Linux):** fast 0 failed / 12,736 passed / 94 skipped; Integration, one filter each, 0 failed: the two fixtures 14, `UserException` 31, `Throw` 315 (+3 skipped), `TryCatch` 20 (+1), `Exception` 152 (+1), `BarePropertyLowering` 38, `Cpp` 1,917 (+19 skipped), `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -6801,14 +6807,19 @@ single new failure against the 170-name baseline.
       (`PropertyAccessExecutionTests.E09_GetterReturnVariableWrite_Msil_PrintsVbs43_Task219`).
     - **#220** — `Exception.Message = x` is accepted: the .NET resolver does not carry
       `Message`'s real ReadOnly-ness into a fact the analyzer can see (rule 5's own silence,
-      applied to one more member the resolver's accessor metadata does not reach).
+      applied to one more member the resolver's accessor metadata does not reach). **FIXED
+      2026-10-07** — the built-in `Exception`'s hand-built `Message` / `StackTrace` /
+      `InnerException` are ReadOnly in `SymbolTable`; see the #220 section at the top. A .NET
+      exception CLASS (`ArgumentException`) still accepts the write: that half is #222.
     - **#221** — a bare `For P = …` over a ReadWrite property is accepted and DRIVES it, same as
       before this fix; VB itself refuses every property here (BC30039, a different code than
       either of #178's own two).
     - **#222** — N1/N2 (a .NET ReadOnly property, `String.Length`/`List(Of T).Count`) are not
       refused either, same rule-5 reason as #220; on JavaScript N1 throws (a JS string is a
       primitive, not extensible — `TypeError: Cannot create property 'Length'`) and N2 prints
-      `1` (a List is a real object, so the write is accepted and simply ignored).
+      `1` (a List is a real object, so the write is accepted and simply ignored). Since #220,
+      also `a.Message = x` on a .NET exception CLASS (`Dim a As ArgumentException`): it does not
+      bind the built-in `Exception` symbol #220 marked (`ArgumentExceptionMessageWrite_…_Against222`).
     - **#223** — the native C++ `.blproj` build's own error text DUPLICATES the code
       (`error BC30526: BC30526: Property 'P' is 'ReadOnly'.`) — BasicLang's message already
       starts with the code and the C++ project builder's formatter prepends it again.

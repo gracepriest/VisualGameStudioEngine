@@ -37,11 +37,13 @@ namespace VisualGameStudio.Tests.Compiler;
 //                                                                 and `EveryCallArm_...` (P12 `New Holder(b.P)`: C# prints `11011` where VB prints `11111`). C# only.
 //    * M3 no pin on the arguments BEFORE the property's Get     -> `AnEarlierArgument_IsEvaluatedBeforeThePropertysGet` ONLY (P14: C# runs `get 10` before `seed 1`).
 //    * M4 no snapshot of a receiver variable the call rebinds  -> `AReboundReceiver_StillGetsTheWriteBack` ONLY (P15: the write-back lands on the NEW object, `first 10 second 11`, on C#, C++ and MSIL).
-//    * M5 a ReadOnly property written back                     -> `AReadOnlyProperty_IsPassedACopy_AndNeverWrittenBack` ONLY (P06: C# CS0200 and C++ do not compile, MSIL does not run).
+//    * M5 a ReadOnly property written back                     -> `AReadOnlyProperty_IsPassedACopy_AndNeverWrittenBack` (P06: C# CS0200 and C++ do not compile, MSIL does not run) and, since
+//                                                                 #220, `AnExceptionsMessage_IsPassedACopy_AndNeverWrittenBack` (#220 re-ran M5 on those two rows: both red).
 //    * M6 BL4004 never raised (the refusal removed)            -> `MyBaseNew_WithAGetSetPropertyArgument_IsRefusedWithBL4004_OnEveryBackend` ONLY: nothing refuses, the CLI builds, and `CompileProjectFiles` fails
 //                                                                 on the verifier ("IR verification failed after optimization") instead of BL4004.
 //    * M7 the accessor-backed narrowing dropped (a plain auto-property counts as a copy-out argument inside MyBase.New) -> `MyBaseNew_WithAPlainAutoPropertyArgument_StillRunsOnCpp_AsOnMaster` ONLY: the plain
 //                                                                 property is refused with BL4004 on every entry point.
+//    * #220: the built-in Exception.Message's ReadOnly flag removed (SymbolTable) -> `AnExceptionsMessage_IsPassedACopy_AndNeverWrittenBack` (C# CS0200, C++ does not compile).
 //
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect). Each is outside what #209 fixes, and is the same before and after it:
 //    * JavaScript refuses every ByRef parameter by design (BL7002), so no probe runs there; `JavaScript_StillRefusesTheByRefParameter_BL7002` is the one row that says so.
@@ -177,6 +179,16 @@ public class PropertyByRefCopyOutExecutionTests
     [Test]
     public void AReadOnlyProperty_IsPassedACopy_AndNeverWrittenBack()
         => AssertSingleFile(PropertyByRefProbes.ReadOnly);
+
+    /// <summary>
+    /// (3b) #220 — the built-in <c>Exception.Message</c> is ReadOnly too (its <c>SymbolTable</c> declaration carries the flag), so <c>Change(ex.Message)</c> is the same copy-in, never-out: the callee
+    /// sees `m` and writes its copy (`in m`, `now changed`), the exception keeps `m`. Before #220 the member was writable, IRBuilder wrote the copy back, and no backend ran it: C# CS0200, MSIL
+    /// MissingFieldException (`System.Exception.Message`), C++ did not compile (S/t220/probes/EByRef.bas). Removing the flag from Message turns this red (measured: C# CS0200 on every
+    /// entry point, C++ does not compile).
+    /// </summary>
+    [Test]
+    public void AnExceptionsMessage_IsPassedACopy_AndNeverWrittenBack()
+        => AssertSingleFile(PropertyByRefProbes.ExceptionMessage);
 
     /// <summary>
     /// (4) A Function with a ByRef parameter, used inside an expression: `r = F(b.P) + 1` prints `45 22` (F returns 2 * 22, plus 1; the property is 22). C# inlines a single-use value at its use, but the
@@ -512,6 +524,24 @@ internal static class PropertyByRefProbes
             Console.WriteLine(b.R & " " & b.Q)
         End Sub
         """, "get 10\nin 22\nin 19\nget 10\n10 7");
+
+    /// <summary>P06e (#220, `S/t220/probes2/p06e.bas`, vbc-answered): the built-in Exception's ReadOnly Message passed ByRef — a copy, no write-back, no error.</summary>
+    internal static readonly TempProbe ExceptionMessage = P("p06e_exception", """
+        Sub Change(ByRef s As String)
+            Console.WriteLine("in " & s)
+            s = "changed"
+            Console.WriteLine("now " & s)
+        End Sub
+
+        Sub Main()
+            Try
+                Throw New Exception("m")
+            Catch ex As Exception
+                Change(ex.Message)
+                Console.WriteLine(ex.Message)
+            End Try
+        End Sub
+        """, "in m\nnow changed\nm");
 
     /// <summary>P08: `r = F(b.P) + 1`, a module Function with a ByRef parameter inside an expression.</summary>
     internal static readonly TempProbe FunctionInExpression = P("p08_func", """
