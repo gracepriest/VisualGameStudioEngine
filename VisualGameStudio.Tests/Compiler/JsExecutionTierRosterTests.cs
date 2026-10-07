@@ -685,6 +685,8 @@ public class JsExecutionTierRosterTests
         "CppAutoPropertyBareStoreExecutionTests",
         // Task #151 (C++ half): a user class that `Inherits Exception` builds and runs on C++ (the runtime's `BasicLang::Exception` base, `ThrowObject`, the typed-Catch ladder's user arm), run against vbc on C++ with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript and MSIL already answered these programs (UserExceptionSubclassExecutionTests, JavaScriptCatchDiscriminationTests).
         "CppUserExceptionExecutionTests",
+        // Task #225: a generic delegate or collection in an MSIL type-token position (a sized array of Func / Action / List, a For Each over a List of them, an array type) assembles, run against vbc on MSIL with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript already answered these programs.
+        "MsilGenericTypeTokenExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

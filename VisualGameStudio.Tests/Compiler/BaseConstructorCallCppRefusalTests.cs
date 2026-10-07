@@ -244,16 +244,17 @@ public class BaseConstructorCallCppRefusalTests
     /// <c>x = x + n</c>). VB prints 6 6 6 (one shared <c>x</c>); the C++ copy would print 1 3 6, which is why
     /// #170 refused it (mutant MF in the shared successor function, killed by this test then). #140 lowers
     /// it — one environment holds the one shared <c>x</c> — so C#, JavaScript and C++ all print 6 6 6.
-    /// MSIL does not ASSEMBLE this shape (<c>unbox.any Func`1&lt;int32&gt;</c> — a For Each over a
-    /// <c>List(Of Func(Of Integer))</c>, a pre-existing generic-delegate gap unrelated to #170), which is
-    /// why MSIL is not asserted here.
+    /// MSIL did not ASSEMBLE this shape until #225 (<c>unbox.any [mscorlib]System.Func`1&lt;int32&gt;</c>, a
+    /// generic token without its <c>class</c>, for the For Each over a <c>List(Of Func(Of Integer))</c>); it
+    /// prints 6 6 6 there too now.
     /// </summary>
     [Test]
-    public void FE1_ForEachBackEdge_RunsOnCSharpJavaScriptAndCpp()
+    public void FE1_ForEachBackEdge_RunsOnCSharpJavaScriptCppAndMsil()
     {
         Assert.Multiple(() =>
         {
             Assert.That(Norm(FourBackends.RunEmittedCSharp(FE1_ForEachBackEdge)), Is.EqualTo("6\n6\n6"), "C#");
+            Assert.That(Norm(VisualGameStudio.Tests.Msil.MsilHarness.RunExpectingSuccess(FE1_ForEachBackEdge)), Is.EqualTo("6\n6\n6"), "MSIL (#225)");
             Assert.That(Norm(JavaScriptExecutionTests.RunJs(FE1_ForEachBackEdge)), Is.EqualTo("6\n6\n6"), "JavaScript");
             Assert.That(CppClosures.Compile(FE1_ForEachBackEdge).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered), "C++ root 'Main'");
             CppClosures.RunsInAllModes(FE1_ForEachBackEdge, "6\n6\n6");
