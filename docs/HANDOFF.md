@@ -17,8 +17,15 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #222 TESTED — a write to a .NET ReadOnly property (`s.Length = 3`, `l.Count = 5`, `t.Year = 1`, `a.Message = "x"` on an `ArgumentException`, `Environment.ProcessorCount = 1`) is vbc's BC30526 on every backend, and `Change(l.Count)` / `Change(s.Length)` copy in, never back (`SemanticAnalyzer.ReadOnlyNetPropertyName`: `BclReadOnlyProperties`, `NativeBclSurface` `readOnly` rows, an exception class's inherited members, resolver `IsGetOnly`; `git log --grep '#222'`)
+- **Tests (12 new, 3 moved):** `NetReadOnlyPropertyDiagnosticsTests` (fast, 8: one row per fact source, the controls, native C++, LSP) + `NetReadOnlyPropertyExecutionTests` (Integration, 4: 6 programs x CLI on 4 targets / `--optimize` / `CompileProjectFiles` with resolution armed / Release .blproj; `Change(l.Count)` and `Change(s.Length)` on C# / C++ / MSIL x 3 entry points; a reads control that runs Node, so the JS roster is now 129 = master 128 + 1). MOVED: `PropertyAccessExecutionTests` `ArgumentExceptionMessageWrite_…`, `N1_…`, `N2_…` are positive (`…_Task222`). Mutants M1-M5 (no String row, `Year` unmarked, no exception inheritance, `IsGetOnly` false, ByRef copy-in removed) each killed by their own named cases (fixture headers).
+- **Gates (Linux):** fast 0 failed / 12,753 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 12, `PropertyAccess` 81, `PropertyByRefCopyOut` 16, `Exception` 160 (+1 skipped), `Bcl` 165 (+3), `NetType` 77 (+1), `Net` 703 (+32), `JsExecutionTierRoster` 5. Full suite NOT run.
+- ⛔ **Gaps, NO test pins them** (fixture headers): `With l : .Count = 5` is refused with the wrong message (pre-existing); a member with unknown settability stays permissive (spec §6.3: `DateTimeOffset.Year` is accepted, and with no resolver, as in the LSP, a metadata member is too); `Change(l.Capacity)` / `Change(a.Message)` are refused as `Object` (pre-existing); the C++ `.blproj` prints the code twice (#223).
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #220 FIXED — the built-in `Exception`'s `Message` / `StackTrace` / `InnerException` are ReadOnly at their `SymbolTable` declaration, so a write is BC30526 through #178's `CheckPropertyWrite` (vbc's message) and a ByRef `ex.Message` is copied in, never back (#209; was C# CS0200 / MSIL MissingField / C++ not compiling, now vbc's answer on all three; `git log --grep '#220'`)
-- **Tests (7 new, 1 moved):** `PropertyAccessDiagnosticsTests` F1-F6 (fast; F1 is the moved #220 pin, F6 the controls), `PropertyByRefCopyOutExecutionTests.AnExceptionsMessage_…` (C# / C++ / MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster still 127), `PropertyAccessExecutionTests.…_Against222` (a .NET exception CLASS, `ArgumentException`, is still accepted: #222). Mutants: no Message flag -> F1 / F4 / F5 / P06e red, no StackTrace -> F2, no InnerException -> F3.
+- **Tests (7 new, 1 moved):** `PropertyAccessDiagnosticsTests` F1-F6 (fast; F1 is the moved #220 pin, F6 the controls), `PropertyByRefCopyOutExecutionTests.AnExceptionsMessage_…` (C# / C++ / MSIL x CLI / `--optimize` / `CompileProjectFiles`; JS roster still 127), `PropertyAccessExecutionTests.…_Against222` (a .NET exception CLASS, `ArgumentException`, was still accepted: #222, which FIXED it, so that pin is positive now). Mutants: no Message flag -> F1 / F4 / F5 / P06e red, no StackTrace -> F2, no InnerException -> F3.
 - **Gates (Linux):** fast 0 failed / 12,738 passed / 94 skipped; one filter each, 0 failed: `PropertyAccess` 80, `Exception` 145 (+1 skipped), `TryCatch` 20 (+1 skipped), `UserException` 20, `PropertyByRefCopyOut` 16, `JsExecutionTierRoster` 5. Byte compare (1,095 programs x 5 backends x CLI / `-O`): 0 of 10,950 cells differ, 0 rc changes, 0 verifier fires. Full suite NOT run.
 
 ---
@@ -6810,7 +6817,7 @@ single new failure against the 170-name baseline.
       applied to one more member the resolver's accessor metadata does not reach). **FIXED
       2026-10-07** — the built-in `Exception`'s hand-built `Message` / `StackTrace` /
       `InnerException` are ReadOnly in `SymbolTable`; see the #220 section at the top. A .NET
-      exception CLASS (`ArgumentException`) still accepts the write: that half is #222.
+      exception CLASS (`ArgumentException`) still accepted the write: that half was #222 (FIXED 2026-10-07, below).
     - **#221** — a bare `For P = …` over a ReadWrite property is accepted and DRIVES it, same as
       before this fix; VB itself refuses every property here (BC30039, a different code than
       either of #178's own two).
@@ -6820,6 +6827,11 @@ single new failure against the 170-name baseline.
       `1` (a List is a real object, so the write is accepted and simply ignored). Since #220,
       also `a.Message = x` on a .NET exception CLASS (`Dim a As ArgumentException`): it does not
       bind the built-in `Exception` symbol #220 marked (`ArgumentExceptionMessageWrite_…_Against222`).
+      **FIXED 2026-10-07** — see the #222 section at the top: every one of those writes is BC30526 on
+      every backend now, from a recorded settability fact (a hand-built table, a `NativeBclSurface` row,
+      an exception class inheriting #220's members, or the resolver's `IsGetOnly`), and a ReadOnly .NET
+      property passed ByRef is copied in. The three pins are positive (`…_Task222`): `N1_…` / `N2_…` now
+      stop at the front end instead of running on JavaScript.
     - **#223** — the native C++ `.blproj` build's own error text DUPLICATES the code
       (`error BC30526: BC30526: Property 'P' is 'ReadOnly'.`) — BasicLang's message already
       starts with the code and the C++ project builder's formatter prepends it again.

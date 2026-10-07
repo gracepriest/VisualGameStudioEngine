@@ -48,8 +48,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect). Each is outside what #209 fixes, and is the same before and after it:
 //    * JavaScript refuses every ByRef parameter by design (BL7002), so no probe runs there; `JavaScript_StillRefusesTheByRefParameter_BL7002` is the one row that says so.
 //    * A `Property` inside a `Structure` does not parse ("Expected member name but found Property", P07), so a struct's property cannot be passed ByRef at all.
-//    * `sb.Length` and every other .NET property are unchanged: a native-BCL-surface member has no property symbol and no settability, so it stays CS0206 on C#, refused on MSIL and a type-map failure
-//      on C++ (P10).
+//    * A .NET property is NOT a copy-out argument unless it is KNOWN ReadOnly. #222 made `l.Count` and `s.Length` ones (copied in, never written
+//      back: `NetReadOnlyPropertyExecutionTests` runs `Change(l.Count)` and `Change(s.Length)`); every other .NET property is unchanged: a native-BCL-surface member has no property symbol, so the settable
+//      `sb.Length` stays CS0206 on C#, refused on MSIL and a type-map failure on C++ (P10), and `Change(l.Capacity)` / `Change(a.Message)` are refused ("cannot convert from 'Object'").
 //    * MSIL refuses `obj.Field` passed ByRef, a field READ through a receiver, by name (P11): "an expression's value lives in a temporary". That is a FIELD, and it predates #209
 //      (`ConstructorByRefExecutionTests.MsilRefusesAFieldRead_...` pins the same refusal). The control below therefore runs P11 on C# and C++ only and its bare-field twin, C11m, on all three.
 //    * C# CS1620 when an INSTANCE Function's result is used in an expression (`c.F(b.P) + 1`, Q02): the pre-existing inline instance-call `ref` defect (#232 family). A module Function is fine (P08).
