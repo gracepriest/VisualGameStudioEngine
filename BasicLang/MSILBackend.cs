@@ -1558,8 +1558,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 GenerateConstructor(irClass, ctor);
             }
 
-            // Default constructor if none defined
-            if (irClass.Constructors.Count == 0)
+            // Default constructor if none defined. #230: a Structure ALWAYS has it — VB's
+            // parameterless constructor, which `New P()` means beside any declared one (VB forbids
+            // declaring it, BC30629) — so `newobj P::.ctor()` keeps resolving.
+            if (irClass.Constructors.Count == 0 || irClass.IsStruct)
             {
                 GenerateDefaultCtorForClass(irClass);
             }
@@ -1926,7 +1928,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var firstInstruction = ctor.Implementation?.EntryBlock?.Instructions.FirstOrDefault(i => i != null);
             _pendingBaseCall = null;
             _baseCallWrittenFirst = null;
-            if (baseCall == null || ReferenceEquals(firstInstruction, baseCall))
+            if (irClass.IsStruct)
+            {
+                // #230: a Structure's constructor chains to nothing, as its default one does
+                // (GenerateDefaultCtorForClass): `this` is a pointer to storage `newobj` has
+                // already zeroed, and a Structure has no base and no instance field initializer
+                // (BC31049).
+            }
+            else if (baseCall == null || ReferenceEquals(firstInstruction, baseCall))
             {
                 WriteLine("    ldarg.0");
                 EmitBaseConstructorCall(baseClass, irClass.BaseClass, baseCall?.Args ?? Array.Empty<IRValue>());
@@ -3705,6 +3714,11 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             if (_currentMethodIsInstance && IsSelfReference(name))
             {
                 EmitLdarg(0);
+                // #230: in a Structure's member that slot is a MANAGED POINTER to the value. `Me`
+                // read as a value (`Dim c As P = Me`, an argument, a Return) is the value itself; a
+                // member acting on Me takes the pointer through EmitStructMemberReceiver instead.
+                if (_currentClassOwner is { IsStruct: true })
+                    WriteLine($"    ldobj {IlTypeToken(_currentClassOwner.Name)}");
                 return;
             }
 
@@ -4320,7 +4334,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// properties.</para>
         /// </summary>
         private void EmitPropertyGet(IRClass owner, IRProperty prop) =>
-            EmitAccessorGet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
+            EmitAccessorGet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic,
+                onValueType: owner.IsStruct);
 
         /// <summary>
         /// A property WRITE as its accessor call. The receiver (for an instance property) and then
@@ -4355,7 +4370,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            EmitAccessorSet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic);
+            EmitAccessorSet(SanitizeName(owner.Name), IlTypeSpec(prop.Type), RawName(prop.Name), prop.IsStatic,
+                onValueType: owner.IsStruct);
         }
 
         /// <summary>
@@ -4365,7 +4381,8 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// ilasm does not check a member reference against it, so a mismatch assembles and then
         /// fails with MissingMethodException.
         /// </summary>
-        private void EmitAccessorGet(string token, string propType, string rawName, bool isStatic)
+        private void EmitAccessorGet(string token, string propType, string rawName, bool isStatic,
+            bool onValueType = false)
         {
             var getter = $"get_{rawName}";
 
@@ -4376,13 +4393,16 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            WriteLine($"    callvirt instance {propType} {token}::{getter}()");
+            // #230: a Structure's accessor is called on the pointer its receiver pushed
+            // (EmitStructMemberReceiver) — `call`, as for any value type's member.
+            WriteLine($"    {(onValueType ? "call" : "callvirt")} instance {propType} {token}::{getter}()");
             _currentStack--;   // the receiver
             _currentStack++;   // the value
         }
 
         /// <summary>The setter half of <see cref="EmitAccessorGet"/>.</summary>
-        private void EmitAccessorSet(string token, string propType, string rawName, bool isStatic)
+        private void EmitAccessorSet(string token, string propType, string rawName, bool isStatic,
+            bool onValueType = false)
         {
             var setter = $"set_{rawName}";
 
@@ -4393,7 +4413,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
-            WriteLine($"    callvirt instance void {token}::{setter}({propType})");
+            WriteLine($"    {(onValueType ? "call" : "callvirt")} instance void {token}::{setter}({propType})");
             _currentStack -= 2;
         }
 
@@ -5354,7 +5374,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (isSelfCall)
             {
-                WriteLine($"    callvirt instance {returnType} {SanitizeName(selfCallOwner.Name)}::{sanitizedName}({paramTypes})");
+                // #230: a Structure's member is called, never callvirt'd — `this` is a pointer to
+                // the value, and a value type's method is not virtual.
+                var selfCall = selfCallOwner.IsStruct ? "call" : "callvirt";
+                WriteLine($"    {selfCall} instance {returnType} {SanitizeName(selfCallOwner.Name)}::{sanitizedName}({paramTypes})");
                 _currentStack--;   // the receiver
             }
             else
@@ -8502,8 +8525,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (TryEmitDateTimeMethodCall(methodCall, hasReturn)) return;
 
-            // Load 'this' reference (the object on which the method is called)
-            EmitLoadValue(methodCall.Object);
+            // Load 'this' reference (the object on which the method is called). #230: a method a
+            // Structure declares runs on the storage it is called through — its address.
+            var structMemberCall = DeclaresInstanceMethod(methodCall.Object?.Type, methodCall.MethodName);
+            if (structMemberCall)
+                EmitStructMemberReceiver(methodCall.Object);
+            else
+                EmitLoadValue(methodCall.Object);
 
             // ⛔ A `valuetype` receiver (System.Decimal, task #129) is not a reference: `this` for
             // a method of a value type is a MANAGED POINTER to the value. `callvirt` on the raw
@@ -8514,7 +8542,7 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             // or Double receiver has the same gap and is NOT changed here — its IL would move for
             // programs that have nothing to do with Decimal.)
             var valueTypeReceiver = IsValueTypeSpec(methodCall.Object?.Type);
-            if (valueTypeReceiver)
+            if (valueTypeReceiver && !structMemberCall)
             {
                 var receiverToken = IlTypeToken(methodCall.Object.Type);
                 WriteLine($"    box {receiverToken}");
@@ -8745,6 +8773,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         _currentStack--;
                     }
                 }
+                else if (readPropOwner.IsStruct)
+                {
+                    EmitStructMemberReceiver(fieldAccess.Object);   // #230
+                }
                 else
                 {
                     EmitLoadValue(fieldAccess.Object);
@@ -8910,6 +8942,10 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                         _currentStack--;
                     }
                 }
+                else if (storePropOwner.IsStruct)
+                {
+                    EmitStructMemberReceiver(fieldStore.Object);   // #230
+                }
                 else
                 {
                     EmitLoadValue(fieldStore.Object);
@@ -8993,6 +9029,15 @@ namespace BasicLang.Compiler.CodeGen.MSIL
         /// returns false, having emitted nothing. See <see cref="EmitFieldStoreReceiver"/>.</summary>
         private bool TryEmitStructAddress(IRValue place)
         {
+            // #230: `Me` inside a Structure's own member — its slot already holds the pointer.
+            if (place is IRVariable { Name: { } self } && IsSelfReference(self)
+                && _currentMethodIsInstance && _currentClassOwner is { IsStruct: true })
+            {
+                EmitLdarg(0);
+                _currentStack++;
+                return true;
+            }
+
             if (place is IRVariable { Name: { } name } && TryResolveByRefTarget(name, out var target))
             {
                 EmitByRefTarget(target);
@@ -9024,6 +9069,38 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             return false;
         }
+
+        /// <summary>
+        /// ⭐ #230: the receiver of a Structure's OWN member — a method it declares, or a property
+        /// accessor. <c>this</c> of a value type's instance member is a MANAGED POINTER, and VB runs
+        /// the member on the storage it is reached through: <c>s.Bump()</c> changes <c>s</c>,
+        /// <c>o.S.Bump()</c> the field, <c>a(0).Bump()</c> the element, <c>Me</c> stays Me. So the
+        /// receiver is that storage's ADDRESS (<see cref="TryEmitStructAddress"/>). A receiver that
+        /// is not storage (<c>Make().Bump()</c>, a property's value) is boxed and unboxed into a
+        /// pointer to a COPY — VB's own temporary for it, whose change nobody can see.
+        ///
+        /// <para>⛔ The box/unbox pair alone — what every value-type receiver got before — made
+        /// every Structure method act on a copy: <c>s.Bump()</c> left <c>s</c> unchanged.</para>
+        /// </summary>
+        private void EmitStructMemberReceiver(IRValue receiver)
+        {
+            if (TryEmitStructAddress(receiver)) return;
+
+            EmitLoadValue(receiver);
+            var token = IlTypeToken(receiver.Type);
+            WriteLine($"    box {token}");
+            WriteLine($"    unbox {token}");
+        }
+
+        /// <summary>#230: whether <paramref name="receiverType"/> is a Structure this module declares
+        /// with an INSTANCE method named <paramref name="methodName"/> — a call
+        /// <see cref="EmitStructMemberReceiver"/> takes the receiver of. Anything a Structure only
+        /// inherits (<c>ToString</c>, <c>Equals</c>) keeps the path it always had.</summary>
+        private bool DeclaresInstanceMethod(TypeInfo receiverType, string methodName) =>
+            receiverType?.Name != null && receiverType.Kind != TypeKind.Array
+            && TryFindClass(receiverType.Name, out var cls) && cls.IsStruct
+            && (cls.Methods ?? new List<IRMethod>()).Any(m => m != null && !m.IsStatic
+                && string.Equals(m.Name, methodName, StringComparison.OrdinalIgnoreCase));
 
         public override void Visit(IRTupleElement tupleElement)
         {

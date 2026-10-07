@@ -2868,6 +2868,19 @@ namespace BasicLang.Compiler.IR
 
         public void Visit(StructureNode node)
         {
+            // #230: a Structure that declares methods, properties, constructors or constants is
+            // lowered by the CLASS builder — the same members, the same IRMethod / IRProperty /
+            // IRConstructor / TypeInitializer shapes, the same bare-member and `Me` lowering — and
+            // then flagged IsStruct, which is what every backend reads to emit a value type.
+            // Nothing in the member build reads IsStruct, so it is set afterwards. A fields-only
+            // Structure keeps the path below, unchanged.
+            if (node.NonFieldMembers.Count > 0)
+            {
+                Visit(node.AsClassMembers());
+                _module.Classes[node.Name].IsStruct = true;
+                return;
+            }
+
             // Structures lower to an IRClass flagged IsStruct: backends emit value types
             var irStruct = new IRClass(node.Name)
             {
@@ -3477,11 +3490,25 @@ namespace BasicLang.Compiler.IR
             _expressionResult = tupleCall;
         }
 
+        /// <summary>
+        /// The IR type an <c>Operator</c>'s parameter or return type names: stamped Class by NAME,
+        /// as it always was — except (#230) a Structure, which keeps its own type, because it is a
+        /// VALUE on every backend. Stamped Class, C++ declared `std::shared_ptr&lt;V2&gt;` for an
+        /// operator of a Structure V2 and its `Return r` of a V2 value did not compile.
+        /// </summary>
+        private TypeInfo OperatorOperandType(string name)
+        {
+            var typeName = name ?? "Object";
+            return _semanticAnalyzer.LookupType(typeName) is { Kind: TypeKind.Structure } structure
+                ? structure
+                : new TypeInfo(typeName, TypeKind.Class);
+        }
+
         public void Visit(OperatorDeclarationNode node)
         {
             // Generate operator as a static method with special naming
             var opMethodName = $"op_{GetOperatorMethodName(node.OperatorSymbol)}";
-            var returnType = new TypeInfo(node.ReturnType?.Name ?? "Object", TypeKind.Class);
+            var returnType = OperatorOperandType(node.ReturnType?.Name);
 
             // Create the function with class-qualified name for the module
             var funcName = _currentClassName != null
@@ -3508,7 +3535,7 @@ namespace BasicLang.Compiler.IR
             // Add parameters
             foreach (var param in node.Parameters)
             {
-                var paramType = new TypeInfo(param.Type?.Name ?? "Object", TypeKind.Class);
+                var paramType = OperatorOperandType(param.Type?.Name);
                 var paramVar = new IRVariable(param.Name, paramType) { IsParameter = true };
                 opFunc.Parameters.Add(paramVar);
                 PushVariableVersion(param.Name, paramVar);

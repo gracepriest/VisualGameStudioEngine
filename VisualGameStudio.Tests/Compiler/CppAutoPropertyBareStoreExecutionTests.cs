@@ -45,7 +45,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //
 //  ⛔ KNOWN GAPS — listed, deliberately NOT tested (asserting one would pin a defect). Each is outside what #218 / #254 fix, and is the same before and after:
 //    * A member named like its TYPE does not compile on C++ (A22: `Property Box As Box` beside `Class Box`): the accessor `std::shared_ptr<Box> get_Box()` is emitted after the member `Box`, which then names the member.
-//    * A `Property` inside a `Structure` (A23) or a `Module` (A24) is refused by the PARSER on every backend ("Expected member name but found Property"), so neither can be stored to bare.
+//    * A `Property` inside a `Structure` (A23) or a `Module` (A24) is refused by the PARSER on every backend ("Expected member name but found Property"), so neither can be stored to bare. (#230: a Structure's Property parses now, and `StructureMembersExecutionTests` runs a Structure method that writes its own GET/SET property bare, `V = V + 1`; a bare store to a plain AUTO-property of a Structure is not tested there; a Module's is still refused.)
 //    * Pre-existing and not C++: MSIL throws a NullReferenceException on a String property in a loop (A12), and does not run a generic class's `As T` property (A20); MSIL prints 100 for 8 on an inherited Shared FIELD of a
 //      base with a type initializer (A30, #270's family); JavaScript fails on a property named after a .NET type and a Shared access through it (A22, A25, A28: `Cannot read properties of null (reading 'Now')`);
 //      C# is CS0176 on A25 (a Get/Set property named like its type, then a Shared member through the type).

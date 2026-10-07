@@ -46,7 +46,7 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * A bare `MyBase.New()` (no arguments) inside a Shared Sub New is not detected: the parse records no arguments either way, so only `MyBase.New(args)` is BC30043.
 //    * #295: C++ spells a ByRef or indexed Shared field of a class WITHOUT a Shared Sub New as `C->F` (a compile failure, before and after #208), and JavaScript / MSIL refuse a Shared field passed ByRef.
 //    * #270: MSIL's inherited Shared write above.
-//    * A Structure cannot declare a Shared member at all (the parser stops at `Public Shared Count`), so a Structure has no type initializer and the C++ Structure-constructor guard cannot be reached today.
+//    * A Structure could not declare a Shared member at all (the parser stopped at `Public Shared Count`), so a Structure had no type initializer and the C++ Structure-constructor guard could not be reached. (#230: it can now, and `StructureMembersExecutionTests` runs a `Shared Sub New` in a Structure on C#, C++ and MSIL; the guard itself is not asserted here.)
 // ================================================================================================
 
 /// <summary>#208 — a `Shared Sub New` runs as the type initializer, on first use, on C#, C++, JavaScript and MSIL.</summary>

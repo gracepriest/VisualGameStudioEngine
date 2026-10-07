@@ -37,9 +37,12 @@ namespace VisualGameStudio.Tests.Compiler;
 /// and lowers to a static field through this same helper. Referencing that named constant from
 /// another initializer (<c>= K + 1</c>) is still refused, because the folder substitutes no named
 /// constants — a SHARED limit rather than a class one, since module scope refuses the identical
-/// shape. A <c>Structure</c> field initializer still does not parse ("Expected member name but
-/// found Assignment"), which keeps the structure call site unreachable for initializers even
-/// though it is wired up.</para>
+/// shape. A <c>Structure</c> field initializer did not parse ("Expected member name but
+/// found Assignment"), which kept the structure call site unreachable for initializers even
+/// though it is wired up. (#230: it parses now. An INSTANCE initializer is refused BC31049, as vbc
+/// does (<c>StructureMembersDiagnosticsTests</c> pins the code); a Shared one is accepted and
+/// <c>StructureMembersExecutionTests</c> runs `Public Shared K As Integer = 30`. Whether that one
+/// takes this fold call site was not measured.)</para>
 /// </summary>
 [TestFixture]
 public class FieldInitializerFoldTests

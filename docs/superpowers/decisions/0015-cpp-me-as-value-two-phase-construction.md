@@ -75,7 +75,8 @@ and at which sites?
   assignment, a field store, a collection add, `TryCast`/`DirectCast`, a concatenation or
   `ToString` argument, the receiver of an extension or free function.
 - In a Structure the same switch yields `*this`. **DORMANT** (amendment): a Structure cannot
-  declare a method (#230); the clause is the rule for #230.
+  declare a method (#230); the clause is the rule for #230. **LIVE since #230** (2026-10-07): a
+  Structure declares methods and `Me` there is `(*this)`.
 
 ### E11 (amendment, confirmed)
 
@@ -101,7 +102,8 @@ divergence fix, recorded as a behaviour change.
 3. Instance field initializers are constants and sized arrays only. Step 2 is still load-bearing:
    a virtual call from a base `ctor_` must see a derived field at its .NET default, so
    initializers run in `ctor_`, never in the tag constructor.
-4. Structures have no methods (#230) — D3's `*this` clause is dormant.
+4. Structures have no methods (#230) — D3's `*this` clause is dormant. **Superseded by #230
+   (2026-10-07):** a Structure declares methods and the clause is live.
 5. `getX() const` is not a live trigger: the trigger is a `const` member function whose body
    renders `IRVariable "Me"` as a value. No speculative `const T*` overload.
 

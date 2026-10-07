@@ -244,8 +244,12 @@ instead of an assemble-time or run-time surprise.
     (declares-while-captured) refusals are now backstops, reachable only from a shape #174 does
     not cover (a sibling-block hiding, a `For Each`/`Catch` variable inside a lambda) or from IR
     that bypasses the front end's own gate. #217 (lambda parameters) is untouched.
-  - **BC36638 still waits on #230** — unreachable today (`ParseStructure` accepts only fields, so
-    no Structure method can hold a lambda at all); #174 deliberately added no dead code for it.
+  - **BC36638 was waiting on #230 — now done by #230** (it was unreachable: `ParseStructure` accepted
+    only fields, so no Structure method could hold a lambda at all; #174 deliberately added no dead
+    code for it). A Structure now declares methods, and `SemanticAnalyzer` reports BC36638 for a
+    lambda in one that uses `Me` or an instance member, before any backend runs. D6's refusal in
+    `ClosureLowering` (`Me` captured in a Structure method) stays as the MSIL backstop, reachable
+    only from IR that bypasses the front end's own gate.
 - **L15 is a recorded, all-backend divergence from VB.** BasicLang binds a loop-body `Dim` at
   FUNCTION level on every backend (C# and JavaScript print 6|6|6; VB prints 1|3|6). #155
   reproduces the oracle, not VB, so MSIL agrees with C#/JS. Fixing it is a FRONT-END task
