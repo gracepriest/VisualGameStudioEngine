@@ -17,6 +17,12 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #221 FIXED — a `For` / `For Each` control variable bound to a PROPERTY is VB's BC30039 alone ("Loop control variable cannot be a property or a late-bound indexed array."), by the BOUND symbol: `For F` in `Function F` and `For P` in P's own Get still drive #219's return variable (`SemanticAnalyzer.RefuseLoopControlProperty`; `git log --grep '#221'`)
+- **Tests (7 new, 3 moved):** `LoopControlPropertyDiagnosticsTests` (fast, analyzer + `CompileProjectFiles`); MOVED: the `PropertyAccessExecutionTests` #221 pin and `PropertyAccessDiagnosticsTests.Write_BareForLoop_OverAReadOnlyProperty_IsRefused` (BC30526) are refusal rows, `ForEach…G10` asserts BC30039. Mutants M1-M3b killed (fixture header). Byte compare: 0 diffs outside the property probes. **Gates (Linux):** fast 0 failed / 12,743 passed / 94 skipped; one filter each, 0 failed: `PropertyAccess` 73, `ForLoop` 19, `ForEach` 239, `ImplicitReturnVariable` 14, `NameBinding` 316, `JsExecutionTierRoster` 5 (`For` alone also matches every Form test, so it ran as `ForLoop` + `ForEach`). Full suite NOT run.
+- ⛔ **Gaps, NO test pins them:** `For Me.P` / `For o.x` do not parse (vbc: BC30039 / runs); `For Each F In xs` in `Function F` declares a new `F` and returns 0 (vbc 8), and `For Each P` in P's own Get is refused (vbc runs it) — the For Each site never asks `AsReturnVariable`.
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #222 TESTED — a write to a .NET ReadOnly property (`s.Length = 3`, `l.Count = 5`, `t.Year = 1`, `a.Message = "x"` on an `ArgumentException`, `Environment.ProcessorCount = 1`) is vbc's BC30526 on every backend, and `Change(l.Count)` / `Change(s.Length)` copy in, never back (`SemanticAnalyzer.ReadOnlyNetPropertyName`: `BclReadOnlyProperties`, `NativeBclSurface` `readOnly` rows, an exception class's inherited members, resolver `IsGetOnly`; `git log --grep '#222'`)
 - **Tests (12 new, 3 moved):** `NetReadOnlyPropertyDiagnosticsTests` (fast, 8: one row per fact source, the controls, native C++, LSP) + `NetReadOnlyPropertyExecutionTests` (Integration, 4: 6 programs x CLI on 4 targets / `--optimize` / `CompileProjectFiles` with resolution armed / Release .blproj; `Change(l.Count)` and `Change(s.Length)` on C# / C++ / MSIL x 3 entry points; a reads control that runs Node, so the JS roster is now 129 = master 128 + 1). MOVED: `PropertyAccessExecutionTests` `ArgumentExceptionMessageWrite_…`, `N1_…`, `N2_…` are positive (`…_Task222`). Mutants M1-M5 (no String row, `Year` unmarked, no exception inheritance, `IsGetOnly` false, ByRef copy-in removed) each killed by their own named cases (fixture headers).
 - **Gates (Linux):** fast 0 failed / 12,753 passed / 94 skipped; Integration, one filter each, 0 failed: the fixtures 12, `PropertyAccess` 81, `PropertyByRefCopyOut` 16, `Exception` 160 (+1 skipped), `Bcl` 165 (+3), `NetType` 77 (+1), `Net` 703 (+32), `JsExecutionTierRoster` 5. Full suite NOT run.
@@ -6818,9 +6824,10 @@ single new failure against the 170-name baseline.
       2026-10-07** — the built-in `Exception`'s hand-built `Message` / `StackTrace` /
       `InnerException` are ReadOnly in `SymbolTable`; see the #220 section at the top. A .NET
       exception CLASS (`ArgumentException`) still accepted the write: that half was #222 (FIXED 2026-10-07, below).
-    - **#221** — a bare `For P = …` over a ReadWrite property is accepted and DRIVES it, same as
-      before this fix; VB itself refuses every property here (BC30039, a different code than
-      either of #178's own two).
+    - **#221** — ✅ FIXED 2026-10-07 (`git log --grep '#221'`): a bare `For P = …` over a ReadWrite
+      property was accepted and the loop DROVE it; a `For` / `For Each` control variable bound to ANY
+      property is now VB's BC30039 alone (a ReadOnly one was BC30526, a WriteOnly one BC30524)
+      — `LoopControlPropertyDiagnosticsTests`.
     - **#222** — N1/N2 (a .NET ReadOnly property, `String.Length`/`List(Of T).Count`) are not
       refused either, same rule-5 reason as #220; on JavaScript N1 throws (a JS string is a
       primitive, not extensible — `TypeError: Cannot create property 'Length'`) and N2 prints

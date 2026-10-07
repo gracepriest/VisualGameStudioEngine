@@ -79,7 +79,9 @@ or an own or inherited class field, read bare) **reuses** that variable:
   control variable. Use a variable, or declare a new one with 'For Each x As
   <type>'"). Before this ruling each was silently SHADOWED — the loop declared a
   same-named variable and, after `Next`, the name meant the constant/property/event
-  again, with no diagnostic either way.
+  again, with no diagnostic either way. (Amended by #221: a PROPERTY is now VB's own
+  `BC30039` — "Loop control variable cannot be a property or a late-bound indexed
+  array." — the counted `For`'s refusal too; a constant and an event keep this message.)
 - A **type or method** name still **declares** a new variable — unchanged, and for
   different reasons each:
   - A type is VB's own rule: Roslyn declares a fresh local when a name binds only to a

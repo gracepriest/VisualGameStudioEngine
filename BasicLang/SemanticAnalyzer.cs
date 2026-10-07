@@ -10103,12 +10103,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     ?? _typeManager.IntegerType;
             }
 
-            // Task #178: `For P = …` with no `As` DRIVES whatever P already denotes — IRBuilder
-            // reuses existing storage, a class property included (IsCurrentClassMember) — so the
-            // loop STORES into P and reads it back every iteration, like `P += 1`. Judged at the
-            // one write site, so a ReadOnly P is BC30526 and a WriteOnly one BC30524. (VB refuses
-            // every property here, BC30039; BasicLang drives a ReadWrite one, as it did before.)
-            // Asked BEFORE the loop scope exists, which is where the IR builder resolves it too.
+            // `For P = …` with no `As` DRIVES whatever P already denotes — IRBuilder reuses existing
+            // storage — so the loop STORES into P and reads it back every iteration, like `P += 1`.
+            // A name still bound to a PROPERTY is VB's BC30039 (#221, RefuseLoopControlProperty);
+            // in its own Get it binds to the Get's implicit return variable instead (#219), a Local
+            // the loop drives. Asked BEFORE the loop scope exists, which is where the IR builder
+            // resolves it too.
             //
             // ⭐ #124 (ADR-0013 D3/D6): the same question, asked once, is also RECORDED — the loop's
             // ControlReference is bound at the one recording point (SetNodeSymbol) to whatever the
@@ -10124,7 +10124,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 var controlReference = new IdentifierExpressionNode(node.Line, node.Column) { Name = node.Variable };
                 if (existing.Kind == SymbolKind.Property)
-                    VisitWriteTarget(controlReference, alsoRead: true);   // task #178's check; records the binding too
+                    RefuseLoopControlProperty(controlReference);   // #221: BC30039; records the binding too
                 else
                     SetNodeSymbol(controlReference, AsReturnVariable(controlReference, existing));   // #219: `For F = …` in F
                 node.ControlReference = controlReference;
@@ -10393,10 +10393,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// <item><b>a variable</b> — a local, a parameter (by value or ByRef), a module variable
         /// (this module's, another's, an imported one's) or a field of the enclosing class or a
         /// base, read bare — is REUSED;</item>
-        /// <item><b>a constant, a property or an event</b> is refused, naming what it is. Each used
-        /// to be SHADOWED without a word: the loop declared a same-named variable, and after
-        /// <c>Next</c> the name meant the constant again. VB refuses them too (BC30039 for a
-        /// property);</item>
+        /// <item><b>a constant, a property or an event</b> is refused. Each used to be SHADOWED
+        /// without a word: the loop declared a same-named variable, and after <c>Next</c> the name
+        /// meant the constant again. A property is VB's own BC30039 (#221,
+        /// <see cref="LoopControlPropertyMessage"/>, the counted <c>For</c>'s refusal too); a
+        /// constant or an event is named in BasicLang's own message;</item>
         /// <item><b>anything else</b> — a type, a module, a namespace, a METHOD — declares a new
         /// variable, as before. For a type that is VB's own rule (Roslyn declares a fresh local
         /// when the name binds only to a type). For a method it is a deliberate departure from VB:
@@ -10426,6 +10427,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             var kind = ClassifyForEachControlName(symbol, out var what);
             if (kind == ForEachControlName.DeclaresNew) return null;
+            if (kind == ForEachControlName.Refused && symbol.Kind == SymbolKind.Property)
+            {
+                VbCodedError("BC30039", LoopControlPropertyMessage, node);   // #221
+                return null;
+            }
             if (kind == ForEachControlName.Refused)
             {
                 Error($"'{node.Variable}' is {what} and cannot be used as a For Each control variable. " +
@@ -10445,6 +10451,41 @@ namespace BasicLang.Compiler.SemanticAnalysis
         }
 
         private enum ForEachControlName { Reused, Refused, DeclaresNew }
+
+        /// <summary>vbc's own text for BC30039 (#221), measured.</summary>
+        private const string LoopControlPropertyMessage =
+            "Loop control variable cannot be a property or a late-bound indexed array.";
+
+        /// <summary>
+        /// ⭐ #221 — VB's BC30039: a counted <c>For</c> with no <c>As</c> whose control name binds
+        /// to a PROPERTY — instance or Shared, auto or Get/Set, ReadOnly or WriteOnly, own or
+        /// inherited — is refused (the <c>For Each</c> arm is <see cref="ExistingForEachControlVariable"/>).
+        /// Before, a ReadWrite one was DRIVEN, a ReadOnly one was BC30526 and a WriteOnly one
+        /// BC30524; vbc reports BC30039 alone for all three (measured), so neither is judged here.
+        ///
+        /// <para>Decided by the symbol the name BINDS to, never its spelling: the name is visited
+        /// as the pure write target (no BC30524), so in its own <c>Get</c> it becomes the Get's
+        /// implicit return variable (#219, <see cref="AsReturnVariable"/>) — a Local the loop
+        /// drives, as vbc does. <c>For F = …</c> in <c>Function F</c> never reaches here (a
+        /// Function symbol, bound by the caller), nor does a field, a local or a parameter spelled
+        /// like a property, which lookup finds first.</para>
+        /// </summary>
+        private void RefuseLoopControlProperty(IdentifierExpressionNode controlReference)
+        {
+            var outer = _pureWriteTarget;
+            _pureWriteTarget = controlReference;
+            try
+            {
+                controlReference.Accept(this);
+            }
+            finally
+            {
+                _pureWriteTarget = outer;
+            }
+
+            if (BoundProperty(controlReference) != null)
+                VbCodedError("BC30039", LoopControlPropertyMessage, controlReference);
+        }
 
         /// <summary>
         /// What a <c>For Each</c> control name that RESOLVED does — see
@@ -10467,8 +10508,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case SymbolKind.Parameter:
                     return ForEachControlName.Reused;
                 case SymbolKind.Property:
-                    what = "a property";
-                    return ForEachControlName.Refused;
+                    return ForEachControlName.Refused;   // #221: VB's BC30039, its own message
                 case SymbolKind.Event:
                     what = "an event";
                     return ForEachControlName.Refused;
@@ -10743,13 +10783,11 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// the bare-name form ADR-0007 lowers to the qualified one, <c>Me.</c> / <c>MyBase.</c> /
         /// <c>obj.</c> / <c>Class.</c>, a <c>With</c> block's <c>.P = v</c>, and <c>ReDim</c>, which
         /// the parser lowers to an assignment;</item>
-        /// <item><see cref="Visit(UnaryExpressionNode)"/> — <c>++</c> / <c>--</c>;</item>
-        /// <item><see cref="Visit(ForLoopNode)"/> — <c>For P = …</c> with no <c>As</c>, which
-        /// drives an existing <c>P</c>, a class property included (<c>For o.P =</c> does not
-        /// parse; <c>For P As T</c> declares a fresh local).</item>
+        /// <item><see cref="Visit(UnaryExpressionNode)"/> — <c>++</c> / <c>--</c>.</item>
         /// </list>
-        /// Nothing else in the language stores into an EXISTING property: a <c>For Each</c>
-        /// refuses a property as its control variable already (ADR-0009), there are no object
+        /// Nothing else in the language stores into an EXISTING property: a <c>For</c> or
+        /// <c>For Each</c> refuses a property as its control variable (VB's BC30039, #221,
+        /// <see cref="RefuseLoopControlProperty"/>; <c>For o.P =</c> does not parse), there are no object
         /// initializers and no parameterized properties, and a ByRef argument is not a write — VB
         /// passes a ReadOnly property's value and skips the write-back (#209: IRBuilder's
         /// <c>CopyOutPropertyArgument</c> lowers that copy-in / copy-out for every backend).

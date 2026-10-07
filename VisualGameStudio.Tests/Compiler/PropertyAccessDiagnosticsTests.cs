@@ -364,20 +364,9 @@ public class PropertyAccessDiagnosticsTests
         End Class
         """, "BC30526", "Arr", 4);
 
-    [Test]
-    public void Write_BareForLoop_OverAReadOnlyProperty_IsRefused() => AssertRefused("""
-        Class C
-            Public ReadOnly Property P As Integer
-                Get
-                    Return 1
-                End Get
-            End Property
-            Public Sub Loop3()
-                For P = 1 To 3
-                Next
-            End Sub
-        End Class
-        """, "BC30526", "P", 8);
+    // (`Write_BareForLoop_OverAReadOnlyProperty_IsRefused` stood here, BC30526. #221: a For control
+    // variable bound to ANY property is VB's BC30039 alone, so the row moved to
+    // LoopControlPropertyDiagnosticsTests.ACountedFor_OverAReadOnlyProperty_IsBC30039_NotBC30526.)
 
     // ====================================================================================
     // BC30524 — a read of a WriteOnly property.
