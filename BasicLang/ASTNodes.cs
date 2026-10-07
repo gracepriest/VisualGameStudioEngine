@@ -1492,7 +1492,7 @@ namespace BasicLang.Compiler.AST
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
 
-    public enum ExitKind { For, Do, While, Sub, Function }
+    public enum ExitKind { For, Do, While, Sub, Function, Property }
 
     public class ExitStatementNode : StatementNode
     {
