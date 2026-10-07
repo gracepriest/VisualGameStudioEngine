@@ -41,12 +41,13 @@ namespace VisualGameStudio.Tests.Compiler;
 //    C#/JS #229 E16, E20                      ⚠ FIXED (2026-10-07): a name with two `Dim`s in one function was ONE function-level variable (E20 on C# printed 50|2|2,
 //                                             vbc's is 50|1|2). The second declaration is its own IR local (`x_1`, ADR-0014 Amendment A-229): both print vbc's answer on every
 //                                             backend (moved pins, PerIterationLoopBodyDimExecutionTests E16_… / E20_…; SiblingDimSameNameExecutionTests).
-//    C#  #232   R3, and m3/h166_inline        a ByRef call INSIDE AN EXPRESSION loses `ref` (CS1620): `Console.WriteLine(Twice(a))`, or
-//                                             `Dim r = Bump(n) + 1`. ⚠ It is NOT lambda-specific and #232's title ("a ByRef parameter plus a lambda")
-//                                             names the wrong shape: the same program with NO lambda anywhere fails identically on 0f6d2ced and now
-//                                             (measured: `Function Twice(ByRef n) … Return copy * 2`, `Console.WriteLine(Twice(a))`), while
-//                                             `Dim r = Twice(a)` (the call is the whole right side of a Dim, with the same lambda in the callee) runs. The statement form
-//                                             inside a lambda is #166's and IS a row here (h166_byref*).
+//    C#  #232   R3, and m3/h166_inline        ⚠ FIXED (2026-10-07): a ByRef call INSIDE AN EXPRESSION lost `ref` (CS1620): `Console.WriteLine(Twice(a))`, or
+//                                             `Dim r = Bump(n) + 1`. It was NOT lambda-specific and #232's title ("a ByRef parameter plus a lambda") named the wrong
+//                                             shape: the same program with NO lambda anywhere failed identically (`Function Twice(ByRef n) … Return copy * 2`,
+//                                             `Console.WriteLine(Twice(a))`), while `Dim r = Twice(a)` ran. Both print vbc's answer on C# now (`8`; `102 101` and `205`): the
+//                                             inline call arms write `ref` through `WithRefModifier`. Moved pin: LambdaBoundaryDiagnosticsExecutionTests.R3_…_CSharpRuns8;
+//                                             ByRefCallInExpressionCSharpExecutionTests runs h166_inline's two halves (`ByRefCall_AsAnArgumentAndAnOperand`, `ByRefCall_InsideALambda`).
+//                                             The statement form inside a lambda is #166's and IS a row here (h166_byref*).
 //    C#  #182   j_foreach                     a local named `out` is not escaped: `string out = ""` is CS1001. j_foreach2 is the same program with the
 //                                             variable renamed and IS a row.
 //    all       e_meth, k_generic              BL-FAIL in the front end (`Private items As New List(Of Integer)` as a field; a generic Function called `Twice(Of Integer)(…)`) on every

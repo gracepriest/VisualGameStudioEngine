@@ -4350,7 +4350,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                                 call.Arguments.Select(a => EmitExpression(a, stack, true)).ToArray()) + ")";
                         }
 
-                        var argExprs = call.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        // #232: `ref` for a ByRef argument, by the statement form's own rule — this
+                        // arm wrote none, so `Console.WriteLine(Bump(n))` was CS1620.
+                        var argExprs = call.Arguments.Select((a, i) => WithRefModifier(
+                            EmitExpression(a, stack, false), call.ByRefArguments, i, call.NetArgumentRefKinds)).ToArray();
 
                         if (TryRenderArrayResize(call, argExprs, out var resized))
                             return resized;
@@ -4452,7 +4455,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     {
                         var obj = EmitExpression(methodCall.Object, stack, false);
                         var methodName = SanitizeName(methodCall.MethodName);
-                        var argExprs = methodCall.Arguments.Select(a => EmitExpression(a, stack, false)).ToArray();
+                        // #232: `ref` as the statement form writes it (`WriteLine(b.Bump(q))`).
+                        var argExprs = methodCall.Arguments.Select((a, i) =>
+                            WithRefModifier(EmitExpression(a, stack, false), methodCall.ByRefArguments, i)).ToArray();
                         var args = string.Join(", ", argExprs);
                         return $"{obj}.{methodName}{FormatGenericArgs(methodCall.GenericArguments)}({args})";
                     }
@@ -4460,9 +4465,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                     case IRBaseMethodCall baseCall:
                     {
                         // `ref` here too (#265): `Console.WriteLine(MyBase.Bump(q))` inlines the
-                        // call, and without it csc refuses CS1620. ⚠ The IRInstanceMethodCall arm
-                        // above still writes none — the same CS1620 for `WriteLine(b.Bump(q))`,
-                        // measured; a separate defect left for its own task.
+                        // call, and without it csc refuses CS1620.
                         var methodName = SanitizeName(baseCall.MethodName);
                         var argExprs = baseCall.Arguments.Select((a, i) =>
                             WithRefModifier(EmitExpression(a, stack, false), baseCall.ByRefArguments, i)).ToArray();
@@ -5121,28 +5124,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
             }
 
-            // Format arguments, adding the by-reference modifier for ByRef parameters.
-            // P2a-2 Task 9 (Task-8 review I5): a resolved .NET target records the CLR ref-KIND
-            // in NetArgumentRefKinds, because `ByRefArguments` is a List<bool> and cannot tell
-            // `ref` from `out` — emitting `ref x` for an `out` parameter is CS1620. A VB ByRef
-            // argument records nothing there and keeps `ref`, which is VB's only form. `in` /
-            // `RefReadOnly` need no modifier at a C# call site.
+            // Format arguments, adding the by-reference modifier for ByRef parameters — the one
+            // rule, WithRefModifier, that the inlined form in EmitExpression writes too (#232).
             var argExprs = call.Arguments.Select((arg, i) =>
-            {
-                var expr = EmitExpression(arg);
-                bool isByRef = call.ByRefArguments != null && i < call.ByRefArguments.Count && call.ByRefArguments[i];
-                if (!isByRef) return expr;
-
-                var refKind = call.NetArgumentRefKinds != null && i < call.NetArgumentRefKinds.Count
-                    ? call.NetArgumentRefKinds[i]
-                    : BasicLang.Net.NetRefKind.Ref;
-                return refKind switch
-                {
-                    BasicLang.Net.NetRefKind.Out => $"out {expr}",
-                    BasicLang.Net.NetRefKind.In or BasicLang.Net.NetRefKind.RefReadOnly => expr,
-                    _ => $"ref {expr}",
-                };
-            }).ToArray();
+                WithRefModifier(EmitExpression(arg), call.ByRefArguments, i, call.NetArgumentRefKinds)).ToArray();
 
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 
@@ -5616,12 +5601,34 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
         /// <summary>
         /// A ByRef parameter needs `ref` at the call site too, not only on the declaration —
-        /// without it csc rejects the call outright (CS1620). Shared by the instance call and the
-        /// base call (#265), which carry the same <c>ByRefArguments</c> list, and by a constructor
-        /// argument (#144, <see cref="ConstructorArgument"/>).
+        /// without it csc rejects the call outright (CS1620). THE one rule for every call form,
+        /// statement and inlined alike: the call (#232 — the inlined form wrote none, so
+        /// <c>Console.WriteLine(Bump(n))</c> was CS1620 while the statement <c>Bump(n)</c> built),
+        /// the instance call and the base call (#265), which carry the same <c>ByRefArguments</c>
+        /// list, and a constructor argument (#144, <see cref="ConstructorArgument"/>).
+        ///
+        /// <para>P2a-2 Task 9 (Task-8 review I5): a call to a resolved .NET target also passes
+        /// <paramref name="netRefKinds"/> (<see cref="IRCall.NetArgumentRefKinds"/>), because
+        /// <c>ByRefArguments</c> is a <c>List&lt;bool&gt;</c> and cannot tell <c>ref</c> from
+        /// <c>out</c> — <c>ref x</c> for an <c>out</c> parameter is CS1620. A VB ByRef argument
+        /// records nothing there (or <c>None</c>) and keeps <c>ref</c>, VB's only form;
+        /// <c>in</c> / <c>RefReadOnly</c> need no modifier at a C# call site.</para>
         /// </summary>
-        private static string WithRefModifier(string expression, IReadOnlyList<bool> byRefFlags, int index) =>
-            byRefFlags != null && index < byRefFlags.Count && byRefFlags[index] ? $"ref {expression}" : expression;
+        private static string WithRefModifier(string expression, IReadOnlyList<bool> byRefFlags, int index,
+                                              IReadOnlyList<BasicLang.Net.NetRefKind> netRefKinds = null)
+        {
+            if (byRefFlags == null || index >= byRefFlags.Count || !byRefFlags[index]) return expression;
+
+            var refKind = netRefKinds != null && index < netRefKinds.Count
+                ? netRefKinds[index]
+                : BasicLang.Net.NetRefKind.Ref;
+            return refKind switch
+            {
+                BasicLang.Net.NetRefKind.Out => $"out {expression}",
+                BasicLang.Net.NetRefKind.In or BasicLang.Net.NetRefKind.RefReadOnly => expression,
+                _ => $"ref {expression}",
+            };
+        }
 
         public void Visit(IRInstanceMethodCall methodCall)
         {

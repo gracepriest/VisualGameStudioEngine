@@ -35,8 +35,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * A LAMBDA-CAPTURED LOCAL that a later call writes (`x + bumpx()` with `bumpx` a lambda that assigns `x`): C++, JavaScript and MSIL print 106 where VB prints 6 (probes2/capt).
 //    * A METHOD RECEIVER (`Items.Add(Bump())` where `Bump` reassigns `Items`): the receiver is read after the argument, so C++, JavaScript and MSIL add to the NEW list, "0,1" where VB prints "1,0"
 //      (probes2/recv).
-//    * PRE-EXISTING, and the reason three cells are excluded below: C# refuses a ByRef argument inside an expression (CS1620, #232), so `byref` and `byrefparam` run on C++ and MSIL only; JavaScript refuses a
-//      ByRef parameter by design (BL7002), so `byrefarg` is not run there either; MSIL refuses `String.Concat` (outside its static surface), so `netcall` is not run there.
+//    * Two cells are still excluded below: JavaScript refuses a ByRef parameter by design (BL7002), so `byrefarg` is not run there; MSIL refuses `String.Concat` (outside its static surface), so `netcall`
+//      is not run there. (A third exclusion is GONE: C# refused a ByRef argument inside an expression, CS1620 — #232, fixed — so `byref` and `byrefparam` ran on C++ and MSIL only; they run on C# too now.
+//      The mutant table above is #203's own, measured before that; M1's `byref` / `byrefparam` reds are the C++ / MSIL cells.)
 // ================================================================================================
 
 /// <summary>#203 — a bare field / global / ByRef operand is read BEFORE a later operand's call, as VB reads it, on every backend.</summary>
@@ -104,10 +105,11 @@ public class OperandEvaluationOrderExecutionTests
         => AssertSingleFile(OperandOrderProbes.Global, OperandOrderProbes.ModQual);
 
     /// <summary>
-    /// (5) A local passed ByRef (`x + BumpLocalViaByRef(x)`) and a ByRef PARAMETER that aliases a global (`p + BumpG()`), on C++ and MSIL. Not C# (CS1620, #232) and not JavaScript (BL7002): see the header.
+    /// (5) A local passed ByRef (`x + BumpLocalViaByRef(x)`) and a ByRef PARAMETER that aliases a global (`p + BumpG()`), on C#, C++ and MSIL. (C# joined with #232: the call sits inside an expression, and it was
+    /// CS1620.) Not JavaScript (BL7002): see the header.
     /// </summary>
     [Test]
-    public void AByRefLocalAndParameter_BeforeALaterCall_IsReadFirst_OnCppAndMsil()
+    public void AByRefLocalAndParameter_BeforeALaterCall_IsReadFirst()
         => AssertSingleFile(OperandOrderProbes.ByRefLocal, OperandOrderProbes.ByRefParam);
 
     /// <summary>
@@ -493,7 +495,7 @@ internal static class OperandOrderProbes
             Console.WriteLine(x + BumpLocalViaByRef(x))
             Console.WriteLine(x)
         End Sub
-        """, "11\n110", Bk.Cpp | Bk.Msil);
+        """, "11\n110", Bk.CSharp | Bk.Cpp | Bk.Msil);
 
     /// <summary>A ByRef PARAMETER aliasing a global: `p + BumpG()` inside `Work(ByRef p)`, called as `Work(G)`.</summary>
     internal static readonly TempProbe ByRefParam = P("byrefparam", """
@@ -512,7 +514,7 @@ internal static class OperandOrderProbes
             Console.WriteLine(Work(G))
             Console.WriteLine(G)
         End Sub
-        """, "11\n110", Bk.Cpp | Bk.Msil);
+        """, "11\n110", Bk.CSharp | Bk.Cpp | Bk.Msil);
 
     /// <summary>`SetTo(K, Bump())` where `SetTo`'s first parameter is ByRef: the argument passes the STORAGE, so it must NOT be copied; prints 111, not 110.</summary>
     internal static readonly TempProbe ByRefArg = P("byrefarg", """

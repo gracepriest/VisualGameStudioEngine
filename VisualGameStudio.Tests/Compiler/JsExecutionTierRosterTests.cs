@@ -701,6 +701,8 @@ public class JsExecutionTierRosterTests
         "BottomTestedLoopCSharpExecutionTests",
         // Task #230: a Structure declares methods, properties, Shared members and constructors, run against vbc on C#, C++ and MSIL through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays 131. JavaScript still refuses every Structure (BL7005); its one row only COMPILES (CLI and generator) and asserts the refusal.
         "StructureMembersExecutionTests",
+        // Task #232: a ByRef argument of a call inlined into an expression (`Console.WriteLine(Bump(n))`, `Bump(n) + 1`, an `If` / loop / `Select Case` condition, `b.Bump(q)`, a lambda body, `Int32.TryParse`) is passed by `ref` / `out` on C#, run against vbc on C# (plus C++ and MSIL where they agree) through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner). JavaScript refuses a ByRef parameter by design (BL7002), so there is no Node leg: the roster stays 132.
+        "ByRefCallInExpressionCSharpExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

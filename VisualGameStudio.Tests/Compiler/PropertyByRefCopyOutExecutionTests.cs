@@ -35,6 +35,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //    * M1 write-backs left to right (not right to left)        -> `TwoPropertyArguments_AreWrittenBackRightToLeft` ONLY (P09: C#, C++, MSIL print `111 102` where VB prints `21 102`).
 //    * M2 no pin on the call's result before the first Set     -> `AFunctionUsedInAnExpression_...` (P08: C# CS1620), `AnInheritedStringProperty_...` (P16: C# CS1620), `APropertyInALambdaBody_...` (Q05: C# CS1620)
 //                                                                 and `EveryCallArm_...` (P12 `New Holder(b.P)`: C# prints `11011` where VB prints `11111`). C# only.
+//                                                                 ⚠ The three CS1620s are as measured BEFORE #232: an inlined call's ByRef argument had no `ref` then, and has one now (M2's C# cells are
+//                                                                 not re-measured since).
 //    * M3 no pin on the arguments BEFORE the property's Get     -> `AnEarlierArgument_IsEvaluatedBeforeThePropertysGet` ONLY (P14: C# runs `get 10` before `seed 1`).
 //    * M4 no snapshot of a receiver variable the call rebinds  -> `AReboundReceiver_StillGetsTheWriteBack` ONLY (P15: the write-back lands on the NEW object, `first 10 second 11`, on C#, C++ and MSIL).
 //    * M5 a ReadOnly property written back                     -> `AReadOnlyProperty_IsPassedACopy_AndNeverWrittenBack` (P06: C# CS0200 and C++ do not compile, MSIL does not run) and, since
@@ -53,10 +55,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //      `sb.Length` stays CS0206 on C#, refused on MSIL and a type-map failure on C++ (P10), and `Change(l.Capacity)` / `Change(a.Message)` are refused ("cannot convert from 'Object'").
 //    * MSIL refuses `obj.Field` passed ByRef, a field READ through a receiver, by name (P11): "an expression's value lives in a temporary". That is a FIELD, and it predates #209
 //      (`ConstructorByRefExecutionTests.MsilRefusesAFieldRead_...` pins the same refusal). The control below therefore runs P11 on C# and C++ only and its bare-field twin, C11m, on all three.
-//    * C# CS1620 when an INSTANCE Function's result is used in an expression (`c.F(b.P) + 1`, Q02): the pre-existing inline instance-call `ref` defect (#232 family). A module Function is fine (P08).
+//    * ✅ FIXED by #232 (no row here): C# was CS1620 when an INSTANCE Function's result is used in an expression (`c.F(b.P) + 1`, Q02): the inline instance call wrote no `ref`. It prints vbc's
+//      `45 22` on C#, C++ and MSIL now, and is the row `AnInstanceFunctionGivenAProperty_InsideAnExpression_...` of ByRefCallInExpressionCSharpExecutionTests.
 //    * A List element passed ByRef (`Bump(l(0))`) is not a property, and is still silently wrong on C++ (prints 10 for 22, #296); C# is CS0206 and MSIL refuses it.
 //    * BL4004 is a REFUSAL, not a write-back: `MyBase.New(b.P)` with a Get/Set property cannot be done until ADR-0016 D5(c) is amended to admit a write-back after the base call (follow-up task #297). A PLAIN
-//      auto-property in `MyBase.New` is unchanged from master on the three backends that do not run: C# CS0206 (`MyBase.New(b.P)`) / CS1620 (`MyBase.New(F(b.P))`), MSIL refuses it by name, JavaScript BL7002.
+//      auto-property in `MyBase.New` is unchanged from master on the three backends that do not run: C# CS0206 (`MyBase.New(b.P)`; `MyBase.New(F(b.P))` was CS1620 until #232 wrote the inlined call's `ref`, and is CS0206 too now — measured), MSIL refuses it by name, JavaScript BL7002.
 //      Only C++, which runs it, is pinned (`MyBaseNew_WithAPlainAutoPropertyArgument_StillRunsOnCpp_AsOnMaster`).
 // ================================================================================================
 
@@ -193,7 +196,7 @@ public class PropertyByRefCopyOutExecutionTests
 
     /// <summary>
     /// (4) A Function with a ByRef parameter, used inside an expression: `r = F(b.P) + 1` prints `45 22` (F returns 2 * 22, plus 1; the property is 22). C# inlines a single-use value at its use, but the
-    /// carrier and the write-back are STATEMENTS, so the call's result must be pinned before the first Set, or the Set runs before F (CS1620). M2 removes the pin.
+    /// carrier and the write-back are STATEMENTS, so the call's result must be pinned before the first Set, or the Set runs before F (it was CS1620 on C# before #232). M2 removes the pin.
     /// </summary>
     [Test]
     public void AFunctionUsedInAnExpression_WritesTheProperty_BackAfterTheCallRan()
@@ -234,7 +237,7 @@ public class PropertyByRefCopyOutExecutionTests
 
     /// <summary>
     /// (9) A String property, inherited, passed to a Sub twice and to a Function whose result is the condition of an `If` (`If F(d.Name) &gt; 3`): `long a!!?`. The Function's call sits in a
-    /// condition, not an assignment, so a result with no pin is CS1620 on C# here too (M2).
+    /// condition, not an assignment, so a result with no pin is wrong on C# here too (it was CS1620 before #232; M2).
     /// </summary>
     [Test]
     public void AnInheritedStringProperty_InAnIfCondition_IsWrittenBack()
@@ -294,7 +297,7 @@ public class PropertyByRefCopyOutExecutionTests
     /// (13) A PLAIN auto-property in a `MyBase.New` argument list is NOT refused and NOT copied in: it lowers exactly as on master, as its storage (no carrier, no write-back; the callee's write lands in the
     /// backing field, which is VB's answer here). C++ prints vbc's `22` for `MyBase.New(b.P)` (Q01a) and `base 22` + `22` for `MyBase.New(F(b.P))` (Q06a) through the CLI, the CLI with `--optimize` and
     /// `CompileProjectFiles`; the last one runs the IR VERIFIER (ON in the test process, as in a DEBUG build, OFF in the spawned CLI as shipped), so it also holds this shape to ADR-0016 Invariant P D5(c).
-    /// ⚠ Only C++ is pinned. The other three backends give master's outcomes (C# CS0206 for Q01a and CS1620 for Q06a, MSIL refuses it by name, JavaScript BL7002) and asserting a pre-existing
+    /// ⚠ Only C++ is pinned. The other three backends give master's outcomes (C# CS0206 for Q01a and for Q06a — Q06a was CS1620 until #232 —, MSIL refuses it by name, JavaScript BL7002) and asserting a pre-existing
     /// compile failure would pin a defect (the fixture header). M7 drops the accessor-backed narrowing: a plain property is then refused with BL4004 (and would be copied out), and this row goes red on every entry.
     /// </summary>
     [Test]
@@ -873,7 +876,7 @@ internal static class PropertyByRefProbes
         End Sub
         """, "22", Bk.Cpp);
 
-    /// <summary>Q06a: `MyBase.New(F(b.P))`, a PLAIN auto-property passed ByRef in a call that is itself a MyBase.New argument. C++ only: it lowers as on master (C# CS1620, MSIL refuses, JavaScript BL7002).</summary>
+    /// <summary>Q06a: `MyBase.New(F(b.P))`, a PLAIN auto-property passed ByRef in a call that is itself a MyBase.New argument. C++ only: it lowers as on master (C# CS0206 — CS1620 until #232 —, MSIL refuses, JavaScript BL7002).</summary>
     internal static readonly TempProbe BaseNewNestedAuto = P("q06a_auto", """
         Class Box
             Public Property P As Integer

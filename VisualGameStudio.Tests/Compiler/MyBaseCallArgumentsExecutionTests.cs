@@ -29,8 +29,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //    JS    a ByRef argument to a base method: BL7002, a refusal by design (JavaScript has no reference parameters). KillVocabularyExtensions.B2_JavaScript_RefusesByRef_BL7002 pins it.
 //    C++   an `Object` parameter: `'Object' has no C++ mapping` (the parameter itself, not the base call) — `object_parameter` and `grandparent` have no C++ cell.
 //    JS    a `Long` Optional parameter: BL7003 (`stmt_value_widening` has no JavaScript cell).
-//    C#    follow-up 1: the INLINED instance call (`Console.WriteLine(b.Bump(q))`) and an inlined IRCall write no `ref` (CS1620). The base call's inlined value form DOES (the
-//          `byref_sub_and_value` row reads `Console.WriteLine(MyBase.Bump(q))`); the instance call's does not, and is not this fix's.
+//    C#    ✅ follow-up 1 is FIXED by #232 (no row here): the INLINED instance call (`Console.WriteLine(b.Bump(q))`) and an inlined IRCall wrote no `ref` (CS1620), where the base call's inlined
+//          value form always did (the `byref_sub_and_value` row reads `Console.WriteLine(MyBase.Bump(q))`). All three now go through `CSharpBackend.WithRefModifier`; the instance call is the row
+//          `InstanceCall_InsideAnExpression` of ByRefCallInExpressionCSharpExecutionTests.
 //
 //  ⭐ MUTANTS (S/t142/mut: each is the fix plus ONE change, built from a plain source copy and run against a copy of the test output with its BasicLang.dll swapped; all four are killed by this fixture, 87 tests run against each: this fixture's 12, the shape fixture's, and the moved pins).
 //    M1 the base arm records no ByRef flag: `byref_sub_and_value`, `byref_field_with_optional`, `grandparent` and `byref_captured_csharp` (C#: CS1620), the Release build of `byref_sub_and_value`, and the

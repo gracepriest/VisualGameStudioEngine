@@ -37,10 +37,12 @@ namespace VisualGameStudio.Tests.Compiler;
 //  condition has control flow (#257), so most rows have no Node leg to run. C++ and MSIL printed vbc's answer for every row before the fix
 //  and still do (measured; the matrix is S/t227/matrix-table.txt), so the cheap reference is a measurement, not a leg.
 //
-//  ⛔ KNOWN GAPS — each is a defect that is NOT #227's, with NO test (a test would pin it):
-//    p11       a ByRef argument inside a loop CONDITION (`Loop While More(n)` with `ByRef n`) is emitted without `ref` — CS1620. The #232
-//              family (an argument inlined into a condition loses its ByRef). Unchanged by #227.
+//  ⛔ KNOWN GAP — a defect that is NOT #227's, with NO test (a test would pin it):
 //    k_LU k_W  `Continue Do` / `Continue While`: there is no Continue statement in BasicLang (#262), so there is no row.
+//  ✅ p11 (a ByRef argument inside a loop CONDITION: `Loop While More(n)` with `ByRef n`) was a gap listed here: CS1620, the argument inlined into a
+//  condition lost its `ref`. #227 left it alone; #232 fixed it (CSharpBackend writes the modifier through `WithRefModifier` in the inline call arms), and
+//  it is the row `LoopWhile_ByRefArgumentInTheCondition_p11` below. The other loop conditions (`Do While`, `While`, `Loop Until`) are rows of
+//  ByRefCallInExpressionCSharpExecutionTests.
 //
 //  ⭐ WHAT KILLS WHAT. Five mutants of the fix, each applied to a plain source copy of it and measured (every one killed, none hung the host):
 //    M1  the loop is not recognised at its body (the old peel + copy)   8 of 10 rows: every one but the Select Case row (the old shape got it
@@ -269,6 +271,31 @@ public class BottomTestedLoopCSharpExecutionTests
                 Console.WriteLine("i=" & i & " s=" & s & " seen=" & seen)
             End Sub
             """, "i=4 s=1,two,3, seen=ababab"),
+
+        // ---- a ByRef argument INSIDE the condition (p11, #232) --------------------------------------------------------------------
+        // `Loop While More(n)` with `ByRef n`: the condition is a call whose result is the test and whose argument is written. It was CS1620 (no `ref` on the
+        // inlined call); the trail shows the body ran on every `n` and that the condition's write reached `n` before the next iteration.
+        Row("LoopWhile_ByRefArgumentInTheCondition_p11", """
+            Dim calls As Integer = 0
+
+            Function More(ByRef n As Integer) As Boolean
+                calls = calls + 1
+                n = n + 1
+                Return n < 5
+            End Function
+
+            Sub Main()
+                Dim n As Integer = 0
+                Dim seen As String = ""
+                Do
+                    seen = seen & n
+                    If n > 2 Then
+                        seen = seen & "!"
+                    End If
+                Loop While More(n)
+                Console.WriteLine("n=" & n & " calls=" & calls & " seen=" & seen)
+            End Sub
+            """, "n=5 calls=5 seen=0123!4!"),
 
         // ---- the CONTROLS: a top-tested loop is not a bottom-tested one, and must stay exactly as it was ----------------------------
         // `Do While … Loop` (an If, a nested For, a statement after) and `While … End While` (an If / Else, a nested While with a body Dim).
