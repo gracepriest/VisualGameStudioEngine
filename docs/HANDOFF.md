@@ -17,6 +17,11 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
+## ⚡ NEWEST — 2026-10-07: #223 FIXED — a BasicLang diagnostic prints its code ONCE on a native `.blproj` build (CLI + IDE) and on the IDE's C# route (`Main.bas(10,5): error BC30526: Property 'P' is 'ReadOnly'.`, was `BC30526: BC30526:`): the code comes off the message's head where the error becomes a `CppDiagnostic` / `DiagnosticItem` (`CppDiagnosticsParser.MessageWithoutCode`); toolchain lines untouched (`git log --grep '#223'`)
+- **Tests:** `DiagnosticCodeOnceTests` (fast, 5) + the flipped pin `PropertyAccessExecutionTests.CppReleaseBuild_PrintsTheDiagnosticCodeOnce_Task223`; the old prepend turns 3 red. Gates (Linux), 0 failed: fast 12,750 (+94 skipped), `CppDiagnostics` 10, `Diagnostic` 457 (+3), `PropertyAccess` 81, `Build` 618 (+27). ⚠ Still doubled, form code, not touched: `DesignDiagnostic.Format` (`error BL8002: BL8002: …`, pinned by `DesignCheckCliTests`).
+
+---
+
 ## ⚡ NEWEST — 2026-10-07: #221 FIXED — a `For` / `For Each` control variable bound to a PROPERTY is VB's BC30039 alone ("Loop control variable cannot be a property or a late-bound indexed array."), by the BOUND symbol: `For F` in `Function F` and `For P` in P's own Get still drive #219's return variable (`SemanticAnalyzer.RefuseLoopControlProperty`; `git log --grep '#221'`)
 - **Tests (7 new, 3 moved):** `LoopControlPropertyDiagnosticsTests` (fast, analyzer + `CompileProjectFiles`); MOVED: the `PropertyAccessExecutionTests` #221 pin and `PropertyAccessDiagnosticsTests.Write_BareForLoop_OverAReadOnlyProperty_IsRefused` (BC30526) are refusal rows, `ForEach…G10` asserts BC30039. Mutants M1-M3b killed (fixture header). Byte compare: 0 diffs outside the property probes. **Gates (Linux):** fast 0 failed / 12,743 passed / 94 skipped; one filter each, 0 failed: `PropertyAccess` 73, `ForLoop` 19, `ForEach` 239, `ImplicitReturnVariable` 14, `NameBinding` 316, `JsExecutionTierRoster` 5 (`For` alone also matches every Form test, so it ran as `ForLoop` + `ForEach`). Full suite NOT run.
 - ⛔ **Gaps, NO test pins them:** `For Me.P` / `For o.x` do not parse (vbc: BC30039 / runs); `For Each F In xs` in `Function F` declares a new `F` and returns 0 (vbc 8), and `For Each P` in P's own Get is refused (vbc runs it) — the For Each site never asks `AsReturnVariable`.
@@ -6839,9 +6844,11 @@ single new failure against the 170-name baseline.
       an exception class inheriting #220's members, or the resolver's `IsGetOnly`), and a ReadOnly .NET
       property passed ByRef is copied in. The three pins are positive (`…_Task222`): `N1_…` / `N2_…` now
       stop at the front end instead of running on JavaScript.
-    - **#223** — the native C++ `.blproj` build's own error text DUPLICATES the code
+    - **#223** — the native C++ `.blproj` build's own error text DUPLICATED the code
       (`error BC30526: BC30526: Property 'P' is 'ReadOnly'.`) — BasicLang's message already
-      starts with the code and the C++ project builder's formatter prepends it again.
+      starts with the code and the C++ project builder's formatter prepends it again. **FIXED
+      2026-10-07** — see the #223 section at the top; the pin is now
+      `CppReleaseBuild_PrintsTheDiagnosticCodeOnce_Task223`.
 - ⭐ **#177 DONE (fix commit `a8e23aed`).** MSIL: box a value into an Object slot, convert out of
   one, and compare Objects late-bound (ADR-0012).
   - **The one boxing coercion.** `EmitCoerceToSlot` is the ONE place a value already on the stack

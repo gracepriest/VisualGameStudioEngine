@@ -326,15 +326,16 @@ public class PropertyAccessExecutionTests
         => AssertJavaScriptCompileRefuses(N2, "Count");
 
     // ====================================================================================
-    // #223 — the native C++ .blproj build's own error text DUPLICATES the code: BasicLang's
-    // message already starts with "BC30526: " (PropertyAccessError), and the C++ project
-    // builder's diagnostic formatter prepends "error BC30526: " again, so the build output reads
-    // "error BC30526: BC30526: Property 'P' is 'ReadOnly'." — cosmetic, but a finding surfaced by
-    // this task's own probes, not fixed here. Skips (not fails) without a C++ toolchain.
+    // #223 (FIXED) — the native C++ .blproj build printed the code twice: BasicLang's message
+    // already starts with "BC30526: " (PropertyAccessError), and the C++ project builder's
+    // diagnostic formatter prints the code field too, so the output read
+    // "error BC30526: BC30526: Property 'P' is 'ReadOnly'.". CppProjectBuilder now takes the code
+    // off the message's head where it builds the CppDiagnostic; this is the real CLI's leg of
+    // DiagnosticCodeOnceTests. Skips (not fails) without a C++ toolchain.
     // ====================================================================================
 
     [Test]
-    public void CppReleaseBuild_DuplicatesTheDiagnosticCode_PinnedForTask223()
+    public void CppReleaseBuild_PrintsTheDiagnosticCodeOnce_Task223()
     {
         if (CppToolchain.Find() == null)
             Assert.Ignore("No C++ toolchain available (clang++/g++/MSVC) — cannot see the native "
@@ -356,11 +357,11 @@ public class PropertyAccessExecutionTests
         var output = stdOut + "\n" + stdErr;
 
         Assert.That(exitCode, Is.Not.EqualTo(0), "the Release C++ build must still refuse this program.\n" + output);
-        Assert.That(output, Does.Contain("BC30526: BC30526:"),
-            "task #223 (pre-existing, unrelated to #178's own diagnostic): the native C++ "
-            + ".blproj build output must still duplicate the code. If it no longer does "
-            + "(including printing the code only once), #223 is fixed — update this pin, do not "
-            + "just delete it.\nOUTPUT:\n" + output);
+        Assert.That(output, Does.Contain("Main.bas(10,5): error BC30526: Property 'P' is 'ReadOnly'."),
+            "task #223: the native C++ .blproj build prints the MSBuild shape with the code once "
+            + "(was 'error BC30526: BC30526: …').\nOUTPUT:\n" + output);
+        Assert.That(System.Text.RegularExpressions.Regex.Matches(output, "BC30526").Count, Is.EqualTo(1),
+            "task #223: exactly one BC30526 in the whole build output.\nOUTPUT:\n" + output);
     }
 
     // ====================================================================================

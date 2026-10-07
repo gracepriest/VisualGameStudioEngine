@@ -1135,10 +1135,13 @@ public class BuildService : IBuildService
     private void AddCompilerDiagnostic(BuildResult result, SemanticError error, string? filePath)
     {
         var isError = error.Severity == ErrorSeverity.Error;
+        var id = string.IsNullOrEmpty(error.ErrorCode) ? (isError ? "BL3001" : "BL3002") : error.ErrorCode;
         var item = new DiagnosticItem
         {
-            Id = string.IsNullOrEmpty(error.ErrorCode) ? (isError ? "BL3001" : "BL3002") : error.ErrorCode,
-            Message = error.Message,
+            Id = id,
+            // Task #223: the same split as the native path's CppProjectBuilder.AddTranspileDiagnostic —
+            // the line below prints Id itself, so a VB-coded message must not carry it a second time.
+            Message = BasicLang.Compiler.ProjectSystem.CppDiagnosticsParser.MessageWithoutCode(id, error.Message),
             FilePath = filePath,
             Line = error.Line,
             Column = error.Column,
@@ -1148,7 +1151,7 @@ public class BuildService : IBuildService
 
         var location = filePath != null ? $"{filePath}({error.Line},{error.Column})" : $"({error.Line},{error.Column})";
         var kind = isError ? "error" : "warning";
-        _outputService.WriteLine($"  {location}: {kind} {item.Id}: {error.Message}", OutputCategory.Build);
+        _outputService.WriteLine($"  {location}: {kind} {item.Id}: {item.Message}", OutputCategory.Build);
     }
 
     /// <summary>

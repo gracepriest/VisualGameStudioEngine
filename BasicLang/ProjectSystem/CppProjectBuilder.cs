@@ -1652,16 +1652,20 @@ namespace BasicLang.Compiler.ProjectSystem
             return false;
         }
 
+        // Task #223: the code goes in Code and ONLY there — a VB-coded error's message already
+        // starts with it, and FormatNormalized prints Code itself (CppDiagnosticsParser.
+        // MessageWithoutCode says why the split is made here and not at the source).
         private static void AddTranspileDiagnostic(CppProjectBuildResult result, SemanticError error, string filePath)
         {
+            var code = string.IsNullOrEmpty(error.ErrorCode) ? "BL3001" : error.ErrorCode;
             result.Diagnostics.Add(new CppDiagnostic
             {
                 FilePath = filePath,
                 Line = error.Line,
                 Column = error.Column,
                 IsWarning = error.Severity != ErrorSeverity.Error,
-                Code = string.IsNullOrEmpty(error.ErrorCode) ? "BL3001" : error.ErrorCode,
-                Message = error.Message,
+                Code = code,
+                Message = CppDiagnosticsParser.MessageWithoutCode(code, error.Message),
             });
         }
 
