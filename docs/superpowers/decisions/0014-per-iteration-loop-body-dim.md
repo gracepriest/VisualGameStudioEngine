@@ -3,7 +3,7 @@
 - **Date:** 2026-09-28
 - **Status:** Accepted; amended the same day by A1 and A2 (below), which replace D2's Contract
   and add to D1's Obligations.
-- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end. #136 (C# writes a lambda body with the function-body emitter) — D2's revisit-if again; see "Amendment A-136" at the end.
+- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end. #136 (C# writes a lambda body with the function-body emitter) — D2's revisit-if again; see "Amendment A-136" at the end. #228 (a sized array `Dim` in a loop body allocates at the statement) — D4 made true for array bounds; see "Amendment A-228" at the end.
 - **Decided by:** the architect role, in a ruling (D1–D6) and an amendment (A1, A2) answering two
   findings the first implementation measured. Transcribed from both; nothing under the Decision
   headings is editorialised.
@@ -277,6 +277,7 @@ variable; that changes bytes but not behaviour.
     local where it declares it (function top), so `Dim a(2) As Integer` in a loop body is one array
     for the whole function with or without a lambda (VB re-creates it per iteration; probe E15). The
     carrier inherits that array; ADR-0014 changes nothing there. Tracked separately as **#228**.
+    ⚠ FIXED by #228: see "Amendment A-228" at the end.
 
 ## Amendment A-140 (ADR-0019, 2026-10-01): L8 now prints the same on C++, JavaScript and MSIL
 
@@ -316,3 +317,20 @@ revisit-if "probe L8 prints differently on any two backends") is unchanged, and 
   creator's spelling" is no longer true: since #136 C# declares a lambda's own locals inside the lambda. The recording rule it
   gives is unchanged — a `Dim` is still recorded in `BodyLocals` only when it is not a local of a lambda the function creates.
   E20 is still #229 (C# now prints JavaScript's 50|2|2: `h()` is right, the loop's `y` is not).
+
+## Amendment A-228 (#228, 2026-10-07): D4's array bounds are an IR instruction in a loop body
+
+*Appended, not edited in place: D1–D6, A1, A2, A-140 and A-136 are unchanged. This is D4 as written ("an initializer (`= expr`,
+`As New`, array bounds) is then the ordinary assignment the IR already emits"), made true for array bounds.*
+
+- A sized local `Dim a(2) As Integer` with no initializer, inside a loop of its own function (D3's innermost-loop rule, the one
+  `RecordBodyLocal` reads), lowers to `IRCall(IRBuilder.SizedArrayDimIntrinsic)` — no arguments, typed as the declared array,
+  NAMED AFTER the variable as a ReDim's call is, `IsDimInitializer` set — at the statement. Each backend renders it with the
+  helper its function-top declaration already uses (C#/C++ `SizedArrayInitializer`, JavaScript `LocalInitializer`, MSIL
+  `TryArrayAllocation`), so every execution of the statement gets a fresh default-filled array, with or without a lambda.
+- It is independent of `BodyLocals` and the capture set: a per-iteration variable (E15) is copied from its carrier and then
+  overwritten by this assignment, exactly as D4 says; an uncaptured one (E15n) and a name declared twice (#229) are simply
+  re-assigned. A call, so no pass folds, hoists or merges it, and S″ holds (it is a write inside the body).
+- Byte identity: a sized `Dim` outside every loop emits nothing new; the function-top allocation stays on every backend (the
+  first iteration allocates twice, harmlessly). LLVM, which allocates no sized array anywhere, renders it as a call to an
+  undefined `@__BLDimArray`, as it does `@__BLReDim`.

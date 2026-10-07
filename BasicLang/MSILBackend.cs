@@ -5185,6 +5185,27 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 return;
             }
 
+            // #228: a sized Dim's storage in a loop body (IRBuilder.SizedArrayDimIntrinsic) — the
+            // `newarr` EmitArrayLocalAllocations gives the declaration at method entry, re-run
+            // where the statement runs. Anything that is not a sized array starts null, as its
+            // `.locals init` slot does.
+            if (call.FunctionName == IRBuilder.SizedArrayDimIntrinsic && call.Arguments.Count == 0)
+            {
+                if (TryArrayAllocation(call.Type, out var elementToken, out var length))
+                {
+                    EmitLdcI4(length);
+                    _currentStack++;
+                    WriteLine($"    newarr {elementToken}");
+                }
+                else
+                {
+                    WriteLine("    ldnull");
+                    _currentStack++;
+                }
+                EmitStoreResult(call, call.Type);
+                return;
+            }
+
             var funcName = call.FunctionName;
             var hasReturn = call.Type != null && !call.Type.Name.Equals("Void", StringComparison.OrdinalIgnoreCase);
 

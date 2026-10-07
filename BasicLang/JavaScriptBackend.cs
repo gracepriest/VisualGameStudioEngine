@@ -4032,6 +4032,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     : $"new Array({rendered[1]}).fill({element})";
             }
 
+            // #228: a sized Dim's storage in a loop body (IRBuilder.SizedArrayDimIntrinsic) — the
+            // local's own declaration initializer, re-run where the statement runs.
+            if (call.FunctionName == IRBuilder.SizedArrayDimIntrinsic && rendered.Count == 0)
+                return LocalInitializer(call.Type);
+
             if (TryStringBuiltin(call.FunctionName, rendered, out var builtin))
                 return builtin;
 

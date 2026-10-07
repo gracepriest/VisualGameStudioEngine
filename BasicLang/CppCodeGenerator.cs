@@ -3951,6 +3951,13 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return $"BasicLang::ReDimArray({args[0]}, {args[1]}, {preserve})";
             }
 
+            // #228: a sized Dim's storage in a loop body (IRBuilder.SizedArrayDimIntrinsic) — the
+            // local's own declaration initializer, re-run where the statement runs. Assigning the
+            // std::vector builds a NEW Array handle, so an array an earlier iteration handed out
+            // keeps its own storage.
+            if (functionName == IRBuilder.SizedArrayDimIntrinsic && args.Count == 0)
+                return SizedArrayInitializer(call.Type, MapType(call.Type)) ?? GetDefaultValue(call.Type);
+
             // Check if this is an extern function call
             if (_module != null && _module.IsExtern(functionName))
             {

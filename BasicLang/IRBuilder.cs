@@ -1481,8 +1481,36 @@ namespace BasicLang.Compiler.IR
                         initValue.IsDimInitializer = true;   // ADR-0016 D3: the renamed value IS the Dim
                     }
                 }
+                else if (AllocatesAtTheStatement(varType))
+                {
+                    // #228 (ADR-0014 D4: array bounds are an initializer): a sized `Dim a(2)` in a
+                    // loop body gets a NEW array each time the statement runs, as in VB. Named after
+                    // the variable, as a ReDim's call is, and never stored through `a_addr` (that
+                    // pair writes the local twice).
+                    var storage = new IRCall(localVar.Name, SizedArrayDimIntrinsic, varType);
+                    EmitInstruction(storage);
+                    TryRenameToVariable(storage, localVar);
+                    storage.IsDimInitializer = true;   // ADR-0016 D3, as for `Dim x = f()`
+                }
                 // No initializer - C# backend will use default(T), no IR needed
             }
+        }
+
+        /// <summary>
+        /// #228: whether a local <c>Dim</c> of <paramref name="varType"/> with no initializer
+        /// allocates where the statement runs (<see cref="SizedArrayDimIntrinsic"/>): a sized array
+        /// (every dimension a positive count) inside a loop of THIS function — the loop stack's
+        /// innermost entry, as <see cref="RecordBodyLocal"/> reads it (ADR-0014 D3: through If,
+        /// Select and Try, never across a lambda). Anywhere else the statement runs at most once per
+        /// call, so the backend's function-top allocation is the only one and the bytes stay as
+        /// they were.
+        /// </summary>
+        private bool AllocatesAtTheStatement(TypeInfo varType)
+        {
+            if (varType?.Kind != TypeKind.Array || varType.ElementType == null) return false;
+            var sizes = varType.ArrayDimensionSizes;
+            if (sizes.Count == 0 || sizes.Any(size => size <= 0)) return false;
+            return _loopStack.Count > 0 && ReferenceEquals(_loopStack.Peek().Function, _currentFunction);
         }
 
         public void Visit(TupleDeconstructionNode node)
@@ -8019,6 +8047,17 @@ namespace BasicLang.Compiler.IR
         /// side-effecting, so nothing folds, hoists or merges it.
         /// </summary>
         public const string ArrayResizeIntrinsic = "__BLReDim";
+
+        /// <summary>
+        /// #228: the IR intrinsic a sized array <c>Dim</c> inside a loop body lowers to — no
+        /// arguments, typed as the declared array, named after the variable (see
+        /// <see cref="AllocatesAtTheStatement"/>). Its value is exactly the storage the backend
+        /// gives that declaration at function top (C# and C++ <c>SizedArrayInitializer</c>,
+        /// JavaScript <c>ArrayInitializer</c>, MSIL <c>TryArrayAllocation</c>), so a fresh zeroed
+        /// array each time the statement runs. A call for the same reason as
+        /// <see cref="ArrayResizeIntrinsic"/>: no pass folds, hoists or merges it.
+        /// </summary>
+        public const string SizedArrayDimIntrinsic = "__BLDimArray";
 
         public void Visit(ArrayResizeExpressionNode node)
         {
