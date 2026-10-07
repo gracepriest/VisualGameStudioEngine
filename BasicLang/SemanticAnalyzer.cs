@@ -6172,7 +6172,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// </summary>
         private IEnumerable<string> DeclaringClassesOf(TypeInfo type)
         {
-            if (type?.Kind != TypeKind.Class || type.Name == null) yield break;
+            // #230: a Structure declares operators too (it has no base, so it is its own only one).
+            if (type?.Kind is not (TypeKind.Class or TypeKind.Structure) || type.Name == null) yield break;
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var name = type.Name; name != null && seen.Add(name);
                  name = _declaredBaseClass.TryGetValue(name, out var baseName) ? baseName : null)
@@ -7071,6 +7072,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 Error($"Symbol '{node.Name}' is already defined in this scope", node.Line, node.Column);
             }
 
+            // #230: a Structure that declares more than fields is analyzed as a class's members are
+            // — its own scope, typed as the Structure, so `Me`, a bare member name and a lambda
+            // inside a member resolve exactly as they do in a Class. A fields-only Structure
+            // takes none of this and is analyzed as it always was.
+            Scope structureScope = null;
+            if (node.NonFieldMembers.Count > 0)
+            {
+                // Every member's signature first, so a member names one declared BELOW it (pass 1
+                // does this for a Class; a Structure is defined here, in pass 2). Each entry is
+                // overwritten below by the fully analyzed symbol. Also records the Shared members;
+                // and the Operator declarations, which pass 1 records for a Class.
+                var members = node.AsClassMembers();
+                PopulateClassMemberSignatures(members, type, includeConstructors: false);
+                RegisterUserOperators(members);
+                structureScope = EnterScope(node.Name, ScopeKind.Class);
+                structureScope.ClassType = type;
+            }
+
             // Process members
             foreach (var member in node.Members)
             {
@@ -7096,8 +7115,30 @@ namespace BasicLang.Compiler.SemanticAnalysis
                           member.Line, member.Column);
                 }
 
+                // #230: VB's BC30435 — nothing derives from a Structure, so nothing in it can be
+                // Protected. The class member parser reads the modifier; the old field grammar did not.
+                if (member.Access == AccessModifier.Protected)
+                    VbCodedError("BC30435", "Members in a Structure cannot be declared 'Protected'.", member);
+
+                // #230: VB's BC31049. The class member parser reads `= value` on a field; a
+                // Structure is default-initialized (`Dim s As P` runs no constructor), so an
+                // INSTANCE initializer would never run. A Shared one runs once, as a class's does.
+                if (member.Initializer != null && !member.IsStatic)
+                {
+                    VbCodedError("BC31049",
+                        "Initializers on structure members are valid only for 'Shared' members and constants.",
+                        member);
+                }
+                else
+                {
+                    member.Initializer?.Accept(this);
+                }
+
                 var memberSymbol = new Symbol(member.Name, SymbolKind.Variable, memberType, member.Line, member.Column);
                 type.Members[member.Name] = memberSymbol;
+                // #230: in the Structure's own scope too, as a class field is, so a member body
+                // finds it before anything of the same name outside the Structure.
+                structureScope?.Define(memberSymbol);
                 // Record the RESOLVED type on the member node. IRBuilder.Visit(StructureNode)
                 // reads it from here; without it that fallback rebuilt a type from the bare
                 // NAME, which silently discarded every modifier the type reference carried —
@@ -7105,6 +7146,102 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 // struct's array member could not be indexed on either backend.
                 SetNodeType(member, memberType);
             }
+
+            if (structureScope != null)
+            {
+                AnalyzeStructureNonFieldMembers(node, type);
+                ExitScope();
+            }
+        }
+
+        /// <summary>
+        /// #230: a Structure's methods, properties, constructors and constants, analyzed in the
+        /// Structure's scope exactly as <see cref="Visit(ClassNode)"/> analyzes a class's, each
+        /// registered as a member of the Structure's type; then the constructor rules VB has for a
+        /// Structure. A lambda inside one is judged at each name it uses
+        /// (<see cref="CheckStructureInstanceMemberInLambda"/>, BC36638).
+        /// </summary>
+        private void AnalyzeStructureNonFieldMembers(StructureNode node, TypeInfo type)
+        {
+            foreach (var member in node.NonFieldMembers)
+            {
+                member.Accept(this);
+                switch (member)
+                {
+                    case FunctionNode func when _nodeSymbols.TryGetValue(func, out var funcSymbol):
+                        type.Members[func.Name] = funcSymbol;
+                        break;
+                    case SubroutineNode sub when _nodeSymbols.TryGetValue(sub, out var subSymbol):
+                        type.Members[sub.Name] = subSymbol;
+                        break;
+                    case PropertyNode prop when _nodeSymbols.TryGetValue(prop, out var propSymbol):
+                        type.Members[prop.Name] = propSymbol;
+                        break;
+                }
+            }
+
+            // VB's BC30629: a Structure always has its parameterless constructor — the one that
+            // zeroes it, which `Dim s As P` and `New P()` both mean — so none may be declared.
+            foreach (var constructor in node.NonFieldMembers.OfType<ConstructorNode>())
+            {
+                if (!constructor.IsShared && constructor.Parameters.Count == 0)
+                    VbCodedError("BC30629",
+                        "Structures cannot declare a non-shared 'Sub New' with no parameters.", constructor);
+            }
+
+            // VB's BC36713, the auto-property twin of BC31049: an INSTANCE initializer would run in
+            // a constructor, and `Dim s As P` runs none.
+            foreach (var prop in node.NonFieldMembers.OfType<PropertyNode>())
+            {
+                if (prop.IsAuto && prop.Initializer != null && !prop.IsStatic)
+                    VbCodedError("BC36713",
+                        "Auto-implemented Properties contained in Structures cannot have initializers unless they "
+                        + "are marked 'Shared'.", prop);
+            }
+
+            // VB's BC30435 (see the field loop in Visit(StructureNode)), for the other members.
+            foreach (var member in node.NonFieldMembers)
+            {
+                var access = member switch
+                {
+                    FunctionNode f => f.Access,
+                    SubroutineNode s => s.Access,
+                    PropertyNode p => p.Access,
+                    ConstructorNode c => c.Access,
+                    _ => AccessModifier.Public
+                };
+                if (access == AccessModifier.Protected)
+                    VbCodedError("BC30435", "Members in a Structure cannot be declared 'Protected'.", member);
+            }
+
+            // VB's BC30269, as Visit(ClassNode) reports it: one type initializer per type.
+            var typeInitializers = node.NonFieldMembers.OfType<ConstructorNode>().Where(c => c.IsShared).ToList();
+            if (typeInitializers.Count > 1)
+            {
+                VbCodedError("BC30269",
+                    $"'Shared Sub New()' has multiple definitions with identical signatures in structure '{node.Name}'.",
+                    typeInitializers[1]);
+            }
+        }
+
+        /// <summary>
+        /// ⭐ #230 — VB's BC36638, "Instance members and 'Me' cannot be used within a lambda
+        /// expression in structures.": inside a lambda, at any nesting depth, written in a member of
+        /// a Structure, an explicit <c>Me</c> (<paramref name="symbol"/> null) or a bare name bound
+        /// to an INSTANCE member of that Structure — a field, property or method, not Shared and not
+        /// a constant (<see cref="IsInstanceMemberUnderConstruction"/>'s rule). The lambda would hold
+        /// a COPY of the value, so VB refuses it; this reports it before any backend runs, so every
+        /// backend refuses it alike (ClosureLowering's ADR-0010 D6 refusal stays as the backstop).
+        /// A local, a parameter and a Shared member are not reported.
+        /// </summary>
+        private void CheckStructureInstanceMemberInLambda(Symbol symbol, IdentifierExpressionNode at)
+        {
+            if (InnermostLambdaScope() == null) return;
+            if (_currentScope.GetClassScope()?.ClassType is not { Kind: TypeKind.Structure }) return;
+            if (symbol != null && !IsInstanceMemberUnderConstruction(symbol, at.Name)) return;
+
+            LambdaBoundaryError(
+                "BC36638", "Instance members and 'Me' cannot be used within a lambda expression in structures.", at);
         }
 
         public void Visit(UnionNode node)
@@ -12586,6 +12723,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         SetNodeType(node, _typeManager.ObjectType);
                     }
+                    CheckStructureInstanceMemberInLambda(null, node);   // #230: BC36638
                 }
                 return;
             }
@@ -12634,6 +12772,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 SetNodeType(node, symbol.Type);
                 CheckPropertyRead(node, symbol);   // task #178: bare `W` read
                 CheckByRefParameterInLambda(symbol, node);   // task #174: BC36639, read or write
+                CheckStructureInstanceMemberInLambda(symbol, node);   // #230: BC36638
                 CheckByRefParameterInQuery(symbol, node);    // #224: BC36533
                 if (_inBaseConstructorArguments && IsInstanceMemberUnderConstruction(symbol, node.Name))
                     ReportReferenceToObjectUnderConstruction(node, implicitReference: true);   // ADR-0016 D4
@@ -13918,6 +14057,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             return found;
         }
 
+        /// <summary>
+        /// Whether <paramref name="node"/> binds to a declared <c>Sub New</c> of <paramref name="type"/>:
+        /// always for a Class; for a Structure (#230) only WITH arguments. A Structure always has
+        /// its parameterless constructor — the one that zeroes it, which VB forbids declaring
+        /// (BC30629) — so <c>New P()</c> is that one, never a declared constructor whose parameters
+        /// are all Optional, and never "no constructor takes 0 arguments". A fields-only Structure
+        /// declares no constructor at all, so nothing binds and its <c>New P()</c> is unchanged.
+        /// </summary>
+        private static bool BindsDeclaredConstructor(TypeInfo type, NewExpressionNode node) =>
+            type != null && type.Members != null
+            && (type.Kind == TypeKind.Class || (type.Kind == TypeKind.Structure && node.Arguments.Count > 0));
+
         public void Visit(NewExpressionNode node)
         {
             var type = ResolveTypeReference(node.Type);
@@ -13943,7 +14094,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Analyze arguments first to get their types. A lambda or AddressOf argument is
             // target-typed by its constructor parameter, exactly as a call argument is (#187) —
             // ResolveConstructor needs only the argument COUNT, so the constructor is known here.
-            var targetConstructor = type != null && type.Kind == TypeKind.Class && type.Members != null
+            var targetConstructor = BindsDeclaredConstructor(type, node)
                 ? ResolveConstructor(type, node.Arguments.Count)
                 : null;
             var argTypes = new List<TypeInfo>();
@@ -13956,7 +14107,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             // Validate constructor arguments for user-defined types
-            if (type != null && type.Kind == TypeKind.Class && type.Members != null)
+            if (BindsDeclaredConstructor(type, node))
             {
                 var ctorSymbol = ResolveConstructor(type, node.Arguments.Count);
                 if (ctorSymbol != null)

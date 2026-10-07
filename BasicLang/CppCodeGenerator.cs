@@ -894,10 +894,14 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // raw `this`, which converts to no shared_ptr at all ("no viable conversion from
             // 'Node *' to 'std::shared_ptr<Node>'", every such use, C++ only). Value by DEFAULT:
             // exactly two contexts keep `this`, and they ask for it by name — a member receiver
-            // (ReceiverName) and an Is/IsNot operand (IdentityText). A Structure's `Me` would be
-            // `*this`, but a Structure cannot declare a method (#230), so that arm is dormant.
+            // (ReceiverName) and an Is/IsNot operand (IdentityText).
             if (IsSelfReference(value) && _emittingClass is { IsStruct: false })
                 return "BasicLang::Self(this)";
+
+            // #230: a Structure's `Me` is the VALUE `*this` — never shared, never a pointer. As a
+            // value it copies (`Dim c As P = Me`), as a receiver it is the storage itself.
+            if (IsSelfReference(value) && _emittingClass is { IsStruct: true })
+                return "(*this)";
 
             if (value is IRVariable v && v.Name != null && v.Name.StartsWith("__lambda_"))
             {
@@ -1202,9 +1206,10 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             if (FindClassProperty(receiverType, member) is { } found)
             {
                 if (!found.prop.IsAccessorBacked) return null;
+                // #230: a Structure's accessor runs on the storage it was reached through.
                 var accessor = found.prop.IsStatic
                     ? $"{SanitizeName(found.owner.Name)}::"
-                    : ReceiverName(receiver) + MemberAccessOp(receiver);
+                    : (StructPlaceLValue(receiver) ?? ReceiverName(receiver)) + MemberAccessOp(receiver);
                 return new AccessorProperty(accessor, SanitizeName(found.prop.Name));
             }
 
@@ -1619,6 +1624,15 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // real C++ constructors — it is a value, and its `Me` is never shared.
             if (irClass.IsStruct)
             {
+                // #230: VB's parameterless constructor — the one `Dim s As P` and `New P()` mean,
+                // which zeroes the value — exists beside every declared one; VB forbids declaring
+                // it (BC30629). Declaring any constructor suppresses C++'s implicit default, so it
+                // is restored, DEFAULTED: `P s = {}` and `P()` then value-initialize, i.e. zero.
+                if (irClass.Constructors.Count > 0)
+                {
+                    WriteLine($"{className}() = default;");
+                    WriteLine();
+                }
                 foreach (var ctor in irClass.Constructors)
                 {
                     GenerateConstructor(irClass, ctor);
@@ -1716,6 +1730,19 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             WriteLine("};");
         }
 
+        /// <summary>
+        /// A Structure's declared constructor — the only caller is the IsStruct arm of the class
+        /// emitter; a class constructs in two phases (<see cref="GenerateTwoPhaseConstruction"/>).
+        ///
+        /// <para>⭐ #230: it DELEGATES to the defaulted parameterless constructor (<c>: P()</c>),
+        /// which value-initializes — zeroes — every field before the body runs, as VB's
+        /// <c>New P(...)</c> does: a field the body does not assign reads 0, never an indeterminate
+        /// value. Nothing else goes in the initializer list. A Structure has no base, and a
+        /// parameter is never stored to a field by its NAME — VB assigns only what the body says
+        /// (an earlier name-matching initializer here would have set <c>X</c> from a parameter
+        /// <c>x</c> that the body ignores; it was unreachable until a Structure could declare a
+        /// constructor).</para>
+        /// </summary>
         private void GenerateConstructor(IRClass irClass, IRConstructor ctor)
         {
             var className = SanitizeName(irClass.Name);
@@ -1738,44 +1765,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 }));
             }
 
-            // Build comprehensive initializer list
-            var initItems = new List<string>();
-
-            // Base constructor call first
-            if (!string.IsNullOrEmpty(irClass.BaseClass) && ctor.BaseCall is { } structBaseCall)
-            {
-                var baseArgs = string.Join(", ", structBaseCall.Args.Select(a =>
-                    a is IRConstant c ? EmitConstant(c) : SanitizeName(a.Name)));
-                initItems.Add($"{SanitizeName(irClass.BaseClass)}({baseArgs})");
-            }
-            else if (!string.IsNullOrEmpty(irClass.BaseClass))
-            {
-                // Default base constructor call
-                initItems.Add($"{SanitizeName(irClass.BaseClass)}()");
-            }
-
-            // Field initializations - match constructor parameters to fields
-            if (ctor.Implementation != null)
-            {
-                foreach (var param in ctor.Implementation.Parameters)
-                {
-                    // Find matching field (by name or by backing field pattern)
-                    var field = irClass.Fields.FirstOrDefault(f =>
-                        f.Name.Equals(param.Name, StringComparison.OrdinalIgnoreCase) ||
-                        f.Name.Equals("_" + param.Name, StringComparison.OrdinalIgnoreCase));
-
-                    if (field != null)
-                    {
-                        var fieldName = SanitizeName(field.Name);
-                        var paramName = SanitizeName(param.Name);
-                        initItems.Add($"{fieldName}({paramName})");
-                    }
-                }
-            }
-
-            var initList = initItems.Count > 0 ? " : " + string.Join(", ", initItems) : "";
-
-            WriteLine($"{className}({paramList}){initList}");
+            WriteLine($"{className}({paramList}) : {className}()");
             WriteLine("{");
             Indent();
             WriteTypeInitGuard(irClass);   // #208
@@ -3673,7 +3663,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// <c>BasicLang::Self(this)</c> (<see cref="GetValueNameCore"/>).
         /// </summary>
         private string ReceiverName(IRValue receiver) =>
-            IsSelfReference(receiver) ? "this" : GetValueName(receiver);
+            IsSelfReference(receiver)
+                ? (_emittingClass is { IsStruct: true } ? "(*this)" : "this")   // #230: see GetValueNameCore
+                : GetValueName(receiver);
 
         /// <summary><c>Me</c> (or the <c>MyBase</c> receiver, a base-typed variable of the same name).</summary>
         private static bool IsSelfReference(IRValue value) =>
@@ -5490,6 +5482,71 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 ? ElementLValue(gep)
                 : null;
 
+        /// <summary>
+        /// ⭐ #230: the C++ LVALUE of the Structure STORAGE <paramref name="place"/> was read from —
+        /// an array element (<see cref="ElementLValueOfArrayRead"/>) or a FIELD, of an object or of
+        /// another Structure place, recursively (<c>o-&gt;S</c>, <c>o.I</c>, <c>P::K</c>) — or null
+        /// for anything else. The IR reads such a place into a temp, and a Structure temp is a
+        /// COPY: a method called on it (<c>o.S.Bump()</c>, <c>a(0).Bump()</c>), a field written
+        /// through it (<c>o.S.V = 5</c>) or a property set on it would change the copy and
+        /// silently drop the change. VB acts on the storage itself, as C# and MSIL already do.
+        ///
+        /// <para>⚠ Only a declared FIELD is a place. A property — accessor-backed or a plain
+        /// auto-property, which keeps a data member of its own name here — is a VALUE in VB: its
+        /// Get returns a copy, and a method called on that copy is lost exactly as VB loses it. A
+        /// call result and every other value are not places either, so their temp stands.</para>
+        /// </summary>
+        private string StructPlaceLValue(IRValue place)
+        {
+            if (!IsUserStructType(place?.Type)) return null;
+
+            if (ElementLValueOfArrayRead(place) is { } element) return element;
+
+            if (place is not IRFieldAccess { Object: { } owner } access
+                || !DeclaresField(owner, access.FieldName))
+                return null;
+
+            var fieldName = SanitizeName(access.FieldName);
+            if (StaticMemberQualifier(owner, access.FieldName) is string qualifier)
+                return GuardedStaticLValue(owner, access.FieldName) ?? $"{qualifier}{fieldName}";
+
+            return $"{StructPlaceLValue(owner) ?? ReceiverName(owner)}{MemberAccessOp(owner)}{fieldName}";
+        }
+
+        /// <summary>#230: whether <paramref name="type"/> is a Structure this module declares.</summary>
+        private bool IsUserStructType(TypeInfo type) =>
+            type?.Name != null && type.Kind != TypeKind.Array && _module?.Classes != null
+            && _module.Classes.TryGetValue(type.Name, out var cls) && cls is { IsStruct: true };
+
+        /// <summary>
+        /// #230: whether <c>receiver.member</c> names a declared FIELD (Shared or not) of a class or
+        /// Structure this module declares, walking bases — never a property. A type-name receiver
+        /// (<c>P.K</c>) is resolved by name, as <see cref="StaticMemberQualifier"/> resolves it;
+        /// <c>Me</c> against the class being emitted, as <see cref="AccessorPropertyOf"/> does.
+        /// </summary>
+        private bool DeclaresField(IRValue receiver, string member)
+        {
+            if (string.IsNullOrEmpty(member) || _module?.Classes == null) return false;
+
+            var typeName = IsSelfReference(receiver) && _emittingClass != null
+                ? _emittingClass.Name
+                : StaticMemberQualifier(receiver, member) != null ? ((IRVariable)receiver).Name : receiver?.Type?.Name;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (!string.IsNullOrEmpty(typeName) && seen.Add(typeName)
+                   && _module.Classes.TryGetValue(typeName, out var cls) && cls != null)
+            {
+                if ((cls.Properties ?? new List<IRProperty>()).Any(p =>
+                        string.Equals(p?.Name, member, StringComparison.OrdinalIgnoreCase)))
+                    return false;
+                if ((cls.Fields ?? new List<IRField>()).Any(f =>
+                        string.Equals(f?.Name, member, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+                typeName = cls.BaseClass;
+            }
+            return false;
+        }
+
         public override void Visit(IRGetElementPtr gep)
         {
             // A GEP is an ADDRESS COMPUTATION, not a value, and this backend has nowhere to
@@ -5948,7 +6005,8 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
         /// </summary>
         private string InstanceCallExpression(IRInstanceMethodCall methodCall, out bool isShim, out List<string> byRefTemps)
         {
-            var obj = ReceiverName(methodCall.Object);
+            // #230: a Structure method runs on the storage it was called through, never a copy.
+            var obj = StructPlaceLValue(methodCall.Object) ?? ReceiverName(methodCall.Object);
 
             // .NET-surface shim: ToString has no C++ counterpart — lower it by
             // receiver type (DateTime → runtime formatter, numbers → to_string).
@@ -6326,7 +6384,9 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
                 return;
             }
 
+            // #230: a Structure FIELD read into a temp is a copy too (`o.S.V = 5`): write the field.
             var obj = ElementLValueOfArrayRead(fieldStore.Object)
+                      ?? StructPlaceLValue(fieldStore.Object)
                       ?? ReceiverName(fieldStore.Object);
             var op = MemberAccessOp(fieldStore.Object);
             WriteLine($"{obj}{op}{fieldName} = {value};");

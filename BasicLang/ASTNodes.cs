@@ -337,12 +337,37 @@ namespace BasicLang.Compiler.AST
     {
         public string Name { get; set; }
         public AccessModifier Access { get; set; }
+
+        /// <summary>The Structure's FIELDS (a <c>Shared</c> one included), in source order.</summary>
         public List<VariableDeclarationNode> Members { get; set; }
+
+        /// <summary>
+        /// #230: every OTHER member — methods, properties, constructors (a <c>Shared Sub New</c>
+        /// included), constants — in source order. A Structure body is parsed by the CLASS member
+        /// parser, so the two read one member grammar; the fields stay in <see cref="Members"/>,
+        /// which is all its older readers (the LSP, the library loader, the pretty-printer) know.
+        /// </summary>
+        public List<ASTNode> NonFieldMembers { get; set; }
 
         public StructureNode(int line, int column) : base(line, column)
         {
             Access = AccessModifier.Private;  // Default to Private for multi-file
             Members = new List<VariableDeclarationNode>();
+            NonFieldMembers = new List<ASTNode>();
+        }
+
+        /// <summary>
+        /// #230: the Structure's members as the <see cref="ClassNode"/> the class member pipeline
+        /// reads (pass-1 signatures, the IR class builder) — the SAME member nodes, fields first,
+        /// then <see cref="NonFieldMembers"/>. Built on demand and never stored: a view, not a second
+        /// declaration. Its kind is the reader's to decide; nothing here makes it a class.
+        /// </summary>
+        public ClassNode AsClassMembers()
+        {
+            var view = new ClassNode(Line, Column) { Name = Name, Access = Access };
+            view.Members.AddRange(Members);
+            view.Members.AddRange(NonFieldMembers);
+            return view;
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

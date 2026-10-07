@@ -1716,53 +1716,66 @@ namespace BasicLang.Compiler
 
             node.Name = Consume(TokenType.Identifier, "Expected structure name").Lexeme;
             ConsumeNewlines();
+            _context.Push($"Structure '{node.Name}'");
 
-            while (!Check(TokenType.EndStructure) && !IsAtEnd())
+            try
             {
-                SkipNewlines();
-                if (Check(TokenType.EndStructure) || IsAtEnd())
-                    break;
-
-                // Structure members default to Public in VB
-                var access = AccessModifier.Public;
-                if (Match(TokenType.Public)) access = AccessModifier.Public;
-                else if (Match(TokenType.Private)) access = AccessModifier.Private;
-                else if (Match(TokenType.Friend)) access = AccessModifier.Friend;
-                Match(TokenType.Dim);
-
-                var member = new VariableDeclarationNode(Peek().Line, Peek().Column);
-                member.Access = access;
-                member.Name = ConsumeIdentifierLike("Expected member name").Lexeme;
-
-                // A structure member may be an array, exactly like a class field
-                // ("Public Items(2) As Integer"). This site had no dimension parsing at all, so
-                // the declaration failed with "Expected 'As' but found LeftParen".
-                List<ExpressionNode> memberDimensions = null;
-                if (Match(TokenType.LeftParen))
-                    memberDimensions = ParseArrayDimensionList(TokenType.RightParen, ")");
-                else if (Match(TokenType.LeftBracket))
-                    memberDimensions = ParseArrayDimensionList(TokenType.RightBracket, "]");
-
-                if (memberDimensions != null)
-                    RejectChainedArrayDimensions(member.Name);
-
-                Consume(TokenType.As, "Expected 'As'");
-                var memberTypeToken = Peek();
-                member.Type = ParseTypeReference();
-
-                if (memberDimensions != null)
+                // #230: a Structure body is read by the CLASS member parser — methods, properties,
+                // constructors, Shared members and constants included — never by a second grammar.
+                // A field is the same node a class field is (array dimensions and all), so the
+                // fields-only Structure every backend already emits reads exactly as it did. What
+                // VB forbids in a Structure (a parameterless instance Sub New, an instance field
+                // initializer, a lambda using Me) is the analyzer's to report, by VB's number.
+                while (!Check(TokenType.EndStructure) && !IsAtEnd())
                 {
-                    RejectArrayOnNameAndType(member.Name, member.Type, memberTypeToken);
-                    member.Type.IsArray = true;
-                    member.Type.ArrayDimensions = memberDimensions;
+                    SkipNewlines();
+                    if (Check(TokenType.EndStructure) || IsAtEnd())
+                        break;
+
+                    try
+                    {
+                        // ⚠ `Friend` is not a class-member modifier here (a Class member does not
+                        // take it either), but a Structure field always did. Read first and
+                        // applied after, so `Friend X As Integer` keeps parsing.
+                        var isFriend = Match(TokenType.Friend);
+                        var member = ParseClassMember();
+                        if (isFriend) ApplyFriendAccess(member);
+
+                        if (member is VariableDeclarationNode field)
+                            node.Members.Add(field);
+                        else if (member != null)
+                            node.NonFieldMembers.Add(member);
+                    }
+                    catch (ParseException ex)
+                    {
+                        RecordError(ex.Message, ex.Token, ex.Suggestion);
+                        Synchronize();
+                    }
+                    SkipNewlines();
                 }
 
-                node.Members.Add(member);
-                SkipNewlines();
+                Consume(TokenType.EndStructure, "Expected 'End Structure'");
             }
-
-            Consume(TokenType.EndStructure, "Expected 'End Structure'");
+            finally
+            {
+                _context.Pop();
+            }
             return node;
+        }
+
+        /// <summary>#230: a leading <c>Friend</c> on a Structure member, applied to the node
+        /// <see cref="ParseClassMember"/> returned (which defaults it to Public).</summary>
+        private static void ApplyFriendAccess(ASTNode member)
+        {
+            switch (member)
+            {
+                case VariableDeclarationNode field: field.Access = AccessModifier.Friend; break;
+                case FunctionNode function: function.Access = AccessModifier.Friend; break;
+                case SubroutineNode sub: sub.Access = AccessModifier.Friend; break;
+                case PropertyNode property: property.Access = AccessModifier.Friend; break;
+                case ConstructorNode constructor: constructor.Access = AccessModifier.Friend; break;
+                case ConstantDeclarationNode constant: constant.Access = AccessModifier.Friend; break;
+            }
         }
 
         private UnionNode ParseUnion()
