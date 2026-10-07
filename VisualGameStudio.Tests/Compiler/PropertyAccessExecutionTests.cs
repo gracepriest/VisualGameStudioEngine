@@ -274,43 +274,10 @@ public class PropertyAccessExecutionTests
         Assert.That(refusals[0].Line, Is.EqualTo(3), "on the write's line");
     }
 
-    /// <summary>#221 — a bare <c>For P = …</c> loop over a ReadWrite property DRIVES it (as it
-    /// did before #178), which is accepted here; VB itself refuses every property as a For
-    /// loop's control variable, ReadWrite included (BC30039 — a different code than either of
-    /// #178's own two, and #178's contract never claimed this shape).</summary>
-    [Test]
-    public void BareForLoop_OverAReadWriteProperty_FrontEndAccepts_PinsPreExistingGap_Against221()
-    {
-        const string source = """
-            Class C
-                Public Property P As Integer
-                Public Sub Loop3()
-                    For P = 1 To 3
-                        Console.WriteLine(P)
-                    Next
-                End Sub
-            End Class
-            """;
-        var parser = new Parser(new Lexer(source).Tokenize());
-        var ast = parser.Parse();
-        Assert.That(parser.Errors, Is.Empty, "parse errors:\n" + string.Join("\n", parser.Errors.Select(e => e.Message)));
-        var analyzer = new SemanticAnalyzer();
-        analyzer.Analyze(ast);
-
-        Assert.That(analyzer.Errors, Is.Empty,
-            "task #221 (pre-existing, unrelated to #178): BasicLang must still accept a bare `For "
-            + "P = …` over a ReadWrite property — VB itself refuses this (BC30039, a DIFFERENT "
-            + "code than #178's own BC30526/BC30524). A diagnostic here means #221 moved — update "
-            + "this pin, do not just delete it.\nerrors: "
-            + string.Join(" | ", analyzer.Errors.Select(e => e.ToString())));
-
-        const string program = "Class C\n Public Property P As Integer\n Public Sub Loop3()\n"
-            + "  For P = 1 To 3\n   Console.WriteLine(P)\n  Next\n End Sub\nEnd Class\n"
-            + "Sub Main()\n Dim o As New C()\n o.Loop3()\nEnd Sub\n";
-        Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(program)), Is.EqualTo("1\n2\n3"),
-            "task #221: the property really is DRIVEN like an ordinary loop variable (C# is the "
-            + "oracle for what BasicLang itself does here, since VB refuses the shape outright).");
-    }
+    // (#221's pin, `BareForLoop_OverAReadWriteProperty_FrontEndAccepts_PinsPreExistingGap_Against221`,
+    // stood here. #221 is fixed — a For control variable bound to a property is VB's BC30039 — and
+    // the pin moved to the fast fixture as its refusal row,
+    // LoopControlPropertyDiagnosticsTests.ACountedFor_OverAnAutoProperty_IsBC30039.)
 
     // N1 / N2 — a .NET ReadOnly property (String.Length, List(Of T).Count). #222 moved both: they were the
     // two shapes BasicLang accepted (rule 5: the resolver carried no .NET settability fact) and JavaScript

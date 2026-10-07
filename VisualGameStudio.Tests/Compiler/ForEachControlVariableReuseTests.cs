@@ -528,10 +528,10 @@ public class ForEachControlVariableDiagnosticsTests
             " End Sub\n" +
             "End Module");
 
+        // #221: VB's own code and message (vbc, S/t221/probes/R6.bas), the counted For's refusal too.
         Assert.That(hasErrors, Is.True, "a property control variable must be refused, not silently shadowed");
         Assert.That(messages, Has.Some.Contains(
-            "'P' is a property and cannot be used as a For Each control variable. " +
-            "Use a variable, or declare a new one with 'For Each P As <type>'"),
+            "BC30039: Loop control variable cannot be a property or a late-bound indexed array."),
             string.Join(" | ", messages));
     }
 
