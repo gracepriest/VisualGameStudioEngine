@@ -37,7 +37,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //  pin the defect. They are not rows here:
 //
 //    C#  #227   E07w                          a bottom-tested loop (`Do … Loop While/Until`) over a nested loop never ends.
-//    C#  #228   E15, E15n                     a sized array `Dim a(2)` in a loop body is allocated once, at function top.
+//    C#  #228   E15, E15n                     ⚠ FIXED (2026-10-07): a sized array `Dim a(2)` in a loop body was allocated once, at function top; it is a new array
+//                                             every pass now and both print vbc's 1|2|3 (moved pins, PerIterationLoopBodyDimExecutionTests; SizedArrayDimInLoopExecutionTests).
 //    C#/JS #229 E16, E20                      a name with two `Dim`s in one function stays function-level. E20 on C# prints 50|2|2 now (JavaScript's
 //                                             answer, vbc's is 50|1|2): `h()` is right since #136, the loop's `y` is #229. It is pinned in
 //                                             PerIterationLoopBodyDimExecutionTests.E20_…_PinnedForTask229.
@@ -52,7 +53,8 @@ namespace VisualGameStudio.Tests.Compiler;
 //    all       e_meth, k_generic              BL-FAIL in the front end (`Private items As New List(Of Integer)` as a field; a generic Function called `Twice(Of Integer)(…)`) on every
 //                                             backend before and after. e_meth2 is e_meth with the field initialised in the constructor and IS a row.
 //    C#        a class method's `Dim a(3)`    `int[] a = default!`, then a NullReferenceException: sized arrays in METHODS are allocated nowhere
-//                                             (`DeclareLocals(sizedArrays: false)`); a LAMBDA's is (j_lambdaarr).
+//                                             (`DeclareLocals(sizedArrays: false)`); a LAMBDA's is (j_lambdaarr). ⚠ #264 outside a loop only: a method's sized Dim INSIDE a
+//                                             loop is allocated at its statement since #228 (SizedArrayDimInLoopExecutionTests, r5).
 //
 //  ⚠ Named "…ExecutionTests" on purpose: its controls RUN under Node, so it is in JsExecutionTierRosterTests' roster.
 // ================================================================================================

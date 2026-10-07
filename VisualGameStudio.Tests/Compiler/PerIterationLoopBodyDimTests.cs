@@ -48,10 +48,11 @@ namespace VisualGameStudio.Tests.Compiler;
 //         function-body emitter now, cl and E08 print VB's answer and L8 prints D2's recorded
 //         divergence, 11|21|31, like the other three backends.)
 //    C#   E07w, P226b                                                          -> #227
-//    E15, E15n                                                                  -> #228
-//         (a sized array `Dim a(2)` in a loop body is not an IR instruction — every backend
-//         allocates it once, at function top, with or without a lambda; ADR-0014 changes nothing
-//         there. Recorded in the ADR's implementation notes as a known, separately-tracked gap.)
+//    E15, E15n   (none since #228: they were pinned here as 6|6|6 and 1|3|6 on all four backends, because a
+//         sized array `Dim a(2)` in a loop body was not an IR instruction — every backend allocated it once,
+//         at function top, with or without a lambda. It lowers to IRBuilder.SizedArrayDimIntrinsic at the
+//         statement now (ADR-0014 Amendment A-228), so both print VB's 1|2|3 on every backend; see E15_… and
+//         E15n_… below, and SizedArrayDimInLoopExecutionTests for the rest of the shapes.)
 //    E16, E20                                                                   -> #229 (E16 on all four backends since #140; E20 on C# prints
 //                                                                                  JavaScript's 50|2|2 since #136: the h() line is right, the loop's y is not)
 //         (the one-declaration rule: a name with two `Dim`s in one function — sibling loops for
@@ -605,11 +606,12 @@ internal static class PerIterationLoopBodyDimProbes
         """;
     internal const string E14Expected = "111\n122\n211\n222";
 
-    /// <summary>#228 (recorded, not fixed here): a SIZED array's `Dim a(2)` is never an IR
-    /// instruction — every backend allocates it once at function top, so the same array is
-    /// shared, and REFERENCED, across every iteration's closure. VB re-creates the array fresh
-    /// each iteration (1, 2, 3); every backend here prints the array's value AFTER the loop ends
-    /// (6, 6, 6) instead, on all four backends identically.</summary>
+    /// <summary>#228 (FIXED): a SIZED array's `Dim a(2)` used to be no IR instruction — every
+    /// backend allocated it once at function top, so the same array was shared, and REFERENCED,
+    /// across every iteration's closure, and every backend printed the array's value AFTER the
+    /// loop ended (6, 6, 6). In a loop body it is `IRBuilder.SizedArrayDimIntrinsic` at the
+    /// statement now (ADR-0014 Amendment A-228): VB re-creates the array fresh each iteration
+    /// (1, 2, 3) and so does every backend.</summary>
     internal const string E15 = """
         Sub Main()
             Dim fs As New List(Of Func(Of Integer))()
@@ -625,12 +627,11 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E15Expected = "1\n2\n3";
-    internal const string E15ActualAllBackends = "6\n6\n6";
 
-    /// <summary>E15's own shape with no lambda — proves the divergence is NOT about capture at
-    /// all: even with nothing to capture it, the array is still one function-level allocation, so
-    /// VB's fresh-array-per-iteration (1, 2, 3) still diverges from every backend's accumulating
-    /// (1, 3, 6).</summary>
+    /// <summary>E15's own shape with no lambda — proves the divergence was NOT about capture at
+    /// all: even with nothing to capture it, the array was one function-level allocation, so
+    /// VB's fresh-array-per-iteration (1, 2, 3) diverged from every backend's accumulating
+    /// (1, 3, 6) until #228.</summary>
     internal const string E15n = """
         Sub Main()
             For i As Integer = 1 To 3
@@ -641,7 +642,6 @@ internal static class PerIterationLoopBodyDimProbes
         End Sub
         """;
     internal const string E15nExpected = "1\n2\n3";
-    internal const string E15nActualAllBackends = "1\n3\n6";
 
     /// <summary>#229 (the one-declaration rule): TWO SIBLING loops each declare their own `Dim x`
     /// — the IR is flat and every backend spells both by the same NAME, so `x` has two
@@ -1209,30 +1209,49 @@ public class PerIterationLoopBodyDimExecutionTests
     }
 
     // ============================================================================================
-    // #228 (recorded, not fixed by #172): a sized array Dim in a loop body never gets per-iteration
-    // identity, with or without a lambda, on any backend.
+    // #228 (FIXED; was recorded, not fixed by #172): a sized array Dim in a loop body gets a new
+    // array every time it runs, with or without a lambda, on every backend. MOVED PINS: E15 and
+    // E15n printed 6|6|6 and 1|3|6 on all four backends, and print VB's 1|2|3 on all four now.
+    // The other shapes (every loop kind, a List of arrays, an Exit For, a class method's loop,
+    // a lambda's own loop, the controls) are SizedArrayDimInLoopExecutionTests.
     // ============================================================================================
 
-    /// <summary>Task #228: every backend prints the array's post-loop value (6, 6, 6) where VB's
-    /// own fresh-array-per-iteration prints 1, 2, 3 — recorded in ADR-0014's implementation notes
-    /// as a known gap #172 does not close.</summary>
-    [Test]
-    public void E15_SizedArrayInLoopBody_KnownWrongOnAllBackends_PinnedForTask228()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E15, PerIterationLoopBodyDimProbes.E15ActualAllBackends,
-            csharp: PerIterationLoopBodyDimProbes.E15ActualAllBackends,
-            cpp: PerIterationLoopBodyDimProbes.E15ActualAllBackends,
-            js: PerIterationLoopBodyDimProbes.E15ActualAllBackends,
-            msil: PerIterationLoopBodyDimProbes.E15ActualAllBackends);
+    /// <summary>
+    /// #228: all four backends print VB's answer, the C# leg in a child process with a time limit
+    /// (#256: the probe loops, and a C# loop that hangs in process freezes the whole test host).
+    /// </summary>
+    private static void AssertAllFourAgreeHangSafe(string source, string vb) =>
+        Assert.Multiple(() =>
+        {
+            Assert.That(FourBackends.Norm(CSharpProcessRunner.RunExpectingSuccess(ReturnCoercionTests.EmitCSharpForTest(source))),
+                Is.EqualTo(vb), "C#");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(source))), Is.EqualTo(vb), "C++");
+            Assert.That(FourBackends.Norm(JavaScriptExecutionTests.RunJs(source)), Is.EqualTo(vb), "JavaScript");
+            Assert.That(FourBackends.Norm(MsilHarness.RunExpectingSuccess(source)), Is.EqualTo(vb), "MSIL");
+        });
 
-    /// <summary>Task #228's own no-lambda control: even with nothing to capture the array, VB's
-    /// fresh allocation per iteration still diverges from every backend's one shared array.</summary>
+    /// <summary>
+    /// ⭐ MOVED PIN (#228). USED TO print 6\n6\n6 on every backend (the one function-level array's value
+    /// after the loop, shared by all three closures); each iteration's lambda captures its own array
+    /// now, so C#, C++, JavaScript and MSIL print VB's 1\n2\n3. The C++ root took the LOWERED path
+    /// (the environment holds the NEW array each pass: a by-copy fallback would hide a regression).
+    /// </summary>
     [Test]
-    public void E15n_SizedArrayNoLambda_KnownWrongOnAllBackends_PinnedForTask228()
-        => AssertWithPins(PerIterationLoopBodyDimProbes.E15n, PerIterationLoopBodyDimProbes.E15nActualAllBackends,
-            csharp: PerIterationLoopBodyDimProbes.E15nActualAllBackends,
-            cpp: PerIterationLoopBodyDimProbes.E15nActualAllBackends,
-            js: PerIterationLoopBodyDimProbes.E15nActualAllBackends,
-            msil: PerIterationLoopBodyDimProbes.E15nActualAllBackends);
+    public void E15_SizedArrayInLoopBody_EachIterationsLambdaCapturesItsOwnArray()
+    {
+        Assert.That(CppClosures.Compile(PerIterationLoopBodyDimProbes.E15).PathOf("Main"), Is.EqualTo(CppClosurePath.Lowered),
+            "C++ root 'Main' must take the lowered path");
+        AssertAllFourAgreeHangSafe(PerIterationLoopBodyDimProbes.E15, PerIterationLoopBodyDimProbes.E15Expected);
+    }
+
+    /// <summary>
+    /// ⭐ MOVED PIN (#228). USED TO print 1\n3\n6 on every backend (one array accumulating across the
+    /// iterations, with nothing to capture it); each pass starts from a fresh zeroed array now, so all
+    /// four backends print VB's 1\n2\n3.
+    /// </summary>
+    [Test]
+    public void E15n_SizedArrayNoLambda_EachIterationStartsFromAFreshZeroedArray()
+        => AssertAllFourAgreeHangSafe(PerIterationLoopBodyDimProbes.E15n, PerIterationLoopBodyDimProbes.E15nExpected);
 
     // ============================================================================================
     // #229 (the one-declaration rule, by construction): E16 (sibling loops, same name) and E20
