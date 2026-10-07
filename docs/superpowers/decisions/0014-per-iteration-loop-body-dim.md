@@ -3,7 +3,7 @@
 - **Date:** 2026-09-28
 - **Status:** Accepted; amended the same day by A1 and A2 (below), which replace D2's Contract
   and add to D1's Obligations.
-- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end. #136 (C# writes a lambda body with the function-body emitter) — D2's revisit-if again; see "Amendment A-136" at the end. #228 (a sized array `Dim` in a loop body allocates at the statement) — D4 made true for array bounds; see "Amendment A-228" at the end.
+- **Amended by:** ADR-0019 (#140) — D2's revisit-if only; see "Amendment A-140" at the end. #136 (C# writes a lambda body with the function-body emitter) — D2's revisit-if again; see "Amendment A-136" at the end. #228 (a sized array `Dim` in a loop body allocates at the statement) — D4 made true for array bounds; see "Amendment A-228" at the end. #229 (two `Dim`s of one spelling are two variables) — the implementation note "A name with one declaration only"; see "Amendment A-229" at the end.
 - **Decided by:** the architect role, in a ruling (D1–D6) and an amendment (A1, A2) answering two
   findings the first implementation measured. Transcribed from both; nothing under the Decision
   headings is editorialised.
@@ -334,3 +334,34 @@ revisit-if "probe L8 prints differently on any two backends") is unchanged, and 
 - Byte identity: a sized `Dim` outside every loop emits nothing new; the function-top allocation stays on every backend (the
   first iteration allocates twice, harmlessly). LLVM, which allocates no sized array anywhere, renders it as a call to an
   undefined `@__BLDimArray`, as it does `@__BLReDim`.
+
+## Amendment A-229 (#229, 2026-10-07): two `Dim`s of one spelling are two variables
+
+*Appended, not edited in place: D1–D6, A1, A2, A-140, A-136 and A-228 are unchanged. This narrows the implementation note
+"A name with one declaration only" above, whose sibling case (probe E16) it names as #229.*
+
+- **The rule.** A local `Dim` (or `Dim (a, b) = …`) whose spelling, ignoring case, is already a local where it would meet it —
+  in its own function, in a function enclosing it, or in a lambda created inside it — gets an IR name of its own,
+  `{spelling}_{k}`: the first k that is no name the program can name (`SemanticAnalyzer.SpellingsInUse`: every symbol of every
+  scope and every identifier the analyzer saw), no module-level IR name (the owner-qualified shared globals included) and no
+  local it would meet (`IRBuilder.EmittedLocalName`). The earlier declaration keeps its spelling. Two sibling lambdas do not
+  meet. The version stack stays keyed by the declared spelling (ADR-0013 D1); a reference reaches the variable through its
+  declaration (`_localsByDeclaration`, by reference), and a counted `For` that drives or reuses such a local writes it back
+  under its own name. The name is reserved by the push like any declaration (ADR-0018 D1), and nothing later recognises it
+  by its shape.
+- **What follows for this ADR.** Two `Dim`s are two names, so each is judged on its own by `AssignBodyLocals`: E16 and E20
+  print vbc's answer on all four backends (E16 1|2|10|20, E20 50|1|2), and so does a captured pair in an If and its Else
+  inside one loop body (#242's shape for two `Dim`s). On C++ E20 and t174 E12_later_sibling leave the by-copy fallback for
+  `ClosureLowering`; on MSIL they no longer reach the N9 backstop. What can still share a spelling is a `Dim` with a
+  declaration of another kind (a counted `For` control variable declared later, a parameter, a For Each or Catch variable):
+  that residue keeps the function-level behaviour.
+- **ADR-0013's rejected "uniquify IR names per declaration".** That row rejected renaming every declaration, which changes
+  every program's bytes and every user-visible name. This renames only a second declaration of a spelling, so a procedure
+  without such a pair is byte-identical; the second variable does appear under its IR name in the generated source and the
+  debugger.
+- **Measured** (Linux; probes `S/t229/probes` p01–p20 with vbc expectations, C#/C++/JavaScript/MSIL x CLI / `--optimize` /
+  Release `.blproj`): 219 of 240 cells print vbc's answer, from 84; the rest are p13 (a `For x` with no `As` after two
+  sibling `Dim x` of different types reuses the second's storage: compile failure before and after, MSIL now a run failure)
+  and p15 (#231's hiding shape, which vbc refuses: 2|2 became 2|1, a reference reaching its own declaration). Byte compare over
+  the t124 corpora + the t228/t229 probes, 5 backends x CLI / `-O`: 246 of 11,360 cells differ, all in the 27 programs with a
+  same-named local pair, 0 outside; 6 return-code changes (MSIL E20 / E12_later_sibling / p08 now build); 0 verifier fires.

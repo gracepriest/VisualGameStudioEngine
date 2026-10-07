@@ -110,6 +110,9 @@ namespace BasicLang.Compiler.IR
             _lambdaCreator.Clear();
             _pendingReservations.Clear();
             _storageMemberReads.Clear();
+            _localsByDeclaration.Clear();
+            _ownNamedLocals.Clear();
+            _spellingsInUse = null;
 
             CollectSharedModuleGlobalNames(program);
 
@@ -304,7 +307,19 @@ namespace BasicLang.Compiler.IR
 
             foreach (var kv in owners)
                 if (kv.Value.Count > 1) _sharedGlobalNames.Add(kv.Key);
+
+            // #229: the owner-qualified IR names GlobalIrName will give them, which a local's own
+            // name must never take (EmittedLocalName).
+            _sharedGlobalIrNames.Clear();
+            foreach (var kv in owners)
+                if (kv.Value.Count > 1)
+                    foreach (var owner in kv.Value)
+                        if (!string.IsNullOrEmpty(owner)) _sharedGlobalIrNames.Add($"{owner}_{kv.Key}");
         }
+
+        /// <summary>#229: <see cref="GlobalIrName"/>'s owner-qualified names, every one of them, known
+        /// before the walk (see <see cref="CollectSharedModuleGlobalNames"/>).</summary>
+        private readonly HashSet<string> _sharedGlobalIrNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The IR name of module-level <paramref name="name"/> owned by <paramref name="module"/>.</summary>
         private string GlobalIrName(string module, string name) =>
@@ -691,6 +706,100 @@ namespace BasicLang.Compiler.IR
         private IRVariable CreateVariable(string name, TypeInfo type, int version = 0)
         {
             return new IRVariable(name, type, version);
+        }
+
+        /// <summary>
+        /// ⭐ #229 — the IR name of a local <c>Dim</c> spelled <paramref name="declared"/>: that
+        /// spelling, unless a local of it is already declared where this one would meet it, ignoring
+        /// case — then a name of its own.
+        ///
+        /// <para>A declaration is its own symbol. <c>If c Then : Dim x As Integer … Else : Dim x As
+        /// String …</c>, two sibling loops' <c>Dim x</c>, two <c>Select Case</c> arms' — each is a
+        /// different variable, of its own type and lifetime. But the IR is flat and every backend
+        /// identifies a local by NAME, so two locals spelled <c>x</c> were ONE variable: the second
+        /// block read the first's value, or its type (C#, JavaScript), or the function did not compile
+        /// (a C++ redefinition; MSIL's type clash), and ADR-0014's one-declaration rule left both out
+        /// of per-iteration identity (E16, E20).</para>
+        ///
+        /// <para><b>Where it would meet it</b> (<see cref="ProcedureDeclaresLocal"/>): the function
+        /// being built, every function enclosing it, and every lambda created inside it — a lambda
+        /// body is not a name scope (ADR-0013 D4), C# and JavaScript write it inside its creator, and
+        /// ADR-0014's rule and MSIL's N9 backstop ask a creator's lambdas too. Two sibling lambdas do
+        /// not meet. <b>"Declared"</b> is what the backends declare, <see cref="IRFunction.LocalVariables"/>
+        /// — the earlier declaration keeps its spelling, so a procedure with no such pair is
+        /// byte-identical.</para>
+        ///
+        /// <para><b>Its own name</b> is <c>{declared}_{k}</c>, the first k that names nothing the
+        /// program can name (<see cref="SemanticAnalyzer.SpellingsInUse"/>: every declaration of the
+        /// unit in every scope, and every identifier it spells), no module-level IR name, and no
+        /// local it would meet. Reserved by the push like any declaration (ADR-0018 D1); never
+        /// recognised later by its shape — <see cref="_ownNamedLocals"/> holds the variables, by
+        /// identity. The version stack stays keyed by the DECLARED spelling (ADR-0013 D1), and a
+        /// reference reaches the variable through its declaration (<see cref="_localsByDeclaration"/>).
+        /// ⚠ The debugger and the generated source show the second variable by this name.</para>
+        /// </summary>
+        private string EmittedLocalName(string declared)
+        {
+            if (_currentFunction == null || string.IsNullOrEmpty(declared) || !ProcedureDeclaresLocal(declared))
+                return declared;
+
+            _spellingsInUse ??= BuildSpellingsInUse();
+            var moduleLevel = new HashSet<string>(
+                IRTempNames.ModuleLevelNames(_module).Where(n => !string.IsNullOrEmpty(n)),
+                StringComparer.OrdinalIgnoreCase);
+            for (var k = 1; ; k++)
+            {
+                var candidate = $"{declared}_{k}";
+                if (_spellingsInUse.Contains(candidate) || moduleLevel.Contains(candidate)
+                    || ProcedureDeclaresLocal(candidate))
+                    continue;
+                return candidate;
+            }
+        }
+
+        private ISet<string> BuildSpellingsInUse()
+        {
+            var names = new HashSet<string>(
+                _semanticAnalyzer?.SpellingsInUse() ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
+            names.UnionWith(_sharedGlobalIrNames);
+            return names;
+        }
+
+        /// <summary>#229: whether a local spelled <paramref name="name"/> (ignoring case) is already
+        /// declared where a local of the current function would meet it — in the current function,
+        /// in a function enclosing it (its creator chain, <see cref="_lambdaCreator"/>), or in a lambda
+        /// created inside it so far (see <see cref="EmittedLocalName"/>). Two SIBLING lambdas never
+        /// meet: each is its own function on C++ and MSIL and its own nested scope on C# and
+        /// JavaScript, and ADR-0014's rule asks a function's own lambdas only.</summary>
+        private bool ProcedureDeclaresLocal(string name)
+        {
+            static bool Declares(IRFunction f, string n) =>
+                f.LocalVariables.Any(v => string.Equals(v?.Name, n, StringComparison.OrdinalIgnoreCase));
+
+            if (_currentFunction == null) return false;
+            var guard = 0;
+            for (var f = _currentFunction; f != null && guard++ < 256; f = CreatorOf(f))
+                if (Declares(f, name)) return true;
+            foreach (var lambda in _lambdaCreator.Keys)
+                if (!ReferenceEquals(lambda, _currentFunction) && IsCreatedInside(lambda, _currentFunction)
+                    && Declares(lambda, name))
+                    return true;
+            return false;
+        }
+
+        /// <summary>The function whose body created lambda <paramref name="function"/>; null for
+        /// anything else (<see cref="_lambdaCreator"/>, recorded before the lambda's body is built).</summary>
+        private IRFunction CreatorOf(IRFunction function) =>
+            function != null && _lambdaCreator.TryGetValue(function, out var creator) ? creator : null;
+
+        /// <summary>Whether <paramref name="lambda"/> was created, directly or through other lambdas,
+        /// inside <paramref name="function"/>.</summary>
+        private bool IsCreatedInside(IRFunction lambda, IRFunction function)
+        {
+            var guard = 0;
+            for (var f = CreatorOf(lambda); f != null && guard++ < 256; f = CreatorOf(f))
+                if (ReferenceEquals(f, function)) return true;
+            return false;
         }
 
         /// <summary>
@@ -1129,6 +1238,29 @@ namespace BasicLang.Compiler.IR
             new Dictionary<Symbol, IRVariable>(ReferenceEqualityComparer.Instance);
 
         /// <summary>
+        /// ⭐ #229 — the IR variable of each local <c>Dim</c>, keyed by the analyzer's declaration
+        /// (<see cref="NameBinding.Declaration"/>, by reference). Asked by <see cref="BoundVariable"/>'s
+        /// Local arm before the version stack, so a reference reaches ITS declaration's variable even
+        /// when another declaration of the same spelling was pushed since (a sibling block's
+        /// <c>Dim</c> is never popped). For every program without such a pair this is what the stack
+        /// top already was.
+        /// </summary>
+        private readonly Dictionary<Symbol, IRVariable> _localsByDeclaration =
+            new Dictionary<Symbol, IRVariable>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        /// ⭐ #229 — the locals <see cref="EmittedLocalName"/> gave a name of their own (a second
+        /// declaration of a spelling the procedure already declares), by identity. Read by the
+        /// counted <c>For</c>, whose increment writes back by NAME (<see cref="Visit(ForLoopNode)"/>).
+        /// </summary>
+        private readonly HashSet<IRVariable> _ownNamedLocals = new HashSet<IRVariable>(ReferenceEqualityComparer.Instance);
+
+        /// <summary>#229: <see cref="SemanticAnalyzer.SpellingsInUse"/> plus the IR names of the
+        /// owner-qualified module-level names, computed the first time a local needs a name of its
+        /// own (never, for almost every program). Reset per build.</summary>
+        private ISet<string> _spellingsInUse;
+
+        /// <summary>
         /// #219 / #249 — the procedure being built that has an implicit return variable (a Function,
         /// not Async or Iterator, or a property Get), its return type, and the carrier that holds the
         /// variable when its body names it (null when it does not). Null outside one; a lambda built
@@ -1418,14 +1550,18 @@ namespace BasicLang.Compiler.IR
             }
             else
             {
-                // Local variable - register it for declaration
-                var localVar = CreateVariable(node.Name, varType, _nextVersion++);
+                // Local variable - register it for declaration. #229: under a name of its own when
+                // the procedure already declares this spelling (a sibling block's Dim).
+                var localVar = CreateVariable(EmittedLocalName(node.Name), varType, _nextVersion++);
+                if (!string.Equals(localVar.Name, node.Name, StringComparison.Ordinal)) _ownNamedLocals.Add(localVar);
                 // Record when the type was INFERRED (`Dim x = expr` / `Auto x = expr`, no
                 // `As` clause) rather than explicitly declared. The C++ backend uses this to
                 // emit `auto` for opaque foreign initializers whose inferred type is a
                 // synthetic member-path pseudo-type (not a real C++ type).
                 localVar.IsInferredType = node.IsAuto;
                 PushVariableVersion(node.Name, localVar);
+                if (_semanticAnalyzer.GetNodeSymbol(node) is { } declaration)
+                    _localsByDeclaration[declaration] = localVar;
                 _currentFunction.LocalVariables.Add(localVar);
                 RecordBodyLocal(localVar);   // ADR-0014: before the initializer, which is ordinary IR (D4)
 
@@ -1435,7 +1571,7 @@ namespace BasicLang.Compiler.IR
 
                 if (needsMemory)
                 {
-                    var alloca = new IRAlloca($"{node.Name}_addr", varType);
+                    var alloca = new IRAlloca($"{localVar.Name}_addr", varType);
                     EmitInstruction(alloca);
                 }
 
@@ -1456,7 +1592,7 @@ namespace BasicLang.Compiler.IR
                     {
                         var alloca = _currentBlock.Instructions
                             .OfType<IRAlloca>()
-                            .LastOrDefault(a => a.Name == $"{node.Name}_addr");
+                            .LastOrDefault(a => a.Name == $"{localVar.Name}_addr");
                         if (alloca != null)
                         {
                             EmitInstruction(new IRStore(initValue, alloca) { IsDimInitializer = true });
@@ -1543,8 +1679,10 @@ namespace BasicLang.Compiler.IR
                     varType = new TypeInfo("Object", TypeKind.Class);
                 }
 
-                // Create the local variable
-                var localVar = CreateVariable(varName, varType, _nextVersion++);
+                // Create the local variable — #229: under a name of its own when the procedure
+                // already declares this spelling, as a Dim's (EmittedLocalName).
+                var localVar = CreateVariable(EmittedLocalName(varName), varType, _nextVersion++);
+                if (!string.Equals(localVar.Name, varName, StringComparison.Ordinal)) _ownNamedLocals.Add(localVar);
                 PushVariableVersion(varName, localVar);
                 _currentFunction.LocalVariables.Add(localVar);
                 RecordBodyLocal(localVar);   // ADR-0014: `Dim (a, b) = …` is a Dim too
@@ -3373,6 +3511,10 @@ namespace BasicLang.Compiler.IR
                 PushVariableVersion(paramVar.Name, paramVar);
             }
 
+            // Recorded BEFORE the body (#229): a Dim in it asks which functions enclose it
+            // (ProcedureDeclaresLocal), and the answer runs through this link.
+            if (savedFunction != null) _lambdaCreator[lambdaFunc] = savedFunction;
+
             emitBody();
 
             // ⭐ THE CAPTURE SET (task #122, ADR-0006 D1's Obligation), read off the lambda's IR
@@ -3398,7 +3540,6 @@ namespace BasicLang.Compiler.IR
 
             // Add lambda function to module
             _module.Functions.Add(lambdaFunc);
-            if (savedFunction != null) _lambdaCreator[lambdaFunc] = savedFunction;
 
             // Restore context
             _currentFunction = savedFunction;
@@ -4662,8 +4803,10 @@ namespace BasicLang.Compiler.IR
             // The spelling the increment writes back under: the storage's declared one when the
             // loop drives existing storage (#124), else the loop's own. #219: a driven procedure's
             // return variable is written under its carrier's name — `For F = 1 To 3` inside F.
-            var storageSpelling = drivenReference != null
-                && ReferenceEquals(loopVar, _procedureReturn?.Carrier)
+            // #229: and a local with a name of its own (a second declaration of the spelling) is
+            // written under that name, whether the loop drives it or reuses it.
+            var storageSpelling = (drivenReference != null
+                && ReferenceEquals(loopVar, _procedureReturn?.Carrier)) || _ownNamedLocals.Contains(loopVar)
                     ? loopVar.Name
                     : drivenReference?.Binding.DeclaredName ?? node.Variable;
 
@@ -7106,6 +7249,11 @@ namespace BasicLang.Compiler.IR
                     if (binding.Declaration != null
                         && _returnVariableCarriers.TryGetValue(binding.Declaration, out var returnVariable))
                         return returnVariable;
+                    // #229: a local Dim is found by its declaration — two declarations of one
+                    // spelling are two variables, whichever was pushed last.
+                    if (binding.Declaration != null
+                        && _localsByDeclaration.TryGetValue(binding.Declaration, out var declaredLocal))
+                        return declaredLocal;
                     if (_variableVersions.TryGetValue(binding.DeclaredName, out var versions) && versions.Count > 0)
                         return versions.Peek();
 
@@ -8396,16 +8544,17 @@ namespace BasicLang.Compiler.IR
         /// Writes <see cref="BasicBlock.BodyLocals"/> from the sites <see cref="RecordBodyLocal"/> saw.
         ///
         /// <para>⚠ <b>A name with ONE declaration only.</b> The IR is flat and every backend
-        /// identifies a local by NAME: two <c>Dim x</c> in one function (two sibling loops, a loop and
-        /// an If, a loop and a <c>For x</c> control variable, a local and a parameter) are two
-        /// declarations but one <c>x</c> in
-        /// the emitted C#, JavaScript and IL. Declaring that <c>x</c> at the top of one loop's body
+        /// identifies a local by NAME. ⭐ #229: a second local <c>Dim</c> of a spelling its procedure
+        /// already declares — two sibling loops', an If's and its Else's, a lambda's own and its
+        /// creator's — gets an IR name of its own (<see cref="EmittedLocalName"/>), so two
+        /// <c>Dim</c>s are two names here and each is judged on its own. What can still share a
+        /// name is a declaration of another kind: a <c>Dim x</c> and a <c>For x</c> control
+        /// variable, a local and a parameter. Declaring that <c>x</c> at the top of one loop's body
         /// would leave every other mention of it naming nothing, and one variable in two loops breaks
-        /// ADR-0014's "at most one loop". Such a name keeps today's function-level behaviour. The same
-        /// holds for a name a lambda this function creates declares as its own local: the C# backend
-        /// does not declare a lambda's locals (they bind to the creator's of that spelling), so moving
-        /// the creator's into a loop body would leave the lambda's naming nothing (CS0103). Splitting
-        /// a name into one variable per declaration is ADR-0013's rejected "uniquify IR names".</para>
+        /// ADR-0014's "at most one loop", so such a name keeps the function-level behaviour. A name a
+        /// lambda this function creates declares as its own local is excluded the same way (a lambda's
+        /// <c>Dim</c> of a creator's spelling is renamed since #229, so this is that other-kind
+        /// residue).</para>
         ///
         /// <para>And no mention of the name outside the loop's body (<see cref="IRLoops.VariableMentions"/>),
         /// so ADR-0014 A2's invariant S″ holds for IRBuilder's output by construction and a later
