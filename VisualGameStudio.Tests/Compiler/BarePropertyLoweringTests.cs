@@ -660,12 +660,13 @@ internal static class BarePropertyLoweringProbes
 
     internal const string P13Expected = "8,8,8";
 
-    /// <summary>P15 — task #151 (FIXED for JavaScript and MSIL; C++ is a known gap, see
-    /// <see cref="BarePropertyLoweringExecutionTests.P15_ExceptionMessageBareInSubclass_JsAndMsilPrintVbcsAnswer_Task151"/>).
+    /// <summary>P15 — task #151 (FIXED on JavaScript, MSIL and C++, see
+    /// <see cref="BarePropertyLoweringExecutionTests.P15_ExceptionMessageBareInSubclass_AllBackendsPrintVbcsAnswer_Task151"/>).
     /// `Message` read bare is a BUILT-IN base property (System.Exception), not a property declared
     /// in the IR module, so AccessorMemberOf/Invariant F do not touch it (F only checks bases PRESENT
     /// in the IR module) — it is not flagged, so it is not lowered; ADR-0007 left it as it was, and
-    /// #151 fixed it in the two backends that crashed on it.</summary>
+    /// #151 fixed it in the backends that failed on it (JavaScript and MSIL crashed; C++ did not
+    /// compile until the runtime got an exception base class).</summary>
     internal const string P15 = """
         Class MyErr
             Inherits Exception
@@ -1010,18 +1011,20 @@ public class BarePropertyLoweringExecutionTests
 
     /// <summary>
     /// P15 — task #151. A bare <c>Message</c> inside <c>Class MyErr : Inherits Exception</c> prints
-    /// vbc's <c>E:boom</c> on C#, JavaScript and MSIL. JavaScript used to throw
+    /// vbc's <c>E:boom</c> on C#, JavaScript, MSIL and C++. JavaScript used to throw
     /// <c>ReferenceError: Message is not defined</c> and MSIL <c>InvalidProgramException</c> (this
     /// test pinned both crashes until the fix); the execution matrix of every shape lives in
     /// <c>UserExceptionSubclassExecutionTests</c>.
     ///
-    /// <para>⛔ KNOWN GAP, still pinned: <b>C++ does not build</b> <c>Inherits Exception</c> (<c>unknown
-    /// type name 'Exception'</c>) — the runtime has no exception base class, and which of the options
-    /// (a refusal diagnostic, a runtime exception-object base, throwing the shared_ptr) is the owner's
-    /// decision, still pending. When it is made, this leg flips to vbc's answer.</para>
+    /// <para>C++ did not build <c>Inherits Exception</c> at all (<c>unknown type name 'Exception'</c>: the
+    /// runtime had no exception base class) and this leg pinned that compile failure, "KNOWN GAP, owner
+    /// decision pending". The owner ruled option (b), a runtime <c>BasicLang::Exception</c> base class
+    /// (<c>CppExceptionRuntime</c>), and the leg flipped to vbc's answer, standard and aggressive passes; the
+    /// C++ execution matrix is <c>CppUserExceptionExecutionTests</c>. Renamed from
+    /// <c>…_JsAndMsilPrintVbcsAnswer_Task151</c>.</para>
     /// </summary>
     [Test]
-    public void P15_ExceptionMessageBareInSubclass_JsAndMsilPrintVbcsAnswer_Task151()
+    public void P15_ExceptionMessageBareInSubclass_AllBackendsPrintVbcsAnswer_Task151()
         => Assert.Multiple(() =>
         {
             Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharp(BarePropertyLoweringProbes.P15)),
@@ -1037,10 +1040,10 @@ public class BarePropertyLoweringExecutionTests
             Assert.That(FourBackends.Norm(MsilHarness.RunAggressiveExpectingSuccess(BarePropertyLoweringProbes.P15)),
                 Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "MSIL, aggressive");
 
-            // ⛔ KNOWN GAP (owner decision pending), not a result to rely on: C++ has no exception base class.
-            var cppEx = Assert.Throws<AssertionException>(
-                () => BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.P15)));
-            Assert.That(cppEx!.Message, Does.Contain("C++ compilation failed"), "C++ — KNOWN GAP: `Inherits Exception` does not build");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppOptimized(BarePropertyLoweringProbes.P15))),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "C++, standard (was `unknown type name 'Exception'`)");
+            Assert.That(FourBackends.Norm(BclE2E.CompileRun(BclE2E.CompileToCppAggressive(BarePropertyLoweringProbes.P15))),
+                Is.EqualTo(BarePropertyLoweringProbes.P15Expected), "C++, aggressive");
         });
 
     // ---- A bare PLAIN auto-property passed ByRef on MSIL: the ladder's "is a PROPERTY" arm used to refuse it

@@ -672,6 +672,8 @@ public class JsExecutionTierRosterTests
         "OptionalObjectDefaultExecutionTests",
         // Tasks #218 / #254: a bare store to a plain auto-property (`P = P + 10`, `P += 20`, `Count += 1`, `S = S * 10`, `P++`) lands on C++ (CppCodeGenerator.IsStorageAutoProperty), run against vbc on C++ with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript, MSIL and C# already answered these programs.
         "CppAutoPropertyBareStoreExecutionTests",
+        // Task #151 (C++ half): a user class that `Inherits Exception` builds and runs on C++ (the runtime's `BasicLang::Exception` base, `ThrowObject`, the typed-Catch ladder's user arm), run against vbc on C++ with C# as the reference, through the CLI, --optimize and CompileProjectFiles, every C# run in a child process (CSharpProcessRunner) - no Node, and the roster's count stays as it was. JavaScript and MSIL already answered these programs (UserExceptionSubclassExecutionTests, JavaScriptCatchDiscriminationTests).
+        "CppUserExceptionExecutionTests",
     };
 
     /// <summary>Counts NUnit cases: a [TestCase]-driven method contributes one per attribute.</summary>

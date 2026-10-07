@@ -21,9 +21,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //  Nothing here runs C#, so there is no hang to guard against; Node and ilasm runs carry their own timeouts.
 //
 //  ⛔ KNOWN GAPS — each a defect or a decision that is NOT #151's, listed with NO test (asserting one would pin the defect):
-//    C++    `Inherits Exception` still fails to compile (`unknown type name 'Exception'`). The runtime has no exception base class (exceptions are std::runtime_error / BasicLang::NetException);
-//           the options — refuse with a diagnostic, a runtime exception-object base, throw the shared_ptr — are an OWNER decision, pending. `BarePropertyLoweringExecutionTests.
-//           P15_ExceptionMessageBareInSubclass_JsAndMsilPrintVbcsAnswer_Task151` keeps the one leg that says it does not build.
+//    C++    (was: `Inherits Exception` failed to compile, `unknown type name 'Exception'`: FIXED by #151's C++ half, the owner's option (b) — a runtime `BasicLang::Exception` base class. Not here: this fixture
+//           runs JavaScript and MSIL only. `CppUserExceptionExecutionTests` runs the C++ matrix, and `BarePropertyLoweringExecutionTests.P15_ExceptionMessageBareInSubclass_AllBackendsPrintVbcsAnswer_Task151`
+//           is the P15 leg on every backend.)
 //    JS     `Me.Message.ToUpper()` (probe V5) is a TypeError. Pre-existing: a plain `Exception`'s `Message.ToUpper()` fails the same way.
 //    FRONT  `Inherits ApplicationException` is "Unknown base class" (V2); `Catch ... When` is a parse error (V4). Both fail on every backend before the backend is reached.
 //    MSIL   reading a .NET Exception member that is NOT in the exception member table through a user subclass (e.g. `e.HelpLink`) is now REFUSED at compile time; before the fix it died at run
