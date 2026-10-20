@@ -35,16 +35,19 @@ public class JavaScriptProgramNamespaceTests
         return FourBackends.Norm(JavaScriptExecutionTests.RunNodeScript(new JavaScriptCodeGenerator().Generate(r.CombinedIR!)));
     }
 
+    // Names deliberately differ from the shipped library's classes: Task 28 makes a program
+    // class that shadows Button/Control a named collision. This fixture still proves the
+    // dotted-namespace resolution it was written for.
     private const string Library =
         "Namespace System.Windows.Forms\n" +
-        "Public Class Control\n Public Overridable Function Describe() As String\n  Return \"Control\"\n End Function\nEnd Class\n" +
-        "Public Class Button\n Inherits Control\n Public Overrides Function Describe() As String\n  Return \"Button\"\n End Function\nEnd Class\n" +
+        "Public Class ControlX\n Public Overridable Function Describe() As String\n  Return \"Control\"\n End Function\nEnd Class\n" +
+        "Public Class ButtonX\n Inherits ControlX\n Public Overrides Function Describe() As String\n  Return \"Button\"\n End Function\nEnd Class\n" +
         "End Namespace\n";
 
     private const string Form =
         "Using System\nUsing System.Windows.Forms\n" +
-        "Public Class Form1\n Public Sub Go()\n  Dim b As Button = New Button()\n  Dim c As Control = b\n" +
-        "  Dim q As System.Windows.Forms.Button = b\n  PrintLine(c.Describe() & \"/\" & q.Describe())\n End Sub\nEnd Class\n" +
+        "Public Class Form1\n Public Sub Go()\n  Dim b As ButtonX = New ButtonX()\n  Dim c As ControlX = b\n" +
+        "  Dim q As System.Windows.Forms.ButtonX = b\n  PrintLine(c.Describe() & \"/\" & q.Describe())\n End Sub\nEnd Class\n" +
         "Module Program\n Sub Main()\n  Dim f As New Form1()\n  f.Go()\n End Sub\nEnd Module\n";
 
     [Test]
@@ -71,7 +74,7 @@ public class JavaScriptProgramNamespaceTests
         Assert.That(RunProject(
             ("Lib.bas", "Namespace System\nPublic Class EventArgs2\nEnd Class\nEnd Namespace\n" + Library),
             ("Main.bas", "Using System\nUsing System.Windows.Forms\nModule Program\n Sub Main()\n  Console.WriteLine(Math.Max(2, 3))\n" +
-                         "  Console.WriteLine(System.Math.Abs(-4))\n  Dim b As New Button()\n  Console.WriteLine(b.Describe())\n End Sub\nEnd Module\n")),
+                         "  Console.WriteLine(System.Math.Abs(-4))\n  Dim b As New ButtonX()\n  Console.WriteLine(b.Describe())\n End Sub\nEnd Module\n")),
             Is.EqualTo("3\n4\nButton"));
 
     /// <summary>

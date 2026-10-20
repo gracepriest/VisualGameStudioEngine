@@ -388,7 +388,7 @@ namespace BasicLang.Compiler
 
             try
             {
-                var files = WithJavaScriptDeclarations(sourceFiles)
+                var files = WithWebFormsLibrary(WithJavaScriptDeclarations(sourceFiles))
                     .Where(File.Exists)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -465,6 +465,12 @@ namespace BasicLang.Compiler
                 {
                     ParseAndCollectImports(unit, result);
                 }
+                if (result.HasErrors) return FinalizeResult(result, startTime);
+
+                // The library and a program class must never both claim the same simple name:
+                // the first-wins class merge below would silently keep one and drop the other.
+                // Refuse before analysis, while the program's AST still carries its source line.
+                CheckPortableLibraryNameCollisions(projectUnits, result);
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
                 // Phase 2: compile library-like units (.mod/.cls) before entry
@@ -575,6 +581,15 @@ namespace BasicLang.Compiler
         public static string DomDeclarationsPath =>
             Path.Combine(AppContext.BaseDirectory, "lib", "js", "dom-core.bli");
 
+        /// <summary>
+        /// The portable WinForms-shaped library, shipped beside the compiler as
+        /// <c>lib/js/forms/*.bas</c> plus <c>vgs-page.bli</c>. It is auto-included only for a
+        /// JavaScript build whose source set mentions one of the two namespaces (task 28,
+        /// spec §5.1); C# and C++ never see it.
+        /// </summary>
+        public static string WebFormsLibraryDirectory =>
+            Path.Combine(AppContext.BaseDirectory, "lib", "js", "forms");
+
         // One rule for "is this a web build" — the same one that defines WEB.
         private bool IsJavaScriptTarget => BuildSymbols.IsWebBackend(_options?.TargetBackend);
 
@@ -593,6 +608,176 @@ namespace BasicLang.Compiler
             if (File.Exists(dom) && !files.Any(f => string.Equals(f, dom, StringComparison.OrdinalIgnoreCase)))
                 files.Add(dom);
             return files;
+        }
+
+        /// <summary>
+        /// Adds the portable control library when a JavaScript build's source set mentions
+        /// <c>System.Windows.Forms</c> or <c>System.Drawing</c>. This is deliberately a TOKEN
+        /// scan: a comment or a string literal that happens to name a namespace must not pull a
+        /// whole library into the build (spec §11b note 3).
+        ///
+        /// <para>The scan runs on the source set BEFORE the library is added. Scanning after
+        /// would make the library include itself, because its own classes live in those
+        /// namespaces.</para>
+        /// </summary>
+        private List<string> WithWebFormsLibrary(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles.ToList();
+            if (!IsJavaScriptTarget) return files;
+
+            if (!files.Any(HasPortableNamespaceReference)) return files;
+
+            var directory = WebFormsLibraryDirectory;
+            if (!Directory.Exists(directory)) return files;
+
+            var libraryFiles = Directory
+                .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Where(f => string.Equals(Path.GetExtension(f), ".bas", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(Path.GetExtension(f), ".bli", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var libraryFile in libraryFiles)
+            {
+                if (!files.Any(f => string.Equals(f, libraryFile, StringComparison.OrdinalIgnoreCase)))
+                    files.Add(libraryFile);
+            }
+
+            return files;
+        }
+
+        /// <summary>Token-level trigger for <see cref="WithWebFormsLibrary"/>.</summary>
+        private static bool HasPortableNamespaceReference(string filePath)
+        {
+            try
+            {
+                var tokens = new Lexer(File.ReadAllText(filePath)).Tokenize();
+                var visible = tokens
+                    .Where(t => t.Type != TokenType.Comment
+                             && t.Type != TokenType.StringLiteral
+                             && t.Type != TokenType.CharLiteral
+                             && t.Type != TokenType.InterpolatedStringLiteral)
+                    .ToList();
+
+                for (var i = 0; i < visible.Count; i++)
+                {
+                    if (MatchesNamespace(visible, i, "System", "Windows", "Forms"))
+                    {
+                        // `Using System.Windows.Forms` needs no trailing dot. A qualified
+                        // reference (`System.Windows.Forms.Button`) does.
+                        if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
+                        if (i + 5 < visible.Count && visible[i + 5].Type == TokenType.Dot) return true;
+                    }
+
+                    if (MatchesNamespace(visible, i, "System", "Drawing"))
+                    {
+                        if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
+                        if (i + 3 < visible.Count && visible[i + 3].Type == TokenType.Dot) return true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // The parser below reports malformed source; a token-scan failure must not
+                // turn a syntax error into a missing-library crash.
+            }
+
+            return false;
+        }
+
+        private static bool MatchesNamespace(
+            IReadOnlyList<Token> tokens, int start, params string[] parts)
+        {
+            if (start + parts.Length * 2 - 1 >= tokens.Count) return false;
+
+            for (var p = 0; p < parts.Length; p++)
+            {
+                var token = tokens[start + p * 2];
+                if (token.Type != TokenType.Identifier
+                    || !string.Equals(token.Lexeme, parts[p], StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (p < parts.Length - 1 && tokens[start + p * 2 + 1].Type != TokenType.Dot)
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Refuses a program class that has the same simple name as a class in the portable
+        /// library. Without this, the first-wins class merge would silently drop one of them and
+        /// the surviving type would depend on source order. A named error, not a BL code: Task 34
+        /// owns numbered web-build diagnostics; this diagnostic's stable name is the contract.
+        /// </summary>
+        private static void CheckPortableLibraryNameCollisions(
+            IReadOnlyList<CompilationUnit> units, CompilationResult result)
+        {
+            var libraryDirectory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            static bool IsLibraryUnit(CompilationUnit unit, string directory) =>
+                Path.GetFullPath(unit.FilePath).StartsWith(directory, StringComparison.OrdinalIgnoreCase);
+
+            if (!units.Any(u => IsLibraryUnit(u, libraryDirectory))) return;
+
+            var libraryClasses = new Dictionary<string, (string FullName, string SimpleName)>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var unit in units.Where(u => IsLibraryUnit(u, libraryDirectory)))
+            {
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                    libraryClasses[cls.SimpleName] = (cls.FullName, cls.SimpleName);
+            }
+
+            foreach (var unit in units.Where(u => !IsLibraryUnit(u, libraryDirectory)))
+            {
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                {
+                    if (!libraryClasses.TryGetValue(cls.SimpleName, out var libraryClass)) continue;
+
+                    result.AllErrors.Add(new SemanticError(
+                        $"PortableLibraryNameCollision: program class '{cls.SimpleName}' collides with " +
+                        $"the portable library's '{libraryClass.FullName}'. Rename the program class.",
+                        cls.Line, cls.Column));
+                }
+            }
+        }
+
+        private static IEnumerable<(string FullName, string SimpleName, int Line, int Column)>
+            EnumerateClasses(IEnumerable<ASTNode>? nodes, string prefix)
+        {
+            if (nodes == null) yield break;
+
+            foreach (var node in nodes)
+            {
+                switch (node)
+                {
+                    case NamespaceNode ns:
+                        var namespacePrefix = string.IsNullOrEmpty(prefix)
+                            ? ns.Name
+                            : prefix + "." + ns.Name;
+                        foreach (var nested in EnumerateClasses(ns.Members, namespacePrefix))
+                            yield return nested;
+                        break;
+
+                    case ModuleNode module:
+                        // A module is a container, not a namespace: classes declared inside it
+                        // keep their simple IR name.
+                        foreach (var nested in EnumerateClasses(module.Members, prefix))
+                            yield return nested;
+                        break;
+
+                    case ClassNode cls:
+                        var fullName = string.IsNullOrEmpty(prefix)
+                            ? cls.Name
+                            : prefix + "." + cls.Name;
+                        yield return (fullName, cls.Name, cls.Line, cls.Column);
+                        foreach (var nested in EnumerateClasses(cls.Members, fullName))
+                            yield return nested;
+                        break;
+                }
+            }
         }
 
         /// <summary>

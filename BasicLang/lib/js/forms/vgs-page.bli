@@ -1,0 +1,5 @@
+' The page hook the portable library talks to when live docking needs a reflow (spec §5.10).
+Public Extern Class VgsDockHook
+    Public Sub request()
+    Public Sub reflow()
+End Class
