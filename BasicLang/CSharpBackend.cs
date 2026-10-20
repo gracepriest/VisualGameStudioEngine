@@ -257,6 +257,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             var value = arguments[0];
             const string conversions = "Microsoft.VisualBasic.CompilerServices.Conversions";
 
+            if (string.Equals(call.FunctionName, "CDec", StringComparison.OrdinalIgnoreCase))
+                return $"Convert.ToDecimal({value})";
+
             if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase))
             {
                 return call.FunctionName switch

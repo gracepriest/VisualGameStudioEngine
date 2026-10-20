@@ -765,6 +765,7 @@ public class TypeInfo
         public TypeInfo LongType { get; }
         public TypeInfo SingleType { get; }
         public TypeInfo DoubleType { get; }
+        public TypeInfo DecimalType { get; }
         public TypeInfo StringType { get; }
         public TypeInfo BooleanType { get; }
         public TypeInfo CharType { get; }
@@ -790,6 +791,7 @@ public class TypeInfo
             LongType = DefineBuiltInType("Long", TypeKind.Primitive);
             SingleType = DefineBuiltInType("Single", TypeKind.Primitive);
             DoubleType = DefineBuiltInType("Double", TypeKind.Primitive);
+            DecimalType = DefineBuiltInType("Decimal", TypeKind.Primitive);
             StringType = DefineBuiltInType("String", TypeKind.Primitive);
             BooleanType = DefineBuiltInType("Boolean", TypeKind.Primitive);
             CharType = DefineBuiltInType("Char", TypeKind.Primitive);

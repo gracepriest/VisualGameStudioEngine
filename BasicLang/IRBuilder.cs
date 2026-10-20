@@ -7230,6 +7230,7 @@ namespace BasicLang.Compiler.IR
             "Single" => "CSng",
             "String" => "CStr",
             "Boolean" => "CBool",
+            "Decimal" => "CDec",
             _ => null
         };
 

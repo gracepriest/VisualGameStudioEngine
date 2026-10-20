@@ -3584,7 +3584,7 @@ namespace BasicLang.Compiler
 
             // Parse only the primary part, not full binary expressions
             if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
-                Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
+                Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) || Check(TokenType.DecimalLiteral) ||
                 Check(TokenType.StringLiteral) || Check(TokenType.CharLiteral) ||
                 Check(TokenType.BooleanLiteral))
             {
@@ -4186,6 +4186,7 @@ namespace BasicLang.Compiler
                 TokenType.LongLiteral => true,
                 TokenType.SingleLiteral => true,
                 TokenType.DoubleLiteral => true,
+                TokenType.DecimalLiteral => true,
                 TokenType.CharLiteral => true,
                 TokenType.BooleanLiteral => true,
                 TokenType.Identifier => true,
@@ -4761,7 +4762,7 @@ namespace BasicLang.Compiler
 
             // Literals
             if (Check(TokenType.IntegerLiteral) || Check(TokenType.LongLiteral) ||
-                Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) ||
+                Check(TokenType.SingleLiteral) || Check(TokenType.DoubleLiteral) || Check(TokenType.DecimalLiteral) ||
                 Check(TokenType.StringLiteral) || Check(TokenType.CharLiteral) ||
                 Check(TokenType.BooleanLiteral))
             {
@@ -5578,6 +5579,7 @@ namespace BasicLang.Compiler
                 case TokenType.LongLiteral:
                 case TokenType.SingleLiteral:
                 case TokenType.DoubleLiteral:
+                case TokenType.DecimalLiteral:
                 case TokenType.StringLiteral:
                 case TokenType.InterpolatedStringLiteral:
                 case TokenType.CharLiteral:

@@ -98,6 +98,7 @@ namespace BasicLang.Compiler.StdLib.CSharp
             ["CInt"] = new StdLibFunction { Name = "CInt", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Integer" },
             ["CLng"] = new StdLibFunction { Name = "CLng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Long" },
             ["CDbl"] = new StdLibFunction { Name = "CDbl", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Double" },
+            ["CDec"] = new StdLibFunction { Name = "CDec", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Decimal" },
             ["CSng"] = new StdLibFunction { Name = "CSng", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Single" },
             ["CStr"] = new StdLibFunction { Name = "CStr", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "String" },
             ["CBool"] = new StdLibFunction { Name = "CBool", Category = StdLibCategory.Conversion, ParameterTypes = new[] { "Object" }, ReturnType = "Boolean" },
@@ -481,6 +482,7 @@ namespace BasicLang.Compiler.StdLib.CSharp
                 "cint" => EmitCInt(args[0]),
                 "clng" => EmitCLng(args[0]),
                 "cdbl" => EmitCDbl(args[0]),
+                "cdec" => EmitCDec(args[0]),
                 "csng" => EmitCSng(args[0]),
                 "cstr" => EmitCStr(args[0]),
                 "cbool" => EmitCBool(args[0]),
@@ -492,6 +494,7 @@ namespace BasicLang.Compiler.StdLib.CSharp
         public string EmitCInt(string value) => $"Convert.ToInt32({value})";
         public string EmitCLng(string value) => $"Convert.ToInt64({value})";
         public string EmitCDbl(string value) => $"Convert.ToDouble({value})";
+        public string EmitCDec(string value) => $"Convert.ToDecimal({value})";
         public string EmitCSng(string value) => $"Convert.ToSingle({value})";
         public string EmitCStr(string value) => $"Convert.ToString({value})";
         public string EmitCBool(string value) => $"Convert.ToBoolean({value})";

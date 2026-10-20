@@ -18,6 +18,7 @@ namespace BasicLang.Compiler
         LongLiteral,
         SingleLiteral,
         DoubleLiteral,
+        DecimalLiteral,
         StringLiteral,
         InterpolatedStringLiteral,  // $"Hello {name}"
         CharLiteral,
@@ -1081,7 +1082,20 @@ namespace BasicLang.Compiler
                 ScanExponent(sb);
 
                 // Check for type suffix
-                if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
+                if (!IsAtEnd() && (Peek() == 'D' || Peek() == 'd') && SuffixBoundary())
+                {
+                    sb.Append(Advance());
+                    string decText = sb.ToString().TrimEnd('D', 'd');
+                    if (!decimal.TryParse(decText, NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out decimal decValue))
+                    {
+                        throw new LexerException(
+                            ErrorCode.BL1004_InvalidNumberFormat,
+                            $"Decimal literal '{sb.ToString()}' is out of range.",
+                            startLine, startColumn, _source);
+                    }
+                    AddToken(TokenType.DecimalLiteral, sb.ToString(), decValue, startLine, startColumn);
+                }
+                else if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
                     float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);
@@ -1096,7 +1110,20 @@ namespace BasicLang.Compiler
             else
             {
                 // Check for type suffix
-                if (!IsAtEnd() && (Peek() == 'L' || Peek() == 'l'))
+                if (!IsAtEnd() && (Peek() == 'D' || Peek() == 'd') && SuffixBoundary())
+                {
+                    sb.Append(Advance());
+                    string decText = sb.ToString().TrimEnd('D', 'd');
+                    if (!decimal.TryParse(decText, NumberStyles.Integer | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal decValue))
+                    {
+                        throw new LexerException(
+                            ErrorCode.BL1004_InvalidNumberFormat,
+                            $"Decimal literal '{sb.ToString()}' is out of range.",
+                            startLine, startColumn, _source);
+                    }
+                    AddToken(TokenType.DecimalLiteral, sb.ToString(), decValue, startLine, startColumn);
+                }
+                else if (!IsAtEnd() && (Peek() == 'L' || Peek() == 'l'))
                 {
                     sb.Append(Advance());
                     string numStr = sb.ToString().TrimEnd('L', 'l');
@@ -1389,6 +1416,15 @@ namespace BasicLang.Compiler
         private bool IsDigit(char c)
         {
             return c >= '0' && c <= '9';
+        }
+
+        private bool SuffixBoundary()
+        {
+            if (IsAtEnd()) return true;
+            int next = _position + 1;
+            if (next >= _source.Length) return true;
+            char c = _source[next];
+            return !IsAlphaNumeric(c);
         }
         
         private bool IsAlpha(char c)

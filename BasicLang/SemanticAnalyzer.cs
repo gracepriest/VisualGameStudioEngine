@@ -1681,6 +1681,9 @@ namespace BasicLang.Compiler.SemanticAnalysis
             RegisterStdLibFunction("CDbl", SymbolKind.Function, _typeManager.GetType("Double"),
                 new[] { ("value", _typeManager.GetType("Object")) });
 
+            RegisterStdLibFunction("CDec", SymbolKind.Function, _typeManager.DecimalType,
+                new[] { ("value", _typeManager.GetType("Object")) });
+
             RegisterStdLibFunction("CSng", SymbolKind.Function, _typeManager.GetType("Single"),
                 new[] { ("value", _typeManager.GetType("Object")) });
 
@@ -2337,7 +2340,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             if (inner is not LiteralExpressionNode literal)
                 return false;
             if (literal.LiteralType is not (TokenType.IntegerLiteral or TokenType.LongLiteral
-                or TokenType.SingleLiteral or TokenType.DoubleLiteral))
+                or TokenType.SingleLiteral or TokenType.DoubleLiteral or TokenType.DecimalLiteral))
                 return false;
             if (!TryConvertDecimalLiteral(literal, out _))
                 return false;
@@ -2370,7 +2373,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (literal.Text is string text)
             {
-                var trimmed = text.TrimEnd('F', 'f', 'L', 'l');
+                var trimmed = text.TrimEnd('F', 'f', 'L', 'l', 'D', 'd');
                 if (decimal.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
                     return true;
             }
@@ -12119,6 +12122,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             TokenType.LongLiteral => _typeManager.LongType,
             TokenType.SingleLiteral => _typeManager.SingleType,
             TokenType.DoubleLiteral => _typeManager.DoubleType,
+            TokenType.DecimalLiteral => _typeManager.DecimalType,
             TokenType.StringLiteral => _typeManager.StringType,
             TokenType.CharLiteral => _typeManager.CharType,
             TokenType.BooleanLiteral => _typeManager.BooleanType,
