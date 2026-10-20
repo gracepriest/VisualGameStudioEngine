@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -133,7 +134,16 @@ internal static class FourBackends
     internal static string RunAggressiveJs(string program) =>
         JavaScriptExecutionTests.RunNodeScript(JsTestSupport.CompileAggressive(program));
 
-    internal static string RunEmittedCSharpText(string csharp)
+    /// <summary>Compiles <paramref name="csharp"/> as RunEmittedCSharpText does and RETURNS the errors — never
+    /// asserts, so a test can expect a refusal (CS0019) without NUnit recording a failure.</summary>
+    internal static IReadOnlyList<Diagnostic> TryCompileCSharp(string csharp)
+    {
+        using var ms = new MemoryStream();
+        var emitted = CreateCompilation(csharp).Emit(ms);
+        return emitted.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+    }
+
+    private static CSharpCompilation CreateCompilation(string csharp)
     {
         // ⚠ Microsoft.VisualBasic.Core is FORCED in: every generated project references it (the C# backend
         // emits Microsoft.VisualBasic.Conversion.Val/Str and CompilerServices.Conversions), but "every assembly
@@ -146,11 +156,16 @@ internal static class FourBackends
             .Cast<MetadataReference>()
             .ToImmutableArray();
 
-        var compilation = CSharpCompilation.Create(
+        return CSharpCompilation.Create(
             "FourBackendsProbe_" + Guid.NewGuid().ToString("N"),
             new[] { CSharpSyntaxTree.ParseText(csharp) },
             references,
             new CSharpCompilationOptions(OutputKind.ConsoleApplication));
+    }
+
+    internal static string RunEmittedCSharpText(string csharp)
+    {
+        var compilation = CreateCompilation(csharp);
 
         using var ms = new MemoryStream();
         var emitted = compilation.Emit(ms);

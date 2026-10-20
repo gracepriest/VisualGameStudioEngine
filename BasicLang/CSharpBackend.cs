@@ -175,6 +175,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private int _lastEmittedSourceLine = -1;
         private string _lastEmittedSourceFile = null;
 
+        // Set by CompareText when (Object, Object) or (Object, Decimal) equality routes through
+        // __BlObjectEquals. The helper is emitted at the end of the class or module class being
+        // generated, then this is cleared, so each generated class carries at most one copy.
+        private bool _usesObjectEqualsHelper;
+
         public string GeneratedCode => _output.ToString();
 
         /// <summary>
@@ -259,6 +264,17 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
             if (string.Equals(call.FunctionName, "CDec", StringComparison.OrdinalIgnoreCase))
                 return $"Convert.ToDecimal({value})";
+
+            // VB's CShort/CByte round a Decimal half-to-even and THROW on overflow; a bare
+            // `CShort(...)` does not exist in C#. (CInt/CDec already lower through Convert.* in
+            // CSharpStdLib; CShort/CByte have no stdlib entry, so they reach this arm.)
+            if (string.Equals(source, "Decimal", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(call.FunctionName, "CShort", StringComparison.OrdinalIgnoreCase))
+                    return $"Convert.ToInt16({value})";
+                if (string.Equals(call.FunctionName, "CByte", StringComparison.OrdinalIgnoreCase))
+                    return $"Convert.ToByte({value})";
+            }
 
             if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase))
             {
@@ -353,6 +369,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             _currentModule = module;
             _containerNames.Clear();
+            _usesObjectEqualsHelper = false;
 
             // Backend honesty (spec decision 12): the C# backend rejects the
             // C++-only passthrough features (#CppInclude / :: foreign types / cpp{}
@@ -586,6 +603,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                                     hasUserMain = true;
                             }
                         }
+
+                        if (_usesObjectEqualsHelper)
+                            EmitObjectEqualsHelper();
 
                         Unindent();
                         WriteLine("}");
@@ -1261,6 +1281,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 GenerateMethod(irClass, method);
                 WriteLine();
             }
+
+            if (_usesObjectEqualsHelper)
+                EmitObjectEqualsHelper();
 
             Unindent();
             WriteLine("}");
@@ -3811,10 +3834,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
 
                     case IRCompare cmp:
                     {
-                        var left = EmitExpression(cmp.Left, stack, true);
-                        var right = EmitExpression(cmp.Right, stack, true);
-                        var op = MapCompareOperator(cmp.Comparison);
-                        var expr = $"{left} {op} {right}";
+                        var expr = CompareText(cmp, v => EmitExpression(v, stack, true));
                         return needsParens ? $"({expr})" : expr;
                     }
 
@@ -4197,12 +4217,10 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
 
             // Use needsParens=true for sub-expressions to preserve operator precedence
-            var left = EmitExpression(compare.Left, new HashSet<IRValue>(), needsParens: true);
-            var right = EmitExpression(compare.Right, new HashSet<IRValue>(), needsParens: true);
-            var op = MapCompareOperator(compare.Comparison);
+            var expr = CompareText(compare, v => EmitExpression(v, new HashSet<IRValue>(), needsParens: true));
 
             var target = GetValueName(compare);
-            WriteLine($"{target} = {left} {op} {right};");
+            WriteLine($"{target} = {expr};");
         }
 
         public void Visit(IRIdentityCompare identity)
@@ -4645,12 +4663,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // `CInt(7.5)` answers 8, so one language gave two answers depending on which syntax
             // reached the same narrowing. VB rounds both. Convert.ToXxx is exactly
             // Math.Round(x, MidpointRounding.ToEven), which is what CInt already lowers to here.
-            if (IsFloatingTypeName(sourceName) && targetName != null
+            // Decimal narrows the SAME way (E1/E4): (int)2.5m truncates and never overflows,
+            // while VB's CInt/CType rounds and throws OverflowException past the target range.
+            if ((IsFloatingTypeName(sourceName) || sourceName == "Decimal") && targetName != null
                 && IsIntegralTypeName(targetName)
                 && ConvertMethodForType(targetName) is string narrowing)
             {
                 return $"Convert.{narrowing}({valueExpr})";
             }
+
+            // A boxed number converts by VALUE (CType(o, Decimal)); a C# unbox only succeeds for
+            // a boxed Decimal. Convert.ToDecimal still throws InvalidCastException for an object
+            // that is not IConvertible, which is exactly VB's InvalidCastException (E3).
+            if (sourceName == "Object" && targetName == "Decimal")
+                return $"Convert.ToDecimal({valueExpr})";
 
             // A REFERENCE cast is parenthesised whole: this text is inlined into larger
             // expressions, and `(Dog)(a).Bark()` binds the call BEFORE the cast — CS1061 "'Animal'
@@ -5574,6 +5600,68 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             CompareKind.Ge => ">=",
             _ => "?"
         };
+
+        /// <summary>
+        /// The ONE spelling of a comparison — every IRCompare render site funnels through here.
+        /// VB's <c>=</c>/<c>&lt;&gt;</c> compares boxed numbers by value when a Decimal is involved
+        /// (spec D19): both-Object, or Object versus a TYPED Decimal, route through
+        /// <c>__BlObjectEquals</c>. Any other Object/primitive pair is emitted EXACTLY as before —
+        /// csc's CS0019 refusal is deliberate (two boxed Integers are never reference-equal, and a
+        /// silently-false comparison would be worse than a compile error).
+        /// </summary>
+        private string CompareText(IRCompare compare, Func<IRValue, string> render)
+        {
+            var left = render(compare.Left);
+            var right = render(compare.Right);
+
+            if (compare.Comparison is CompareKind.Eq or CompareKind.Ne)
+            {
+                var leftType = compare.Left?.Type?.Name;
+                var rightType = compare.Right?.Type?.Name;
+                var leftIsObject = string.Equals(leftType, "Object", StringComparison.OrdinalIgnoreCase);
+                var rightIsObject = string.Equals(rightType, "Object", StringComparison.OrdinalIgnoreCase);
+                var leftIsDecimal = string.Equals(leftType, "Decimal", StringComparison.OrdinalIgnoreCase);
+                var rightIsDecimal = string.Equals(rightType, "Decimal", StringComparison.OrdinalIgnoreCase);
+
+                if ((leftIsObject && rightIsObject)
+                    || (leftIsObject && rightIsDecimal)
+                    || (leftIsDecimal && rightIsObject))
+                {
+                    _usesObjectEqualsHelper = true;
+                    var call = $"__BlObjectEquals({left}, {right})";
+                    return compare.Comparison == CompareKind.Eq ? call : $"!{call}";
+                }
+            }
+
+            return $"{left} {MapCompareOperator(compare.Comparison)} {right}";
+        }
+
+        /// <summary>
+        /// Emits the value-comparison helper into the class (or module class) currently being
+        /// generated, then clears the flag. A private helper per consumer keeps it reachable from
+        /// user classes as well as module functions without a new public surface.
+        /// </summary>
+        private void EmitObjectEqualsHelper()
+        {
+            WriteLine("private static bool __BlObjectEquals(object a, object b)");
+            WriteLine("{");
+            Indent();
+            WriteLine("// VB compares boxed NUMBERS by value (spec D19). Only a pair involving a Decimal is widened - every other");
+            WriteLine("// pair keeps the reference comparison this backend has always emitted for two Objects (a KNOWN VB divergence");
+            WriteLine("// for two boxed Integers of equal value, recorded as a follow-up), so nothing else changes behaviour.");
+            WriteLine("if ((a is decimal || b is decimal) && __BlIsNumber(a) && __BlIsNumber(b))");
+            Indent();
+            WriteLine("return System.Convert.ToDecimal(a) == System.Convert.ToDecimal(b);");
+            Unindent();
+            WriteLine("return a == b;");
+            Unindent();
+            WriteLine("}");
+            WriteLine("private static bool __BlIsNumber(object o) =>");
+            Indent();
+            WriteLine("o is byte or sbyte or short or ushort or int or uint or long or ulong or float or double or decimal;");
+            Unindent();
+            _usesObjectEqualsHelper = false;
+        }
 
         private string SanitizeName(string name)
         {
