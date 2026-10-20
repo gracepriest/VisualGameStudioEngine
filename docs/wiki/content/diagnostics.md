@@ -111,14 +111,14 @@ member cannot cross).
 |---|---|
 | `BL7002` | `ByRef` parameter |
 | `BL7003` | `Long` |
-| `BL7004` | `Char` |
 | `BL7005` | Value `Structure` |
 | `BL7006` | Operator overload |
-| `BL7007` | Unavailable BCL type |
+| `BL7007` | Unavailable BCL type (`Decimal` is provided) |
 | `BL7010` | Unlowerable `#JsImport` |
 | `BL7011` | Type name colliding with a provided global |
 | `BL7012` | Non-provided exception type |
 | `BL7013` | `TypeOf … Is` an interface (or `Extern` class) — nothing to test |
+| `BL7014` | Decimal construct with no faithful JavaScript lowering |
 
 ## Where diagnostics surface
 

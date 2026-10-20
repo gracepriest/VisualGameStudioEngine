@@ -199,7 +199,7 @@ public class JsNothingStringConcatTextTests
         var js = JsTestSupport.Compile(
             "Sub Main()\n    Dim o As Object = Nothing\n    Console.Write(o)\n    Console.WriteLine(\"|\")\nEnd Sub\n");
         Assert.That(js, Does.Contain(
-            "return x == null ? \"\" : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);"),
+            "return x == null ? \"\" : (typeof VgsDecimal !== \"undefined\" && x instanceof VgsDecimal) ? x.toString() : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);"),
             js);
     }
 

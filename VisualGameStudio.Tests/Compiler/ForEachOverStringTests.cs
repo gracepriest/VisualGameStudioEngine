@@ -276,14 +276,12 @@ public class ForEachOverStringTests
     }
 
     /// <summary>
-    /// E9 — `As String` over a String: refused by the SAME rule as `As Integer`, matching the
-    /// existing refusal `Dim s As String = c` already gives a Char. This is NOT the same
-    /// question as widening Char TO String on assignment — task #184 is the owner's decision on
-    /// whether that should ever be allowed; until it lands, a String loop variable over a String
-    /// collection stays refused here, deliberately.
+    /// E9 — `As String` over a String: accepted since Task 14's Char → String implicit
+    /// widening (the owner's #184 decision). The String collection still enumerates as Char,
+    /// and the loop variable widens; the String-loop execution fixture covers the runtime side.
     /// </summary>
     [Test]
-    public void ExplicitString_IsRefused_PerTask184()
+    public void ExplicitString_IsAccepted_PerTask184()
     {
         var (hasErrors, messages) = Analyze(
             "Sub Main()\n" +
@@ -292,8 +290,6 @@ public class ForEachOverStringTests
             " Next\n" +
             "End Sub");
 
-        Assert.That(hasErrors, Is.True);
-        Assert.That(messages, Has.One.EqualTo(
-            "Cannot assign String element type 'Char' to loop variable of type 'String'"));
+        Assert.That(hasErrors, Is.False, string.Join("; ", messages));
     }
 }

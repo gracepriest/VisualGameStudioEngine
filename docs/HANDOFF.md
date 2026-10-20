@@ -1,4 +1,4 @@
-# Handoff snapshot — 2026-09-11, updated 2026-09-20 (START HERE section below is the live handoff)
+# Handoff snapshot — 2026-09-11, updated 2026-10-20 (START HERE section below is the live handoff)
 
 **Why this file exists.** Working state for this repo normally lives in a per-machine
 auto-memory directory (`~/.claude/projects/…/memory/`) that is **outside the repo and does not
@@ -17,7 +17,82 @@ facade (all five tasks of `2026-09-13-blnet-cpp-facade.md`).
 
 ---
 
-## 🚀 NEWEST — 2026-09-30: #123 DONE, an untyped `Const`, VB's `If(cond, a, b)` and the repo's samples compile
+## 🚀 NEWEST — 2026-10-20: 2.0b gate — Decimal and Char lower on JavaScript
+
+**2.0b is COMPLETE.** The gate is on `feat/portable-controls` on top of `022f9bce`
+(13 commits ahead of `origin/feat/portable-controls`); nothing is pushed, and there is
+**no IDE drop** (2.0b changes the compiler, runtime and tests only; the 2b IDE drop is
+Task 42).
+
+**What shipped in 2.0b.** Tasks 18–26 give BasicLang Decimal literals and `CDec`, the
+`VgsDecimal` JavaScript runtime, .NET-faithful arithmetic/overflow/division-by-zero,
+VB's boxed-Decimal equality rows on C#, comparisons/`Select Case`/boxing, the conversion
+and numeric-mixing grid, `Math`/`Parse`, collections/`Optional`, and the remaining
+"out" rows (`\`, format specifiers, `TryParse`). Task 26 confirms the optimizer never
+folds Decimal through Double. Char was Task 14: it lowers on JavaScript and `BL7004` is
+retired; `BL7014` is the Decimal-without-a-faithful-lowering refusal.
+
+**Clean build.** `dotnet clean` + `dotnet build VisualGameStudio.Tests/... -c Release`:
+**0 errors, 594 warnings**.
+
+**Fast subset** (`TestCategory!=Integration`, `--no-build`): **10,659 total,
+10,634 passed, 6 failed, 19 skipped** in 2m45. All six failures are names in the
+Task 0 baseline record (`3c1713c8`: 9,474 / 9,447 / 8 / 19); **zero new names**.
+The six are:
+
+- `EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout`
+- `Emit_ReplacesAnImportedModuleThatAnotherHandleHasMapped`
+- `Emit_ReplacesAScriptThatAnotherHandleHasMapped`
+- `Emit_ReplacingAnImportedModule_LeavesNoTempFileBehind`
+- `SearchSnippets_EmptyQuery_ReturnsAll`
+- `SearchSnippets_WhitespaceQuery_ReturnsAll`
+
+The baseline's two environmental names (`Resolve_AgainstTheRealBasicLangServer_FillsLazyDocs`
+and `Save_CalledTwice_DoesNotWriteThePreEditDocumentBack`) now pass. (`baseline-fast.txt`
+is not present in this worktree; the comparison is against the Task 0 record in the plan.)
+
+**Integration by name.** All groups green, no skips; no MSIL expectation changed or
+diverged in this run:
+
+| Run | Fixtures | Passed | Failed | Skipped | Time |
+|---|---|---:|---:|---:|---:|
+| 1 | `JavaScriptDecimalTests`, `DecimalRefusalTests`, `DecimalLiteralTests`, `CSharpDecimalVbRulesTests`, `MsilObjectBoxingExecutionTests`, `JsExecutionTierRosterTests`, `JavaScriptCodeGenTests`, `CTypeConversionExecutionTests` | 128 | 0 | 0 | 2m32 |
+| 2 | `CppDecimalRuntimeTests`, `DecimalDivideByZeroTests`, `DecimalDivideByZeroRunTests`, `MixedNumericCompareFoldTests`, `MixedNumericCompareFoldExecutionTests`, `JavaScriptCharTests`, `JsBannedTypeTests`, `JsBclRejectionTests`, `JsCapabilityCheckerTests` | 163 | 0 | 0 | 1m48 |
+| 3 | `VbQualifiedIntrinsicTests`, `TypedArrayLiteralTests`, `FieldInitializerFoldTests`, `NothingConversionTests`, `CSharpConstantDivideByZeroTests`, `CSharpConstantDivideByZeroRunTests`, `DivisionSemanticsTests`, `MsilValueToStringExecutionTests`, `MsilRoundTripTests` | 271 | 0 | 0 | 4m02 |
+
+Total **562/562 Integration tests passed**.
+
+**Mutation table.** All rows went red and were restored; the working tree contains no
+product-code mutation:
+
+| Task | Mutation | Measured red |
+|---|---|---|
+| 15 (M8) | qualified-name arm disabled | `JavaScriptProgramNamespaceTests` cross-file rows |
+| 15 | namespace types not exported | same cross-file rows |
+| 22 | `CInt` truncation | conversion fixture |
+| 22 | `toIntegral` does not throw | conversion fixture |
+| 22 | `toNumber` via `Number(toString())` | `CDbl` table |
+| 22 | `fromNumber` via 15-digit `toFixed(15)` | `7.9e28` FormatException row |
+| 23 | Round `"even"` → `"ceiling"` | `Math` Decimal rows |
+| 23 | parse regex `[\d,]*` → `[\d]*` | `1,234.50` row |
+| 24 | HashSet arm dropped | HashSet-of-Decimal row |
+| 25 | interpolation format check removed | interpolation format row |
+| 26 | Decimal `FoldAdd` through `double` | constant-expression row (`0.30000000000000004`) |
+
+**Follow-up recorded, not fixed: VB value equality for boxed numbers in general.**
+`Dim o As Object = Box(5) : o = 5` still emits `o == 5`, so csc reports `CS0019` on C#
+(VB accepts it and compares values). Two Objects holding equal boxed Integers still
+compare by reference: `TwoObjectsHoldingEqualBoxedIntegers_AreUnchanged` pins `False`,
+while VB says `True`. Decimal-specific comparisons now use the value-comparing helper;
+general boxed-primitive equality remains out of scope for 2.0b.
+
+**No IDE drop**, as the gate requires. `docs/wiki/content/js-backend.md` and
+`docs/wiki/content/diagnostics.md` carry the BL70xx correction; `wiki-content.js` was
+regenerated from both pages.
+
+---
+
+## 2026-09-30: #123 DONE, an untyped `Const`, VB's `If(cond, a, b)` and the repo's samples compile
 
 The fix is `e776dc64` and the sample edits `e611cd5d`, on master `78b00b85`; the tests and this section are uncommitted work on top of them. Compiler (`Parser`, `ASTNodes`, `ASTPrettyPrinter`,
 `SemanticAnalyzer`, `IRBuilder`, `IROptimizer`, `LSP/CallHierarchyHandler`) and two sample files; **no IR node and no backend changed.** Two valid VB constructs BasicLang refused — vbc

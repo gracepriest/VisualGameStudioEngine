@@ -306,9 +306,9 @@ End Sub
         // it with a throw cannot break a program that currently works, and it converts the
         // next missing arm from a silent miscompile into an immediate failure.
         //
-        // BitwiseAnd is the probe because it has no producer anywhere in the compiler
-        // (SemanticAnalyzer maps `&` to string concatenation), so it can only be reached the
-        // way a future IRBuilder change would reach it.
+        // BitwiseAnd gained a real arm for an enum's FLAGS operators (Task 14), so the probe
+        // is an unnamed value: it can only reach the default arm, which is what this test
+        // protects. Keeping a real operator here would pin the map's current contents instead.
         var generator = new CppCodeGenerator(new CppCodeGenOptions { GenerateComments = false });
         var method = typeof(CppCodeGenerator).GetMethod(
             "MapBinaryOperator",
@@ -318,10 +318,10 @@ End Sub
             "MapBinaryOperator is the single wired operator map for the C++ backend");
 
         var ex = Assert.Throws<System.Reflection.TargetInvocationException>(
-            () => method.Invoke(generator, new object[] { BinaryOpKind.BitwiseAnd }));
+            () => method.Invoke(generator, new object[] { (BinaryOpKind)9999 }));
 
         Assert.That(ex.InnerException, Is.Not.Null);
-        Assert.That(ex.InnerException.Message, Does.Contain("BitwiseAnd"),
+        Assert.That(ex.InnerException.Message, Does.Contain("9999"),
             "the refusal must name the operator, or the next person gets a bare exception");
     }
 }

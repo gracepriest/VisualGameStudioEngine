@@ -69,7 +69,6 @@ wrong code.**
 |---|---|
 | `BL7002` | `ByRef` parameters |
 | `BL7003` | `Long` — no 64-bit integer with matching semantics |
-| `BL7004` | `Char` |
 | `BL7005` | Value `Structure` — JavaScript has no value semantics for objects |
 | `BL7006` | Operator overloads |
 | `BL7007` | BCL types the backend does not provide (e.g. `System.IO.Stream`) |
@@ -77,6 +76,11 @@ wrong code.**
 | `BL7011` | A declared type colliding with a provided global (e.g. `console`) |
 | `BL7012` | A non-provided exception type |
 | `BL7013` | `TypeOf x Is IShape` — JavaScript has no interfaces to test (a class target works) |
+| `BL7014` | Decimal constructs JavaScript cannot lower faithfully: integer division, unsupported `Math` members/rules, Decimal collection value comparisons, or format specifiers |
+
+`Decimal` itself IS supported on this backend (spec §4.11); it is no longer refused as
+`BL7007`. `BL7004` is retired and never reused — `Char` lowers since portable-controls
+Task 14 (O13).
 
 ## Control flow, once more with feeling
 

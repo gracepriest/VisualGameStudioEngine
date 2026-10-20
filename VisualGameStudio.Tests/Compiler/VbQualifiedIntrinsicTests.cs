@@ -50,7 +50,7 @@ public class VbQualifiedIntrinsicTests
     public void TheQualifiableBuiltIns_AreTheOnesVbDeclaresWithTheSameShape() =>
         Assert.That(Qualifiable().Select(p => $"{p.Module}.{p.Intrinsic.Name}"), Is.EquivalentTo(new[]
         {
-            "Strings.Len", "Strings.Mid", "Strings.Left", "Strings.Right", "Strings.UCase", "Strings.LCase",
+            "Strings.Len", "Strings.ChrW", "Strings.Mid", "Strings.Left", "Strings.Right", "Strings.UCase", "Strings.LCase",
             "Strings.Trim", "Strings.InStr", "Strings.Replace", "Conversion.Str", "Conversion.Val",
             "Interaction.Beep", "Information.LBound", "Information.UBound", "VBMath.Randomize",
             "DateAndTime.Year", "DateAndTime.Month", "DateAndTime.Day", "DateAndTime.Hour", "DateAndTime.Minute",
