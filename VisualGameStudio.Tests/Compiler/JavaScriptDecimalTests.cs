@@ -2,6 +2,11 @@
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using BasicLang.Compiler;
+using BasicLang.Compiler.CodeGen.CSharp;
+using BasicLang.Compiler.IR;
+using BasicLang.Compiler.IR.Optimization;
+using BasicLang.Compiler.SemanticAnalysis;
 using NUnit.Framework;
 using RecordingOutput = VisualGameStudio.Tests.Services.JavaScriptProjectBuildTests.RecordingOutput;
 
@@ -230,4 +235,133 @@ public class JavaScriptDecimalTests
         " Console.WriteLine(i = Id(5D))\n" +
         " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\nEnd Sub\n",
         "True\nFalse\n5\nTrue\nTrue\ninvalid cast");
+
+    // ------------------------------------------------------------ D7, D8: conversions
+
+    private const string IdD = "Function IdD(x As Double) As Double\n Return x\nEnd Function\n";
+
+    private static string Overflow(string expression) =>
+        $" Try\n  Console.WriteLine({expression})\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\n";
+
+    /// <summary>Oracle rows: CInt (C# already lowers it through Convert — banker's), CDec, widening.</summary>
+    [Test]
+    public void Conversions() => Both(Id + IdD +
+        "Sub Main()\n Console.WriteLine(CInt(Id(2.5D)))\n Console.WriteLine(CInt(Id(3.5D)))\n Console.WriteLine(CInt(Id(-2.5D)))\n" +
+        Overflow("CInt(Id(2147483648D))") +
+        " Console.WriteLine(CDec(IdD(0.1)))\n Console.WriteLine(CDec(IdD(1.0 / 3.0)))\n Console.WriteLine(CDec(\"12.345\"))\n" +
+        " Dim n As Integer = 5\n Dim d As Decimal = n\n Console.WriteLine(d)\n Dim s As Short = 7\n d = s\n Console.WriteLine(d)\n" +
+        " Dim y As Byte = 9\n d = y\n Console.WriteLine(d)\nEnd Sub\n");
+
+    /// <summary>EXCEPTION ROWS E1/E4 (VB-literal, S10) — CType/CShort/CByte of a Decimal round half-to-even and throw
+    /// OverflowException out of range, on BOTH backends (C# fixed in Task 20A). NOTE: the plan's implicit narrowing row
+    /// (`Dim j As Integer = Id(3.5D)`) was DROPPED — the ANALYZER refuses implicit Decimal→Integer on every target
+    /// (measured in Task 20A), so CType is the only reachable path. Expected output is the plan's minus that row's 4.</summary>
+    [Test]
+    public void Narrowing_VbRules() => BothEqual(Id +
+        "Sub Main()\n Console.WriteLine(CType(Id(2.5D), Integer))\n Console.WriteLine(CType(Id(3.5D), Integer))\n" +
+        " Console.WriteLine(CShort(Id(2.5D)))\n Console.WriteLine(CByte(Id(255.4D)))\n" +
+        Overflow("CType(Id(2147483648D), Integer)") + Overflow("CShort(Id(40000D))") + Overflow("CByte(Id(256D))") + Overflow("CByte(Id(-1D))") +
+        "End Sub\n",
+        "2\n4\n2\n255\noverflow\noverflow\noverflow\noverflow");
+
+    /// <summary>
+    /// Decimal → Double (VarR8FromDec) and Double → Decimal (VarDecFromR8), GENERATED: 400 decimals and 400 doubles
+    /// from a fixed seed (random scale 0–28, random 96-bit mantissas, plus the edges: ±Max, 1e-28, values whose double
+    /// is inexact, doubles near 1e15/1e16 digit boundaries, subnormal-adjacent tiny values that .NET turns into 0,
+    /// ±7.9e28 overflow). Decimal → Double is asserted as `CDbl(Id(d)) = IdD(<the C#-computed double, "R">)` printing
+    /// True (no double FORMATTING in the comparison); Double → Decimal prints the Decimal (exact text).
+    /// </summary>
+    [Test]
+    public void DoubleConversionTables_MatchDotNet()
+    {
+        var rng = new Random(20260929);
+        var sb = new StringBuilder(Id + IdD).Append("Sub Main()\n");
+        for (var i = 0; i < 400; i++)
+        {
+            var d = new decimal(rng.Next(), rng.Next(), rng.Next(), rng.Next(2) == 0, (byte)rng.Next(29));
+            var expected = ((double)d).ToString("R", CultureInfo.InvariantCulture);
+            if (!expected.Contains('E') && !expected.Contains('.')) expected += ".0";
+            sb.Append($" Console.WriteLine(CDbl(Id({L(d)})) = IdD({expected}))\n");
+        }
+        foreach (var x in new[] { 0.1, 1.0 / 3.0, 123456789012345.6, 1e15 - 0.5, 9999999999999999.0, 1e-28, 1e-29, 7.9e28, -2.5e-10 })
+            sb.Append(Overflow($"CDec(IdD({x.ToString("R", CultureInfo.InvariantCulture)}))"));
+        for (var i = 0; i < 400; i++)
+        {
+            var x = (rng.NextDouble() - 0.5) * Math.Pow(10, rng.Next(-20, 28));
+            sb.Append(Overflow($"CDec(IdD({x.ToString("R", CultureInfo.InvariantCulture)}))"));
+        }
+        var oracle = Both(sb.Append("End Sub\n").ToString());
+        Assert.That(oracle.Split('\n').Take(400), Is.All.EqualTo("True"), "the C# oracle agrees with (double)decimal itself");
+    }
+
+    // ------------------------------------------------------------ D10: the mixing grid
+
+    private static string Outcome(Func<string> run)
+    {
+        try { return "OK:" + FourBackends.Norm(run()); }
+        catch (InvalidOperationException ex) { return "REFUSED:" + ex.Message.Split('\n').FirstOrDefault(l => l.StartsWith("Diagnostics:")); }
+    }
+
+    /// <summary>The C# leg of a grid cell, never asserting: analyzer refusal → REFUSED, csc refusal → CSFAIL (via
+    /// FourBackends.TryCompileCSharp, Task 20A), else the run's output. ⚠ This does NOT use
+    /// ReturnCoercionTests.EmitCSharpForTest: that helper ASSERTS on a refused source (the plan's exact
+    /// `CSharpOutcome` would die inside the analyzer and fail the whole grid on its first Single/Double cell),
+    /// so the same pipeline is run here with a non-asserting Diagnostics exception instead.</summary>
+    private static string CSharpOutcome(string program)
+    {
+        string cs;
+        try { cs = EmitCSharpForMixingGrid(program); }
+        catch (InvalidOperationException ex) { return "REFUSED:" + ex.Message.Split('\n').FirstOrDefault(l => l.StartsWith("Diagnostics:")); }
+        var errors = FourBackends.TryCompileCSharp(cs);
+        return errors.Count > 0 ? "CSFAIL:" + errors[0].Id : "OK:" + FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs));
+    }
+
+    /// <summary>EmitCSharpForTest's pipeline, without the assertions (see CSharpOutcome).</summary>
+    private static string EmitCSharpForMixingGrid(string source)
+    {
+        var parser = new Parser(new Lexer(source).Tokenize());
+        var ast = parser.Parse();
+        if (parser.Errors.Count > 0)
+            throw new InvalidOperationException(
+                $"Diagnostics: {string.Join("; ", parser.Errors.Select(e => e.Message))}{Environment.NewLine}");
+        var analyzer = new SemanticAnalyzer();
+        if (!analyzer.Analyze(ast))
+            throw new InvalidOperationException(
+                $"Diagnostics: {string.Join("; ", analyzer.Errors.Select(e => e.Message))}{Environment.NewLine}");
+        var module = new IRBuilder(analyzer).Build(ast, "MixingGrid");
+        var pipeline = new OptimizationPipeline();
+        pipeline.AddStandardPasses();
+        pipeline.Run(module);
+        return new ImprovedCSharpCodeGenerator().Generate(module);
+    }
+
+    /// <summary>
+    /// Every numeric type against Decimal, both orders, six operators: each cell either lowers and prints what .NET
+    /// prints, or the ANALYZER refuses it on both targets with the same words. No cell may reach a JS TypeError
+    /// (RunNodeScript asserts exit 0), and no cell may be accepted by the analyzer and rejected by csc (a CSFAIL is an
+    /// analyzer defect: make the analyzer refuse it — the one rule for both targets — and record the cell).
+    /// </summary>
+    [Test]
+    public void TheMixingGrid()
+    {
+        var findings = new StringBuilder();
+        foreach (var t in new[] { "Byte", "Short", "Integer", "Single", "Double" })
+        foreach (var op in new[] { "+", "-", "*", "/", "=", "<" })
+        foreach (var reversed in new[] { false, true })
+        {
+            var expr = reversed ? $"y {op} x" : $"x {op} y";
+            var program = Id + $"Sub Main()\n Dim x As {t} = 3\n Dim y As Decimal = Id(1.5D)\n Console.WriteLine({expr})\nEnd Sub\n";
+            var cs = CSharpOutcome(program);
+            var js = Outcome(() => JavaScriptExecutionTests.RunJs(program));
+            if (cs.StartsWith("CSFAIL") || cs != js) findings.Append($"{t} {expr}: C#={cs} | JS={js}\n");
+        }
+        Assert.That(findings.ToString(), Is.Empty);
+    }
+
+    // ------------------------------------------------------------ D9: Long stays refused
+
+    [Test]
+    public void DecimalToLong_IsTheExistingLongRefusal() =>
+        Assert.That(() => JsTestSupport.Compile("Sub Main()\n Dim d As Decimal = 1D\n Dim l As Long = CLng(d)\nEnd Sub"),
+            Throws.Exception.With.Message.Contains("BL7003"));
 }

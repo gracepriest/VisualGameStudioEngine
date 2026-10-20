@@ -524,7 +524,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
               // .NET's double powers of ten, as double LITERALS (from 1e23 on a literal is not exact ΓÇö the table must
               // be literals, never a computed power). A static FIELD: built once, not per call.
               static DOUBLE_POWERS_10 = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14,
-                                         1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28];
+                                         1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28,
+                                         1e29, 1e30, 1e31, 1e32, 1e33, 1e34, 1e35, 1e36, 1e37, 1e38, 1e39, 1e40, 1e41, 1e42, 1e43,
+                                         1e44, 1e45, 1e46, 1e47, 1e48, 1e49, 1e50, 1e51, 1e52, 1e53, 1e54, 1e55, 1e56, 1e57, 1e58,
+                                         1e59, 1e60, 1e61, 1e62, 1e63, 1e64, 1e65, 1e66, 1e67, 1e68, 1e69, 1e70, 1e71, 1e72, 1e73,
+                                         1e74, 1e75, 1e76, 1e77, 1e78, 1e79, 1e80];
+              // The bit view VarDecFromR8 needs for GetExponent: one buffer, two typed views.
+              static BUF = new ArrayBuffer(8);
+              static F64 = new Float64Array(VgsDecimal.BUF);
+              static U64 = new BigUint64Array(VgsDecimal.BUF);
               constructor(neg, mant, scale) { this.neg = neg && mant !== 0n; this.mant = mant; this.scale = scale; }
               static pow10(n) { return 10n ** BigInt(n); }
               signed() { return this.neg ? -this.mant : this.mant; }
@@ -557,7 +565,67 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
               // operations and the same power-of-ten table are used. A decimal-string approach (toExponential/
               // toPrecision) rounds the EXACT binary value instead and differs from .NET on edge cases.
               static fromNumber(d) { return VgsDecimal.varDecFromR8(d); }
-              static varDecFromR8(d) { /* the port ΓÇö Task 22 */ throw new Error("VarDecFromR8 not yet ported"); }
+              static varDecFromR8(input) {
+                // .NET 8 Decimal.DecCalc.VarDecFromR8, statement for statement. Doubles stay JS numbers (IEEE
+                // arithmetic is identical); the 64/96-bit steps are BigInt; the power table is DOUBLE_POWERS_10.
+                const DBLBIAS = 1022, DEC_SCALE_MAX = 28;
+                VgsDecimal.F64[0] = input;
+                const exp = Number((VgsDecimal.U64[0] >> 52n) & 0x7FFn) - DBLBIAS;
+                if (exp < -94) return new VgsDecimal(false, 0n, 0); // underflow -> canonical zero
+                if (exp > 96) throw new OverflowException("Value was either too large or too small for a Decimal.");
+
+                let neg = false;
+                if (input < 0) { input = -input; neg = true; }
+
+                // Round the input to a 15-digit integer. power is between -14 and 43.
+                let dbl = input;
+                let power = 14 - ((exp * 19728) >> 16);
+                if (power >= 0) {
+                  if (power > DEC_SCALE_MAX) power = DEC_SCALE_MAX;
+                  dbl *= VgsDecimal.DOUBLE_POWERS_10[power];
+                } else {
+                  if (power !== -1 || dbl >= 1E15) dbl /= VgsDecimal.DOUBLE_POWERS_10[-power];
+                  else power = 0; // didn't scale it
+                }
+                if (dbl < 1E14 && power < DEC_SCALE_MAX) { dbl *= 10; power++; }
+
+                // Math.Round(dbl) is half-to-even, then (ulong)(long) truncates the integral double.
+                let mant = VgsDecimal.roundHalfEven(dbl);
+                if (mant === 0n) return new VgsDecimal(false, 0n, 0);
+
+                let scale = 0;
+                if (power < 0) {
+                  // Add -power factors of 10; UInt64x64To128 throws past 96 bits.
+                  power = -power;
+                  mant *= 10n ** BigInt(power);
+                  if ((mant >> 96n) !== 0n) throw new OverflowException("Value was either too large or too small for a Decimal.");
+                } else {
+                  // Factor out powers of 10 to reduce the scale, if possible (max 14: a 15-digit mantissa).
+                  let lmax = power > 14 ? 14 : power;
+                  if ((mant & 255n) === 0n && lmax >= 8) {
+                    const div = mant / 100000000n;
+                    if (mant === div * 100000000n) { mant = div; power -= 8; lmax -= 8; }
+                  }
+                  if ((mant & 15n) === 0n && lmax >= 4) {
+                    const div = mant / 10000n;
+                    if (mant === div * 10000n) { mant = div; power -= 4; lmax -= 4; }
+                  }
+                  if ((mant & 3n) === 0n && lmax >= 2) {
+                    const div = mant / 100n;
+                    if (mant === div * 100n) { mant = div; power -= 2; lmax -= 2; }
+                  }
+                  if ((mant & 1n) === 0n && lmax >= 1) {
+                    const div = mant / 10n;
+                    if (mant === div * 10n) { mant = div; power--; }
+                  }
+                  scale = power;
+                }
+                return new VgsDecimal(neg, mant, scale);
+              }
+              static roundHalfEven(x) {
+                const f = Math.floor(x), diff = x - f;
+                return (diff > 0.5 || (diff === 0.5 && (f % 2) !== 0)) ? BigInt(f + 1) : BigInt(f);
+              }
               // NumberStyles.Number, invariant: white space, a leading or trailing sign, group separators, one point.
               static parse(text) {
                 const m = String(text).trim().match(/^([+-])?([\d,]*)(?:\.(\d*))?([+-])?$/);
@@ -3858,16 +3926,31 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (rendered.Count != 1 || _userFunctionNames.Contains(call.FunctionName)) return false;
 
             var source = call.Arguments[0].Type?.Name;
+            var sourceType = call.Arguments[0].Type;
             var name = call.FunctionName;
 
-            // `CType(o, Decimal)` lowers to this CDec CALL (IRBuilder.ConversionBuiltinFor), not
-            // an IRCast: an Object holding a Decimal/Integer/Double/String converts by value, and
-            // anything else throws VB's InvalidCastException (VgsDecimal.fromObject).
-            if (string.Equals(name, "CDec", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(source, "Object", StringComparison.OrdinalIgnoreCase))
+            // Conversions of a Decimal VALUE go through VgsDecimal's exact methods (D7). CInt/CShort/CByte
+            // round half-to-even and throw out of range (never the integral wrap); CDbl/CSng are the
+            // VarR8FromDec port. CStr is handled earlier by TryTextCall.
+            if (IsDecimalTypeName(sourceType))
             {
-                result = $"VgsDecimal.fromObject({rendered[0]})";
-                return true;
+                if (string.Equals(name, "CInt", StringComparison.OrdinalIgnoreCase)) { result = $"{rendered[0]}.toInt32()"; return true; }
+                if (string.Equals(name, "CShort", StringComparison.OrdinalIgnoreCase)) { result = $"{rendered[0]}.toInt16()"; return true; }
+                if (string.Equals(name, "CByte", StringComparison.OrdinalIgnoreCase)) { result = $"{rendered[0]}.toByte()"; return true; }
+                if (string.Equals(name, "CDbl", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "CSng", StringComparison.OrdinalIgnoreCase)) { result = $"{rendered[0]}.toNumber()"; return true; }
+                if (string.Equals(name, "CDec", StringComparison.OrdinalIgnoreCase)) { result = rendered[0]; return true; }
+            }
+
+            // `CType(x, Decimal)` lowers to this CDec CALL (IRBuilder.ConversionBuiltinFor), not an IRCast:
+            // pick the arm by the ARGUMENT's static type. An Object holding a Decimal/Integer/Double/String
+            // converts by value; anything else throws VB's InvalidCastException (VgsDecimal.fromObject).
+            if (string.Equals(name, "CDec", StringComparison.OrdinalIgnoreCase))
+            {
+                if (sourceType?.IsIntegral() == true) { result = $"VgsDecimal.fromInt({rendered[0]})"; return true; }
+                if (sourceType?.IsFloatingPoint() == true) { result = $"VgsDecimal.fromNumber({rendered[0]})"; return true; }
+                if (string.Equals(source, "String", StringComparison.OrdinalIgnoreCase)) { result = $"VgsDecimal.parse({rendered[0]})"; return true; }
+                if (string.Equals(source, "Object", StringComparison.OrdinalIgnoreCase)) { result = $"VgsDecimal.fromObject({rendered[0]})"; return true; }
             }
 
             if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
@@ -4029,6 +4112,32 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 rendered = Expr(cast.Value);
                 return true;
+            }
+
+            // D7/D8: every conversion to or from Decimal. Decimal is a VgsDecimal OBJECT here, so each arm
+            // is a real conversion — an integral widening is fromInt, a floating one fromNumber (Task 22's
+            // VarDecFromR8 port), a boxed value fromObject, text parse, and the narrowing direction rounds
+            // half-to-even / throws (never the integral wrap).
+            if (IsDecimalTypeName(target))
+            {
+                var value = Expr(cast.Value);
+                if (IsDecimalTypeName(source)) { rendered = value; return true; }
+                if (source.IsIntegral()) { rendered = $"VgsDecimal.fromInt({value})"; return true; }
+                if (source.IsFloatingPoint()) { rendered = $"VgsDecimal.fromNumber({value})"; return true; }
+                if (string.Equals(source.Name, "String", StringComparison.OrdinalIgnoreCase)) { rendered = $"VgsDecimal.parse({value})"; return true; }
+                if (string.Equals(source.Name, "Object", StringComparison.OrdinalIgnoreCase)) { rendered = $"VgsDecimal.fromObject({value})"; return true; }
+                return false;
+            }
+
+            if (IsDecimalTypeName(source))
+            {
+                var value = Expr(cast.Value);
+                if (target.IsFloatingPoint()) { rendered = $"{value}.toNumber()"; return true; }
+                if (string.Equals(target.Name, "Integer", StringComparison.OrdinalIgnoreCase)) { rendered = $"{value}.toInt32()"; return true; }
+                if (string.Equals(target.Name, "Short", StringComparison.OrdinalIgnoreCase)) { rendered = $"{value}.toInt16()"; return true; }
+                if (string.Equals(target.Name, "Byte", StringComparison.OrdinalIgnoreCase)) { rendered = $"{value}.toByte()"; return true; }
+                if (string.Equals(target.Name, "String", StringComparison.OrdinalIgnoreCase)) { rendered = $"{value}.toString()"; return true; }
+                return false;
             }
 
             if (!target.IsIntegral()) return false;
