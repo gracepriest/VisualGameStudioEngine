@@ -1015,6 +1015,12 @@ namespace BasicLang.Compiler
                 if (!string.IsNullOrEmpty(unit.FilePath) && unit.LineOffset != 0)
                     combined.SourceLineOffsets[unit.FilePath] = unit.LineOffset;
 
+                // D12: the interpolation format records live beside the IR tree (no IR node
+                // carries them), so they must be carried across the per-unit → combined module
+                // merge or the JavaScript Decimal check loses every multi-file hit.
+                if (unit.IR.InterpolatedFormats != null)
+                    combined.InterpolatedFormats.AddRange(unit.IR.InterpolatedFormats);
+
                 // Add functions from this module.
                 //
                 // Class and interface MEMBER bodies are exempt from the name dedupe. They

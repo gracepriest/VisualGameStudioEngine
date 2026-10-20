@@ -685,7 +685,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public static ForeignFeatureException ByRefArgumentRejection(string calleeName) =>
             new ForeignFeatureException(
                 $"BL7002: the call to '{calleeName}' passes an argument by reference, which " +
-                "cannot be lowered to JavaScript. " + ByRefWhy);
+                "cannot be lowered to JavaScript. " + ByRefWhy +
+                // Decimal.TryParse's out parameter is the only way to get a Boolean status out
+                // of a parse; the spelling that needs no reference is a Parse inside Try/Catch.
+                (string.Equals(calleeName, "Decimal.TryParse", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(calleeName, "System.Decimal.TryParse", StringComparison.OrdinalIgnoreCase)
+                    ? " Use Decimal.Parse inside Try ... Catch ex As FormatException."
+                    : string.Empty));
 
         private const string ByRefWhy =
             "JavaScript has no reference parameters, so a write through a ByRef argument " +

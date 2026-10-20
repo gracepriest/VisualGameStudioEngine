@@ -1572,9 +1572,18 @@ namespace BasicLang.Compiler.AST
         /// </summary>
         public List<object> Parts { get; set; }
 
+        /// <summary>
+        /// Parallel to <see cref="Parts"/>: the format specifier of an expression part
+        /// (<c>$"{d:F2}"</c> → <c>"F2"</c>), or <c>null</c> for literal text and for a hole
+        /// without one. Kept here because the parser used to stop at the colon and throw the
+        /// rest away, so no backend could tell <c>$"{d:F2}"</c> from <c>$"{d}"</c>.
+        /// </summary>
+        public List<string> FormatSpecifiers { get; set; }
+
         public InterpolatedStringNode(int line, int column) : base(line, column)
         {
             Parts = new List<object>();
+            FormatSpecifiers = new List<string>();
         }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

@@ -5094,6 +5094,7 @@ namespace BasicLang.Compiler
                     if (currentText.Length > 0)
                     {
                         node.Parts.Add(currentText.ToString());
+                        node.FormatSpecifiers.Add(null);
                         currentText.Clear();
                     }
 
@@ -5108,16 +5109,20 @@ namespace BasicLang.Compiler
                         if (braceDepth > 0) i++;
                     }
 
-                    // Extract the expression text
+                    // Extract the hole. The part after a top-level ':' is VB's format
+                    // specifier ($"{d:F2}"); it is not part of the expression, and it used
+                    // to be handed to ParseExpression as junk and silently dropped.
                     string exprText = content.Substring(start, i - start);
                     i++; // skip the closing brace
+                    var (expressionText, formatSpecifier) = SplitInterpolationHole(exprText);
 
                     // Parse the expression
-                    var exprLexer = new Lexer(exprText);
+                    var exprLexer = new Lexer(expressionText);
                     var exprTokens = exprLexer.Tokenize();
                     var exprParser = new Parser(exprTokens);
                     var expr = exprParser.ParseExpression();
                     node.Parts.Add(expr);
+                    node.FormatSpecifiers.Add(formatSpecifier);
                 }
                 else
                 {
@@ -5130,9 +5135,72 @@ namespace BasicLang.Compiler
             if (currentText.Length > 0)
             {
                 node.Parts.Add(currentText.ToString());
+                node.FormatSpecifiers.Add(null);
             }
 
             return node;
+        }
+
+        /// <summary>
+        /// Splits an interpolation hole at the first top-level <c>:</c>:
+        /// <c>d:F2</c> → (<c>d</c>, <c>F2</c>), <c>d</c> → (<c>d</c>, null).
+        ///
+        /// <para>Colons inside a string literal, parentheses, brackets, braces or a
+        /// <c>#date#</c> literal are part of the expression; <c>:=</c> is VB's named
+        /// argument, not a format. The format text itself may contain colons
+        /// (<c>HH:mm</c>), which is why only the FIRST top-level one splits.</para>
+        /// </summary>
+        private static (string Expression, string Format) SplitInterpolationHole(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return (text, null);
+
+            int parens = 0, brackets = 0, braces = 0;
+            bool inString = false, inDate = false;
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+
+                if (inString)
+                {
+                    if (c != '"') continue;
+                    // VB writes a literal quote inside a string as two quotes.
+                    if (i + 1 < text.Length && text[i + 1] == '"') { i++; continue; }
+                    inString = false;
+                    continue;
+                }
+
+                if (inDate)
+                {
+                    if (c == '#') inDate = false;
+                    continue;
+                }
+
+                switch (c)
+                {
+                    case '"': inString = true; break;
+                    // A `#` straight after a name, number or closing group is VB's Double type
+                    // character (1.5#, d#, f()#), not the opening of a #date# literal. Missing
+                    // that distinction would hide the colon in `$"{d#:F2}"`.
+                    case '#':
+                        if (i == 0 || !(char.IsLetterOrDigit(text[i - 1]) || text[i - 1] == '_'
+                                        || text[i - 1] == ')' || text[i - 1] == ']'))
+                            inDate = true;
+                        break;
+                    case '(': parens++; break;
+                    case ')': if (parens > 0) parens--; break;
+                    case '[': brackets++; break;
+                    case ']': if (brackets > 0) brackets--; break;
+                    case '{': braces++; break;
+                    case '}': if (braces > 0) braces--; break;
+                    case ':':
+                        if (parens != 0 || brackets != 0 || braces != 0) break;
+                        if (i + 1 < text.Length && text[i + 1] == '=') break; // named argument
+                        return (text.Substring(0, i), text.Substring(i + 1));
+                }
+            }
+
+            return (text, null);
         }
 
         private LambdaExpressionNode ParseLambdaExpression(Token token, bool isFunction)

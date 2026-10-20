@@ -5818,8 +5818,9 @@ namespace BasicLang.Compiler.IR
             // Build the string by concatenating all parts
             IRValue result = null;
 
-            foreach (var part in node.Parts)
+            for (var partIndex = 0; partIndex < node.Parts.Count; partIndex++)
             {
+                var part = node.Parts[partIndex];
                 IRValue partValue;
 
                 if (part is string text)
@@ -5841,6 +5842,25 @@ namespace BasicLang.Compiler.IR
                     // 'ToString' takes 1 arguments", C++ "'ToString' was not declared in this
                     // scope", JS a call to an undefined ToString.
                     var exprType = _semanticAnalyzer.GetNodeType(expr);
+
+                    // D12: preserve the hole's format specifier for the JavaScript backend's
+                    // Decimal refusal. It is not part of the expression's IR (CStr(d) would
+                    // otherwise look exactly like CStr(d) from $"{d}"). Prefer the IR's Decimal
+                    // type when it has one: a hole can be typed Object but still hold a Decimal.
+                    var format = partIndex < (node.FormatSpecifiers?.Count ?? 0)
+                        ? node.FormatSpecifiers[partIndex] : null;
+                    if (!string.IsNullOrEmpty(format))
+                    {
+                        var formatType = string.Equals(exprValue?.Type?.Name, "Decimal", StringComparison.OrdinalIgnoreCase)
+                            ? exprValue.Type
+                            : exprType ?? exprValue?.Type;
+                        _module.InterpolatedFormats.Add(new IRInterpolatedFormat
+                        {
+                            Type = formatType,
+                            Format = format,
+                        });
+                    }
+
                     if (exprType?.Name != "String")
                     {
                         var tempName = _currentFunction.GetNextTempName();

@@ -424,6 +424,9 @@ namespace BasicLang.Compiler.IR
                 foreach (var kv in module.Enums) clone.Enums[kv.Key] = kv.Value;
                 foreach (var kv in module.Delegates) clone.Delegates[kv.Key] = kv.Value;
                 foreach (var kv in module.SourceLineOffsets) clone.SourceLineOffsets[kv.Key] = kv.Value;
+                // D12: the interpolation format records are side metadata, not IR nodes, so
+                // Clone must carry them explicitly or a closure would hide $"{d:F2}".
+                clone.InterpolatedFormats.AddRange(module.InterpolatedFormats);
                 clone.Namespaces.AddRange(module.Namespaces);
                 clone.NetUsings.AddRange(module.NetUsings);
                 clone.CppIncludes.AddRange(module.CppIncludes);

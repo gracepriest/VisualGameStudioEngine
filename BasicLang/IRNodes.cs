@@ -1847,6 +1847,22 @@ namespace BasicLang.Compiler.IR
     }
 
     /// <summary>
+    /// A format specifier from an interpolated-string hole (<c>$"{d:F2}"</c>). No IR expression
+    /// carries it: the hole's IR is just the value and a <c>CStr</c>, so the JavaScript backend
+    /// could not distinguish it from <c>$"{d}"</c>. The IR builder records it here, with the
+    /// expression's static type, and the JavaScript backend refuses a Decimal one.
+    ///
+    /// <para>The other backends ignore this list and keep their existing output (the
+    /// unformatted value); this record is deliberately not a new IR node, so it cannot make
+    /// them refuse a program they accepted before.</para>
+    /// </summary>
+    public sealed class IRInterpolatedFormat
+    {
+        public TypeInfo Type { get; set; }
+        public string Format { get; set; }
+    }
+
+    /// <summary>
     /// IR Module - top-level container
     /// </summary>
     public class IRModule
@@ -1940,10 +1956,17 @@ namespace BasicLang.Compiler.IR
         /// </summary>
         public Dictionary<string, int> SourceLineOffsets { get; set; }
 
+        /// <summary>
+        /// Every interpolation hole that carried a format specifier, in source order. See
+        /// <see cref="IRInterpolatedFormat"/>: the specifier has no IR expression of its own.
+        /// </summary>
+        public List<IRInterpolatedFormat> InterpolatedFormats { get; set; }
+
         public IRModule(string name)
         {
             Name = name;
             SourceLineOffsets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            InterpolatedFormats = new List<IRInterpolatedFormat>();
             Functions = new List<IRFunction>();
             GlobalVariables = new Dictionary<string, IRVariable>();
             Types = new Dictionary<string, TypeInfo>();

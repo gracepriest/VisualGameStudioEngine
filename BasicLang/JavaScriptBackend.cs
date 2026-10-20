@@ -145,6 +145,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 allowJsImports: true, allowExternClasses: true);
             JsCapabilityChecker.Check(module);
 
+            // D12 — a Decimal interpolation hole with a format specifier. The parser preserves
+            // the specifier in IRModule.InterpolatedFormats because no IR expression carries it;
+            // without this check $"{d:F2}" would lower exactly like $"{d}" and print the plain
+            // value. The other backends ignore the list, so their output is unchanged.
+            if (module.InterpolatedFormats != null)
+            {
+                foreach (var formatted in module.InterpolatedFormats)
+                {
+                    if (IsDecimalTypeName(formatted.Type))
+                        throw DecimalFormatRefusal("interpolation", formatted.Format);
+                }
+            }
+
             _module = module;
             _moduleUsesDecimal = UsesDecimal(module);
             _output.Clear();
@@ -1920,6 +1933,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 BinaryOpKind.Le => $"{wl}.cmp({wr}) <= 0",
                 BinaryOpKind.Gt => $"{wl}.cmp({wr}) > 0",
                 BinaryOpKind.Ge => $"{wl}.cmp({wr}) >= 0",
+                // VB's `\` on Decimal truncates the quotient toward zero; the JS helper divides
+                // JS numbers and cannot see a VgsDecimal. Before this arm the operation reached
+                // NotImplementedException("Decimal binary IntDiv"), which named neither the
+                // Decimal nor the spelling that works.
+                BinaryOpKind.IntDiv => throw DecimalRefusal("\\ (integer division)",
+                    "use `Math.Truncate(a / b)` on Decimal operands"),
                 _ => throw new NotImplementedException($"Decimal binary {op.Operation}"),
             };
         }
@@ -2614,6 +2633,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return false;
             }
 
+            // BL7002 — Decimal.TryParse has an `out` parameter (the parsed value), and the
+            // analyzer resolves the type keyword's member without ByRef metadata, so this
+            // arrives as an ordinary call. Refuse by the code the reason deserves and point
+            // at the spelling that does work, before the keyword-static table says NoLowering.
+            if (string.Equals(name, "Decimal.TryParse", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "System.Decimal.TryParse", StringComparison.OrdinalIgnoreCase))
+                throw JsCapabilityChecker.ByRefArgumentRejection(name);
+
             if (string.Equals(name, "Decimal.Parse", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "System.Decimal.Parse", StringComparison.OrdinalIgnoreCase))
             {
@@ -2622,6 +2649,30 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 result = $"VgsDecimal.parse({rendered[0]})";
                 return true;
             }
+
+            // D12 — String.Format on a Decimal with a format specifier. __blFormat has no
+            // Decimal kind: the value falls into the "o" arm and prints its plain text, so
+            // "{0:F2}" would silently lose the "F2". The format is checked only when a Decimal
+            // argument is present; String.Format("{0}", d) keeps working.
+            if (string.Equals(name, "String.Format", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "System.String.Format", StringComparison.OrdinalIgnoreCase))
+            {
+                if (call.Arguments.Count > 1
+                    && call.Arguments.Skip(1).Any(a => IsDecimalTypeName(a.Type))
+                    && FormatCarriesSpecifier(call.Arguments[0]))
+                    throw DecimalFormatRefusal("String.Format");
+                return false;
+            }
+
+            // D12 — VB's Format(d, "0.00"). It has no JavaScript lowering at all (a raw Format
+            // call, a ReferenceError at run time); a Decimal makes the silent-wrong worse, so
+            // refuse it by name rather than letting the static table pass it through.
+            if ((string.Equals(name, "Format", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(name, "Strings.Format", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(name, "Microsoft.VisualBasic.Strings.Format", StringComparison.OrdinalIgnoreCase))
+                && call.Arguments.Count > 0
+                && IsDecimalTypeName(call.Arguments[0].Type))
+                throw DecimalFormatRefusal("Format");
 
             var member = MathMember(name);
             if (member == null) return false;
@@ -2700,6 +2751,35 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>BL7014 — a Decimal construct JavaScript refuses BY NAME, never lowers wrong.</summary>
         private static NotSupportedException DecimalRefusal(string construct, string detail) =>
             new NotSupportedException($"BL7014: '{construct}' cannot be lowered to JavaScript for a Decimal argument ({detail}) - DecimalNotSupportedOnWeb.");
+
+        /// <summary>BL7014 — a Decimal format specifier. The JavaScript runtime has no Decimal
+        /// formatter; the value would fall through to its plain text and silently drop the
+        /// specifier (F2, N2, 0.00), which looks right often enough to survive testing.</summary>
+        private static NotSupportedException DecimalFormatRefusal(string construct, string format = null) =>
+            new NotSupportedException(
+                $"BL7014: '{construct}' with a format specifier" +
+                (string.IsNullOrEmpty(format) ? string.Empty : $" ('{format}')") +
+                " cannot be lowered to JavaScript for a Decimal - " +
+                "format the text yourself, or use `Math.Round(d, 2).ToString()` (DecimalNotSupportedOnWeb).");
+
+        /// <summary>True when a String.Format format string carries a <c>:</c> specifier in any
+        /// placeholder, or when it is not a compile-time constant (then it cannot be cleared).
+        /// A literal colon outside a placeholder ("Time: {0}") is not a specifier.</summary>
+        private static bool FormatCarriesSpecifier(IRValue format)
+        {
+            if (format is not IRConstant { Value: string text }) return true;
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                if (text[i] != '{') continue;
+                if (i + 1 < text.Length && text[i + 1] == '{') { i++; continue; }   // {{ escape
+                var end = text.IndexOf('}', i + 1);
+                if (end < 0) return true;                                            // malformed
+                if (text.IndexOf(':', i + 1, end - i - 1) >= 0) return true;
+                i = end;
+            }
+            return false;
+        }
 
         /// <summary>BL7014 — a collection operation whose JavaScript lowering would compare
         /// VgsDecimal objects by identity instead of by value.</summary>
@@ -4624,6 +4704,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 var raw = methodIsForeign ? foreignMethod : mc.MethodName;
                 return $"{receiver}.{raw}({string.Join(", ", args)})";
             }
+
+            // D12 — Decimal.ToString(<format>) has no formatter in the JavaScript runtime. The
+            // call fell through as `d.ToString("N2")`; VgsDecimal's ToString takes no arguments,
+            // so it printed the plain text and dropped the format. Refuse the argument itself,
+            // not any particular overload: culture/provider arguments are just as unsupported.
+            if (args.Count > 0
+                && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
+                && IsDecimalTypeName(mc.Object?.Type))
+                throw DecimalFormatRefusal("ToString");
 
             // `x.ToString()` on a primitive emitted `x.ToString()`, and a JS boolean, number or
             // string has no such method: a TypeError at run time. (A class's own ToString is
