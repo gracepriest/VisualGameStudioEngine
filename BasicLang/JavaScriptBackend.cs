@@ -2587,6 +2587,109 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return result != null;
         }
 
+        /// <summary>
+        /// D13/D15 — <c>Math.X(decimal)</c> and <c>Decimal.Parse(text)</c>. They cannot go through
+        /// <see cref="TryStdLib"/>: its emitters see rendered STRINGS, never types, so
+        /// <c>Math.Round(Id(2.5D))</c> would hand a VgsDecimal to <c>Math.round</c> (NaN).
+        ///
+        /// <para>⛔ Runs before the keyword-static table because <c>Decimal</c> is a type keyword
+        /// (<see cref="PrimitiveStaticSurface.IsKeywordReceiver"/>), and before the stdlib table
+        /// because <c>Math.Round</c> already has a type-blind row there. Only a Decimal argument
+        /// diverts an ordinary Math call; everything else keeps its existing lowering.</para>
+        /// </summary>
+        private bool TryDecimalCall(IRCall call, List<string> rendered, out string result)
+        {
+            result = null;
+            var name = call.FunctionName;
+            if (string.IsNullOrEmpty(name)) return false;
+
+            if (string.Equals(name, "Decimal.Parse", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "System.Decimal.Parse", StringComparison.OrdinalIgnoreCase))
+            {
+                if (call.Arguments.Count != 1)
+                    throw DecimalRefusal(name, "only Decimal.Parse(text) is supported");
+                result = $"VgsDecimal.parse({rendered[0]})";
+                return true;
+            }
+
+            var member = MathMember(name);
+            if (member == null) return false;
+            if (!call.Arguments.Any(a => IsDecimalTypeName(a.Type))) return false;
+
+            switch (member.ToLowerInvariant())
+            {
+                case "round":
+                    if (call.Arguments.Count >= 3)
+                        throw DecimalRefusal("MidpointRounding", "Math.Round with a midpoint rule");
+                    if (!IsDecimalTypeName(call.Arguments[0].Type))
+                        break;
+                    result = call.Arguments.Count == 1
+                        ? $"{DecimalMathOperand(call.Arguments[0], rendered[0])}.roundTo(0, \"even\")"
+                        : $"{DecimalMathOperand(call.Arguments[0], rendered[0])}.roundTo({rendered[1]}, \"even\")";
+                    return true;
+                case "abs":
+                    if (call.Arguments.Count == 1)
+                    {
+                        result = $"{DecimalMathOperand(call.Arguments[0], rendered[0])}.abs()";
+                        return true;
+                    }
+                    break;
+                case "min":
+                case "max":
+                    if (call.Arguments.Count == 2)
+                    {
+                        var a = DecimalMathOperand(call.Arguments[0], rendered[0]);
+                        var b = DecimalMathOperand(call.Arguments[1], rendered[1]);
+                        // MEASURED on .NET 8: Min returns the SECOND operand on a value tie
+                        // (Min(1.1m, 1.10m) is 1.10) and Max returns the FIRST (1.1). A single
+                        // <= / >= for both, as the plan guessed, prints the wrong scale on one.
+                        result = member.Equals("Min", StringComparison.OrdinalIgnoreCase)
+                            ? $"((a, b) => a.cmp(b) < 0 ? a : b)({a}, {b})"
+                            : $"((a, b) => a.cmp(b) >= 0 ? a : b)({a}, {b})";
+                        return true;
+                    }
+                    break;
+                case "floor":
+                case "ceiling":
+                case "truncate":
+                    if (call.Arguments.Count == 1)
+                    {
+                        var mode = member.ToLowerInvariant() == "floor" ? "floor"
+                            : member.ToLowerInvariant() == "ceiling" ? "ceiling" : "trunc";
+                        result = $"{DecimalMathOperand(call.Arguments[0], rendered[0])}.roundTo(0, \"{mode}\")";
+                        return true;
+                    }
+                    break;
+            }
+
+            throw DecimalRefusal(name, "no Decimal lowering for this Math member");
+        }
+
+        /// <summary>The <c>X</c> of <c>Math.X</c> / <c>System.Math.X</c>, or null for anything else.</summary>
+        private static string MathMember(string name)
+        {
+            foreach (var prefix in new[] { "System.Math.", "Math." })
+            {
+                if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return name.Substring(prefix.Length);
+            }
+            return null;
+        }
+
+        /// <summary>One argument of a Decimal Math call: the VgsDecimal itself, or an integral/floating
+        /// value widened the way VB widens it for the <c>Math.X(decimal)</c> overload.</summary>
+        private static string DecimalMathOperand(IRValue argument, string rendered)
+        {
+            if (IsDecimalTypeName(argument.Type)) return rendered;
+            if (argument.Type?.IsIntegral() == true) return $"VgsDecimal.fromInt({rendered})";
+            if (argument.Type?.IsFloatingPoint() == true) return $"VgsDecimal.fromNumber({rendered})";
+            return rendered;
+        }
+
+        /// <summary>BL7014 — a Decimal construct JavaScript refuses BY NAME, never lowers wrong.</summary>
+        private static NotSupportedException DecimalRefusal(string construct, string detail) =>
+            new NotSupportedException($"BL7014: '{construct}' cannot be lowered to JavaScript for a Decimal argument ({detail}) - DecimalNotSupportedOnWeb.");
+
         private string CallTarget(string functionName, bool mayBeMember = true)
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
@@ -3786,6 +3889,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (!SimpleCalleeText.IsMatch(callee)) callee = $"({callee})";
                 return $"{callee}({string.Join(", ", rendered)})";
             }
+
+            // D13/D15: Decimal-aware Math and Decimal.Parse need the argument TYPES, which the
+            // string-based JavaScriptStdLib cannot see. This must run before the keyword-static
+            // table (Decimal.Parse) and before TryStdLib (Math.Round(d) would reach Math.round
+            // with a VgsDecimal and print NaN).
+            if (TryDecimalCall(call, rendered, out var decimalCall))
+                return decimalCall;
 
             // A type keyword's Shared member (`String.Format(...)`, `Integer.Parse(s)`): the prelude
             // helper for its row. A keyword member outside the table is refused, never emitted as a

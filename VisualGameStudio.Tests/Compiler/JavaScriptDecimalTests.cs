@@ -358,6 +358,24 @@ public class JavaScriptDecimalTests
         Assert.That(findings.ToString(), Is.Empty);
     }
 
+    // ------------------------------------------------------------ D13, D15
+
+    [Test]
+    public void MathOnDecimal() => Both(Id +
+        "Sub Main()\n Console.WriteLine(Math.Round(Id(2.5D)))\n Console.WriteLine(Math.Round(Id(3.5D)))\n Console.WriteLine(Math.Round(Id(-2.5D)))\n" +
+        " Console.WriteLine(Math.Round(Id(1.2345D), 2))\n Console.WriteLine(Math.Round(Id(1.235D), 2))\n Console.WriteLine(Math.Round(Id(1.5D), 3))\n" +
+        " Console.WriteLine(Math.Abs(Id(-1.50D)))\n Console.WriteLine(Math.Min(Id(1.1D), Id(1.10D)))\n Console.WriteLine(Math.Max(Id(1.1D), Id(1.10D)))\n" +
+        " Console.WriteLine(Math.Floor(Id(-1.5D)))\n Console.WriteLine(Math.Ceiling(Id(-1.5D)))\n Console.WriteLine(Math.Truncate(Id(-1.7D)))\n" +
+        " Console.WriteLine(Math.Floor(Id(1.50D)))\nEnd Sub\n");
+
+    [Test]
+    public void Parse() => Both(
+        "Sub Try1(s As String)\n Try\n  Console.WriteLine(Decimal.Parse(s))\n Catch ex As FormatException\n  Console.WriteLine(\"format\")\n" +
+        " Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n End Try\nEnd Sub\n" +
+        "Sub Main()\n Try1(\"1,234.50\")\n Try1(\" -3.14 \")\n Try1(\"12.345\")\n Try1(\"1.\")\n Try1(\".5\")\n Try1(\"5-\")\n" +
+        " Try1(\"abc\")\n Try1(\"1e5\")\n Try1(\"\")\n Try1(\"0.12345678901234567890123456789\")\n" +
+        " Try1(\"79228162514264337593543950336\")\n Try1(\"-79228162514264337593543950336\")\nEnd Sub\n");
+
     // ------------------------------------------------------------ D9: Long stays refused
 
     [Test]
