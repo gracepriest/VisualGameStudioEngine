@@ -391,4 +391,23 @@ public class JavaScriptDecimalTests
     public void DecimalToLong_IsTheExistingLongRefusal() =>
         Assert.That(() => JsTestSupport.Compile("Sub Main()\n Dim d As Decimal = 1D\n Dim l As Long = CLng(d)\nEnd Sub"),
             Throws.Exception.With.Message.Contains("BL7003"));
+
+    // ------------------------------------------------------------ D21: optimizer folding
+
+    private const string Foldable =
+        "Const A As Decimal = 1.1D\nSub Main()\n Console.WriteLine(0.1D + 0.2D)\n Console.WriteLine(A * 3D)\n Console.WriteLine(1D / 3D)\n" +
+        " Console.WriteLine(0.1D + 0.2D = 0.3D)\nEnd Sub\n";
+
+    [Test]
+    public void ConstantExpressions_AreExact_UnderEveryPipeline()
+    {
+        var cs = FourBackends.Norm(FourBackends.RunEmittedCSharp(Foldable));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs, Is.EqualTo("0.3\n3.3\n0.3333333333333333333333333333\nTrue"));
+            Assert.That(FourBackends.Norm(JavaScriptOptimizedExecutionTests.RunOptimized(Foldable)), Is.EqualTo(cs), "standard pipeline");
+            Assert.That(FourBackends.Norm(FourBackends.RunAggressiveJs(Foldable)), Is.EqualTo(cs), "aggressive pipeline");
+            Assert.That(JsTestSupport.CompileAggressive(Foldable), Does.Not.Contain("0.30000000000000004"));
+        });
+    }
 }
