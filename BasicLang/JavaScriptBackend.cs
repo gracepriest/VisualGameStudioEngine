@@ -146,6 +146,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             JsCapabilityChecker.Check(module);
 
             _module = module;
+            _moduleUsesDecimal = UsesDecimal(module);
             _output.Clear();
             _indentLevel = 0;
             _generatedLine = 0;
@@ -182,7 +183,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // The exception hierarchy this program needs, BEFORE any user class: a user
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
-            if (JavaScriptCodeGenerator.UsesDecimal(module))
+            if (_moduleUsesDecimal)
                 EmitDecimalPrelude(module);
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
@@ -565,6 +566,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (whole === "" && frac === "") throw new FormatException("The input string '" + text + "' was not in a correct format.");
                 return VgsDecimal.reduce((m[1] ?? m[4]) === "-", BigInt((whole || "0") + frac), frac.length);
               }
+              // VB's Conversions.ToDecimal on a BOXED value: an Object holding a Decimal, Integer,
+              // Double or String converts; anything else throws InvalidCastException. `CType(o,
+              // Decimal)` lowers to a CDec CALL (IRBuilder.ConversionBuiltinFor), not an IRCast,
+              // so this is the Object -> Decimal arm the backend actually reaches.
+              static fromObject(o) {
+                if (o == null) return VgsDecimal.ZERO;
+                if (o instanceof VgsDecimal) return o;
+                if (typeof o === "number") return Number.isInteger(o) ? VgsDecimal.fromInt(o) : VgsDecimal.fromNumber(o);
+                if (typeof o === "string") return VgsDecimal.parse(o);
+                throw new InvalidCastException("Conversion from type '" + o.constructor.name + "' to type 'Decimal' is not valid.");
+              }
               add(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x + y, s); }
               sub(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x - y, s); }
               mul(b) {
@@ -655,8 +667,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return (this.neg ? "-" : "") + digits;
               }
               ToString() { return this.toString(); }
+              // VB's late-bound Object equality (spec D19): when either side is a Decimal, compare
+              // by VALUE. A JS number on the other side is a boxed Integer/Single/Double; exact
+              // integral values go through fromInt, the rest through fromNumber (Task 22).
               static objEquals(a, b) {
-                if (a instanceof VgsDecimal && b instanceof VgsDecimal) return a.cmp(b) === 0;
+                const aDecimal = a instanceof VgsDecimal, bDecimal = b instanceof VgsDecimal;
+                if (aDecimal && bDecimal) return a.cmp(b) === 0;
+                const toDecimal = (n) => Number.isInteger(n) ? VgsDecimal.fromInt(n) : VgsDecimal.fromNumber(n);
+                if (aDecimal && typeof b === "number") return a.cmp(toDecimal(b)) === 0;
+                if (bDecimal && typeof a === "number") return b.cmp(toDecimal(a)) === 0;
                 return a === b;
               }
             }
@@ -1805,15 +1824,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _ => int32,
         };
 
+        /// <summary>
+        /// One operand of an operation whose other side is a Decimal. A Decimal is itself; an
+        /// integral JS number becomes a scale-0 Decimal; a Single/Double goes through Task 22's
+        /// fromNumber. Anything else is left alone (the analyzer admits no other shape here).
+        /// </summary>
+        private static string DecimalOperand(IRValue v, string rendered) =>
+            IsDecimalTypeName(v?.Type) ? rendered :
+            (v?.Type?.IsIntegral() == true) ? $"VgsDecimal.fromInt({rendered})" :
+            (v?.Type?.Name == "Single" || v?.Type?.Name == "Double") ? $"VgsDecimal.fromNumber({rendered})" :
+            rendered;
+
         private string DecimalBinary(IRBinaryOp op, string l, string r)
         {
-            string Wrap(IRValue v, string rendered) =>
-                IsDecimalTypeName(v?.Type) ? rendered :
-                (v?.Type?.IsIntegral() == true) ? $"VgsDecimal.fromInt({rendered})" :
-                (v?.Type?.Name == "Single" || v?.Type?.Name == "Double") ? $"VgsDecimal.fromNumber({rendered})" :
-                rendered;
-            var wl = Wrap(op.Left, l);
-            var wr = Wrap(op.Right, r);
+            var wl = DecimalOperand(op.Left, l);
+            var wr = DecimalOperand(op.Right, r);
             return op.Operation switch
             {
                 BinaryOpKind.Add => $"{wl}.add({wr})",
@@ -2123,6 +2148,47 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var l = render(op.Left);
             var r = render(op.Right);
+
+            var leftType = op.Left?.Type;
+            var rightType = op.Right?.Type;
+            var leftIsObject = string.Equals(leftType?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+            var rightIsObject = string.Equals(rightType?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+            var leftIsDecimal = IsDecimalTypeName(leftType);
+            var rightIsDecimal = IsDecimalTypeName(rightType);
+
+            // D19: boxed Decimals compare by VALUE. The scope rule matches the C# backend
+            // (Task 20A): both statically Object, or Object against a TYPED Decimal. The
+            // VgsDecimal prelude only exists in a module that uses Decimal, so a both-Object
+            // pair in a Decimal-free module keeps `===` (the helper's own fallback).
+            if (op.Comparison is CompareKind.Eq or CompareKind.Ne
+                && ((leftIsObject && rightIsObject)
+                    || (leftIsObject && rightIsDecimal)
+                    || (leftIsDecimal && rightIsObject))
+                && (leftIsDecimal || rightIsDecimal || _moduleUsesDecimal))
+            {
+                var call = $"VgsDecimal.objEquals({l}, {r})";
+                return op.Comparison == CompareKind.Eq ? $"({call})" : $"(!{call})";
+            }
+
+            // A Decimal ordering/equality among NUMERIC operands uses the exact comparison, never
+            // JS's string-coercing `<`. An Object ordering pair is left to the old spelling: D19
+            // only decides Equality, and the analyzer does not admit the ordering shape.
+            if ((leftIsDecimal || rightIsDecimal) && !leftIsObject && !rightIsObject)
+            {
+                var wl = DecimalOperand(op.Left, l);
+                var wr = DecimalOperand(op.Right, r);
+                return op.Comparison switch
+                {
+                    CompareKind.Eq => $"({wl}.cmp({wr}) === 0)",
+                    CompareKind.Ne => $"({wl}.cmp({wr}) !== 0)",
+                    CompareKind.Lt => $"({wl}.cmp({wr}) < 0)",
+                    CompareKind.Le => $"({wl}.cmp({wr}) <= 0)",
+                    CompareKind.Gt => $"({wl}.cmp({wr}) > 0)",
+                    CompareKind.Ge => $"({wl}.cmp({wr}) >= 0)",
+                    _ => throw NotYet($"CompareKind.{op.Comparison}"),
+                };
+            }
+
             switch (op.Comparison)
             {
                 // === and !==, never == : JS's loose equality would make 0 == "" true, which
@@ -3250,6 +3316,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var subject = $"_sel{_selectCount++}";
             Line($"const {subject} = {Expr(sw.Value)};");
+            var isDecimal = IsDecimalTypeName(sw.Value?.Type);
 
             // â›” The pattern variables are `const`s ahead of the chain, so they get a block of
             // their own: two clauses binding the same name (`Case k When k > 3` â€¦ `Case k When
@@ -3276,10 +3343,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             foreach (var (caseValue, target) in sw.Cases ?? new List<(IRValue, BasicBlock)>())
-                AddTest(target, $"{subject} === {ExprInline(caseValue)}");
+                AddTest(target, isDecimal
+                    ? $"VgsDecimal.objEquals({subject}, {ExprInline(caseValue)})"
+                    : $"{subject} === {ExprInline(caseValue)}");
 
             foreach (var pattern in sw.PatternCases ?? new List<IRPatternCase>())
-                AddTest(pattern.Target, PatternTest(subject, pattern));
+                AddTest(pattern.Target, PatternTest(subject, pattern, isDecimal));
 
             var first = true;
             foreach (var (target, tests) in arms)
@@ -3337,23 +3406,31 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <see cref="ExprInline"/>: a <c>When</c> guard's tree was built with emission
         /// suppressed and exists in no block, so a by-name reference would be undefined.
         /// </summary>
-        private string PatternTest(string subject, IRPatternCase pattern)
+        private string PatternTest(string subject, IRPatternCase pattern, bool isDecimal)
         {
             string test;
             switch (pattern)
             {
                 case IRConstantPatternCase c:
-                    test = $"{subject} === {ExprInline(c.Value)}";
+                    // A Decimal subject compares by VALUE, not by object identity.
+                    test = isDecimal
+                        ? $"VgsDecimal.objEquals({subject}, {ExprInline(c.Value)})"
+                        : $"{subject} === {ExprInline(c.Value)}";
                     break;
 
                 // Inclusive at both ends, matching `Case 1 To 10`.
                 case IRRangePatternCase r:
-                    test = $"({subject} >= {ExprInline(r.LowerBound)} && {subject} <= {ExprInline(r.UpperBound)})";
+                    test = isDecimal
+                        ? $"({subject}.cmp({DecimalOperand(r.LowerBound, ExprInline(r.LowerBound))}) >= 0" +
+                          $" && {subject}.cmp({DecimalOperand(r.UpperBound, ExprInline(r.UpperBound))}) <= 0)"
+                        : $"({subject} >= {ExprInline(r.LowerBound)} && {subject} <= {ExprInline(r.UpperBound)})";
                     break;
 
                 // Operator is a raw STRING from the parser, not an enum.
                 case IRComparisonPatternCase cmp:
-                    test = $"{subject} {ComparisonPatternOperator(cmp.Operator)} {ExprInline(cmp.CompareValue)}";
+                    test = isDecimal
+                        ? $"{subject}.cmp({DecimalOperand(cmp.CompareValue, ExprInline(cmp.CompareValue))}) {ComparisonPatternOperator(cmp.Operator)} 0"
+                        : $"{subject} {ComparisonPatternOperator(cmp.Operator)} {ExprInline(cmp.CompareValue)}";
                     break;
 
                 case IRNothingPatternCase:
@@ -3362,7 +3439,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 case IROrPatternCase or:
                     test = "(" + string.Join(" || ",
-                        or.Alternatives.ConvertAll(a => PatternTest(subject, a))) + ")";
+                        or.Alternatives.ConvertAll(a => PatternTest(subject, a, isDecimal))) + ")";
                     break;
 
                 // A bare binding matches anything and binds the subject to a name.
@@ -3782,6 +3859,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var source = call.Arguments[0].Type?.Name;
             var name = call.FunctionName;
+
+            // `CType(o, Decimal)` lowers to this CDec CALL (IRBuilder.ConversionBuiltinFor), not
+            // an IRCast: an Object holding a Decimal/Integer/Double/String converts by value, and
+            // anything else throws VB's InvalidCastException (VgsDecimal.fromObject).
+            if (string.Equals(name, "CDec", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(source, "Object", StringComparison.OrdinalIgnoreCase))
+            {
+                result = $"VgsDecimal.fromObject({rendered[0]})";
+                return true;
+            }
+
             if (string.Equals(source, "Boolean", StringComparison.OrdinalIgnoreCase)
                 && (name is "CInt" or "CDbl" or "CSng"))
             {
@@ -4096,6 +4184,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private IRModule _module;
 
+        /// <summary>
+        /// <see cref="UsesDecimal"/> for <see cref="_module"/>, computed ONCE at the top of
+        /// <see cref="Generate"/> (that is also where the prelude decision is made). An
+        /// Object/Object equality routes through <c>VgsDecimal.objEquals</c> only when this is
+        /// true: with no Decimal anywhere in the module the VgsDecimal prelude is ABSENT, and a
+        /// call into it would be a ReferenceError. With no Decimal, the helper's own fallback is
+        /// <c>===</c>, so keeping <c>===</c> here is behaviourally exact.
+        /// </summary>
+        private bool _moduleUsesDecimal;
+
         private bool IsLambdaRef(IRVariable v, out IRFunction fn)
         {
             fn = null;
@@ -4275,6 +4373,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (args.Count == 0 && string.Equals(mc.MethodName, "ToString", StringComparison.OrdinalIgnoreCase)
                 && (IsPrimitiveTextType(mc.Object) || UserEnumOf(mc.Object) != null))
                 return TextOf(mc.Object, receiver, mustBeString: true);
+
+            // VB's late-bound Object.Equals compares boxed values (spec D19). VgsDecimal has only
+            // the lower-case `equals` instance method, so an Object receiver routes through the
+            // same helper as `=`. Guarded like RenderCompare: with no Decimal in the module the
+            // VgsDecimal prelude is absent, and the old spelling is unchanged.
+            if (args.Count == 1
+                && string.Equals(mc.MethodName, "Equals", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(mc.Object?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase)
+                && _moduleUsesDecimal)
+                return $"VgsDecimal.objEquals({receiver}, {args[0]})";
 
             var kind = ReceiverKind(mc.Object);
 

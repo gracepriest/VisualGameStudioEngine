@@ -176,4 +176,58 @@ public class JavaScriptDecimalTests
         "Sub Main()\n Console.WriteLine(Id(1D) / Id(3D))\n Console.WriteLine(Id(2D) / Id(3D))\n Console.WriteLine(Id(0.1D) + Id(0.2D))\n" +
         " Console.WriteLine(Id(1.10D) * Id(2D))\nEnd Sub\n"),
         Is.EqualTo("0.3333333333333333333333333333\n0.6666666666666666666666666667\n0.3\n2.20"));
+
+    // ------------------------------------------------------------ D5, D6, D19
+
+    [Test]
+    public void TheComparisonTable()
+    {
+        var sb = new StringBuilder(Id).Append("Sub Main()\n Dim a As Decimal\n Dim b As Decimal\n");
+        foreach (var (a, b) in Pairs.Append((1.10m, 1.1m)).Append((-0.0m, 0m)))
+        {
+            sb.Append($" a = Id({L(a)})\n b = Id({L(b)})\n");
+            foreach (var op in new[] { "=", "<>", "<", "<=", ">", ">=" }) sb.Append($" Console.WriteLine(a {op} b)\n");
+        }
+        Both(sb.Append("End Sub\n").ToString());
+    }
+
+    [Test]
+    public void ScaleDoesNotMatterToEquality() => Assert.That(Both(Id +
+        "Sub Main()\n Console.WriteLine(Id(1.10D) = Id(1.1D))\nEnd Sub\n"), Is.EqualTo("True"));
+
+    [Test]
+    public void SelectCase() => Both(Id +
+        "Sub Show(d As Decimal)\n Select Case d\n  Case 1.1D\n   Console.WriteLine(\"one point one\")\n" +
+        "  Case 2D To 3D\n   Console.WriteLine(\"two to three\")\n  Case Is > 10D\n   Console.WriteLine(\"big\")\n" +
+        "  Case Else\n   Console.WriteLine(\"else\")\n End Select\nEnd Sub\n" +
+        "Sub Main()\n Show(Id(1.10D))\n Show(Id(2.50D))\n Show(Id(3.00D))\n Show(Id(10.01D))\n Show(Id(-1D))\nEnd Sub\n");
+
+    /// <summary>No Decimal anywhere: the VgsDecimal prelude is ABSENT, so a both-Object equality must keep
+    /// `===` rather than call into a class the backend never emitted (a ReferenceError from a green build).</summary>
+    [Test]
+    public void TwoObjectsWithoutADecimal_DoNotNeedTheDecimalPrelude() => Assert.That(Both(
+        "Function Box(n As Integer) As Object\n Return n\nEnd Function\n" +
+        "Sub Main()\n Dim a As Object = Box(5)\n Dim b As Object = a\n Console.WriteLine(a = b)\nEnd Sub\n"),
+        Is.EqualTo("True"));
+
+    /// <summary>Oracle rows: Equals and unboxing a boxed DECIMAL. NOTE: the plan's `TypeOf o Is Decimal` row
+    /// was DROPPED — the ANALYZER refuses it before any backend ("'TypeOf … Is Decimal' is not supported: the
+    /// type must be a class or an interface"), the same refusal on every target, so no backend arm is reachable.</summary>
+    [Test]
+    public void Boxing() => Both(Id +
+        "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o.Equals(p))\n" +
+        " Dim back As Decimal = CType(o, Decimal)\n Console.WriteLine(back)\nEnd Sub\n");
+
+    /// <summary>EXCEPTION ROWS E2/E3 (VB-literal, S10): VB compares boxed numbers by VALUE (spec D19, owner-approved)
+    /// and converts a boxed Integer/Double to Decimal. The C# backend compares references and unboxes strictly
+    /// until Task 20A; this test drives that fix on C# too.</summary>
+    [Test]
+    public void Boxing_VbRules() => BothEqual(Id +
+        "Function Box(n As Integer) As Object\n Return n\nEnd Function\n" +
+        "Public Class Thing\nEnd Class\n" +
+        "Sub Main()\n Dim o As Object = Id(1.10D)\n Dim p As Object = Id(1.1D)\n Console.WriteLine(o = p)\n Console.WriteLine(o <> p)\n" +
+        " Dim i As Object = Box(5)\n Console.WriteLine(CType(i, Decimal))\n Dim five As Object = Id(5D)\n Console.WriteLine(i = five)\n" +
+        " Console.WriteLine(i = Id(5D))\n" +
+        " Dim t As Object = New Thing()\n Try\n  Console.WriteLine(CType(t, Decimal))\n Catch ex As InvalidCastException\n  Console.WriteLine(\"invalid cast\")\n End Try\nEnd Sub\n",
+        "True\nFalse\n5\nTrue\nTrue\ninvalid cast");
 }
