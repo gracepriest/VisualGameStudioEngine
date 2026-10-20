@@ -136,4 +136,44 @@ public class JavaScriptDecimalTests
             Assert.That(js, Does.Contain("MIT License"));
         });
     }
+    // ------------------------------------------------------------ D3, D20: arithmetic, overflow, division by zero
+
+    /// <summary>
+    /// ΓëÑ 200 cases (D3): every ordered pair of these 15 values = 225 pairs. The set covers scale alignment (1.10 vs
+    /// 2.205), the 28-digit cut (0.0000000000000000000000000001, 0.3333ΓÇª3), 96-bit overflow (Max, Min), negative zero
+    /// (built from bits, since the literal -0.0m is not &lt; 0 ΓÇö see L), zero divisors, and a mixed-scale large value.
+    /// </summary>
+    private static readonly decimal[] Values =
+    {
+        1.10m, 2.205m, 0.1m, 3m, -7.5m, 0.5m, 123456789.123456789m, 0.0000000000000000000000000001m,
+        -0.001m, decimal.MaxValue, decimal.MinValue, 0.3333333333333333333333333333m,
+        12345678901234567890.12345678m, 0m, new decimal(0, 0, 0, true, 1) /* -0.0 */,
+    };
+
+    private static readonly (decimal A, decimal B)[] Pairs =
+        Values.SelectMany(a => Values.Select(b => (a, b))).ToArray();
+
+    private static string Guarded(string expression) =>
+        $" Try\n  Console.WriteLine({expression})\n Catch ex As OverflowException\n  Console.WriteLine(\"overflow\")\n" +
+        " Catch ex As DivideByZeroException\n  Console.WriteLine(\"div0\")\n End Try\n";
+
+    [Test]
+    public void TheArithmeticTable()
+    {
+        var sb = new StringBuilder(Id).Append("Sub Main()\n Dim a As Decimal\n Dim b As Decimal\n");
+        foreach (var (a, b) in Pairs)
+        {
+            sb.Append($" a = Id({L(a)})\n b = Id({L(b)})\n");
+            foreach (var op in new[] { "+", "-", "*", "/", "Mod" }) sb.Append(Guarded($"a {op} b"));
+            sb.Append(Guarded("-a"));
+        }
+        var oracle = Both(sb.Append("End Sub\n").ToString());
+        Assert.That(oracle.Split('\n'), Has.Length.EqualTo(Pairs.Length * 6), "every row printed exactly one line");
+    }
+
+    [Test]
+    public void KnownAnswers() => Assert.That(Both(Id +
+        "Sub Main()\n Console.WriteLine(Id(1D) / Id(3D))\n Console.WriteLine(Id(2D) / Id(3D))\n Console.WriteLine(Id(0.1D) + Id(0.2D))\n" +
+        " Console.WriteLine(Id(1.10D) * Id(2D))\nEnd Sub\n"),
+        Is.EqualTo("0.3333333333333333333333333333\n0.6666666666666666666666666667\n0.3\n2.20"));
 }

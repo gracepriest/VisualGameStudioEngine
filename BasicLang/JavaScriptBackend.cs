@@ -567,7 +567,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
               }
               add(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x + y, s); }
               sub(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x - y, s); }
-              mul(b) { return VgsDecimal.fromSigned(this.signed() * b.signed(), this.scale + b.scale); }
+              mul(b) {
+                const neg = this.neg !== b.neg;
+                // .NET's VarDecMul keeps the summed scale only while BOTH mantissas fit
+                // in 32 bits; past that, a zero product comes back from the 192-bit path
+                // as default(decimal) — 0 at scale 0, positive, sign discarded.
+                if (this.mant < 4294967296n && b.mant < 4294967296n)
+                {
+                  const scale = this.scale + b.scale;
+                  // DEC_SCALE_MAX + MaxInt64Scale: past scale 47 even a 64-bit product
+                  // underflows to default(decimal) — 0 at scale 0, sign discarded.
+                  if (scale > 47) return new VgsDecimal(false, 0n, 0);
+                  return VgsDecimal.reduce(neg, this.mant * b.mant, scale);
+                }
+                if (this.mant === 0n || b.mant === 0n) return new VgsDecimal(false, 0n, 0);
+                return VgsDecimal.reduce(neg, this.mant * b.mant, this.scale + b.scale);
+              }
               div(b) {
                 if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
                 let scale = this.scale - b.scale, num = this.mant;
@@ -579,13 +594,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                   if (next > MAX) break;
                   r = (r * 10n) % den; q = next; scale++;
                 }
-                if (r !== 0n) { const twice = r * 2n; if (twice > den || (twice === den && (q & 1n) === 1n)) q++; }
+                if (r !== 0n) {
+                  const twice = r * 2n; if (twice > den || (twice === den && (q & 1n) === 1n)) q++;
+                  // .NET drops the trailing zeros that the 28-digit cut left on the end of a
+                  // non-terminating quotient: 1.10 / 2.205 is 0.498…356, not 0.498…3560.
+                  while (scale > 0 && q % 10n === 0n) { q /= 10n; scale--; }
+                }
                 return VgsDecimal.reduce(this.neg !== b.neg, q, scale);
               }
               mod(b) {
                 if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
                 const [x, y, s] = VgsDecimal.align(this, b);
-                return VgsDecimal.fromSigned(x % y, s);
+                // .NET returns the dividend unchanged (scale and all) when |a| < |b|: 1.10 Mod
+                // 123456789.123456789 is 1.10 at scale 2, not 1.100000000.
+                if ((x < 0n ? -x : x) < (y < 0n ? -y : y)) return new VgsDecimal(this.neg, this.mant, this.scale);
+                const r = x % y;
+                // The sign of a remainder follows the dividend, and that includes -0.0.
+                return VgsDecimal.reduce(this.neg, r < 0n ? -r : r, s);
               }
               negate() { return new VgsDecimal(!this.neg, this.mant, this.scale); }
               cmp(b) { const [x, y] = VgsDecimal.align(this, b); return x < y ? -1 : (x > y ? 1 : 0); }
@@ -1780,10 +1805,38 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _ => int32,
         };
 
+        private string DecimalBinary(IRBinaryOp op, string l, string r)
+        {
+            string Wrap(IRValue v, string rendered) =>
+                IsDecimalTypeName(v?.Type) ? rendered :
+                (v?.Type?.IsIntegral() == true) ? $"VgsDecimal.fromInt({rendered})" :
+                (v?.Type?.Name == "Single" || v?.Type?.Name == "Double") ? $"VgsDecimal.fromNumber({rendered})" :
+                rendered;
+            var wl = Wrap(op.Left, l);
+            var wr = Wrap(op.Right, r);
+            return op.Operation switch
+            {
+                BinaryOpKind.Add => $"{wl}.add({wr})",
+                BinaryOpKind.Sub => $"{wl}.sub({wr})",
+                BinaryOpKind.Mul => $"{wl}.mul({wr})",
+                BinaryOpKind.Div => $"{wl}.div({wr})",
+                BinaryOpKind.Mod => $"{wl}.mod({wr})",
+                BinaryOpKind.Eq => $"{wl}.equals({wr})",
+                BinaryOpKind.Ne => $"!{wl}.equals({wr})",
+                BinaryOpKind.Lt => $"{wl}.cmp({wr}) < 0",
+                BinaryOpKind.Le => $"{wl}.cmp({wr}) <= 0",
+                BinaryOpKind.Gt => $"{wl}.cmp({wr}) > 0",
+                BinaryOpKind.Ge => $"{wl}.cmp({wr}) >= 0",
+                _ => throw new NotImplementedException($"Decimal binary {op.Operation}"),
+            };
+        }
+
         private string RenderBinary(IRBinaryOp op, Func<IRValue, string> render)
         {
             var l = render(op.Left);
             var r = render(op.Right);
+            if (op.Operation != BinaryOpKind.Concat && (IsDecimalTypeName(op.Left?.Type) || IsDecimalTypeName(op.Right?.Type) || IsDecimalTypeName(op.Type)))
+                return DecimalBinary(op, l, r);
 
             // âš  32-BIT WRAPPING FOR `Integer`, and it is a bug fix rather than a nicety.
             //
@@ -1898,6 +1951,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private string UnaryText(IRUnaryOp op, string operand)
         {
+            if (op.Operation == UnaryOpKind.Neg && IsDecimalTypeName(op.Type))
+                return $"{operand}.negate()";
             // An integral negation or bitwise Not wraps like the binary operators do:
             // `-(-32768)` as Short is -32768 on .NET, and 32768 here before (and Integer
             // `-(-2147483648)` was 2147483648); `Not 5` as Byte is 250, not -6.
