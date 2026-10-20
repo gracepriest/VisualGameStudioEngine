@@ -231,6 +231,11 @@ public class TypeInfo
                     return true;
             }
             
+            // VB widens a Char to a String implicitly (`Dim t As String = s(1)`,
+            // `If s(1) = "b"`; Char is text, not a numeric type — piece 2 Task 14).
+            if (Name == "String" && other != null && other.Name == "Char")
+                return true;
+
             // Check inheritance
             var current = other.BaseType;
             while (current != null)
