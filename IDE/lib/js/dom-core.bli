@@ -75,6 +75,9 @@ Public Extern Class CSSStyleDeclaration
     Public Property height As String
     Public Property fontSize As String
     Public Property fontWeight As String
+    Public Property fontFamily As String
+    Public Property fontStyle As String
+    Public Property cursor As String
     Public Property margin As String
     Public Property padding As String
     Public Property border As String
