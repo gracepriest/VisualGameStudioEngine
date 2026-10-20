@@ -40,6 +40,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // which AscW would read as a TypeError.
                 case "Char":
                     return "\"\\0\"";
+                case "Decimal":
+                    return "VgsDecimal.ZERO";
                 default:
                     return "null";
             }

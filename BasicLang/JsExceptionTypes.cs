@@ -147,6 +147,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 foreach (var name in JsPrimitiveStatics.ThrownExceptions)
                     Mention(name);
 
+            // Decimal arithmetic throws these (VgsDecimal runtime).
+            if (JavaScriptCodeGenerator.UsesDecimal(module))
+            {
+                Mention("OverflowException");
+                Mention("DivideByZeroException");
+                Mention("FormatException");
+                Mention("InvalidCastException");
+            }
+
             // Close over ancestors, then emit in table order so every base precedes its derived.
             foreach (var name in mentioned.ToList())
             {

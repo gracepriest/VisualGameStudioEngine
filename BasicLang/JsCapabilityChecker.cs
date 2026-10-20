@@ -407,7 +407,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // they have their own diagnostics and are rejected before this set is read.
                 // Char (and its .NET spelling) is a one-character string since portable-controls Task 14.
                 "Integer", "Single", "Double", "Boolean", "String", "Byte", "SByte",
-                "Short", "UShort", "UInteger", "Void", "Char", "System.Char",
+                "Short", "UShort", "UInteger", "Void", "Char", "System.Char", "Decimal", "System.Decimal",
 
                 // .NET spellings of the same primitives. An Enum's UnderlyingType arrives as
                 // "Int32", not "Integer", so omitting these rejects every enum in the program.

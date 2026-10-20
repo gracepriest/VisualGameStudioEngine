@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Text;
 using BasicLang.Compiler.IR;
@@ -23,10 +23,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
     /// <list type="number">
     /// <item><description>The base class names every SSA temp (<c>t0</c>, <c>t1</c>, ...),
     /// which produces output nobody can read in devtools. Readable output is a
-    /// requirement here, not a nicety — it is half of what source maps are for.
+    /// requirement here, not a nicety â€” it is half of what source maps are for.
     /// <c>ImprovedCSharpCodeGenerator</c> made the same call for the same reason.</description></item>
     /// <item><description>The base class declares <c>Visit(IRThrow)</c> and
-    /// <c>Visit(IRIndexerStore)</c> as <c>virtual {}</c> — silent no-ops. That is exactly
+    /// <c>Visit(IRIndexerStore)</c> as <c>virtual {}</c> â€” silent no-ops. That is exactly
     /// how LLVM and MSIL came to silently drop collection indexed writes (see the TODO at
     /// ICodeGenerator.cs). Here every unimplemented visitor THROWS.</description></item>
     /// </list>
@@ -56,13 +56,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private int _indentLevel;
 
         /// <summary>
-        /// How many newlines <see cref="_output"/> currently holds — i.e. the 0-based index of
+        /// How many newlines <see cref="_output"/> currently holds â€” i.e. the 0-based index of
         /// the line about to be written.
         ///
         /// <para><b>Why a counter rather than counting Line() calls.</b> Line() is NOT 1:1
         /// with output lines: RenderLambda returns a multi-line arrow body which is then
         /// passed through Line() as part of a larger expression. Incrementing by one per call
-        /// drifts the moment a program contains a lambda — and every LINQ chain contains
+        /// drifts the moment a program contains a lambda â€” and every LINQ chain contains
         /// lambdas, so the drift would be normal rather than exotic.</para>
         /// </summary>
         private int _generatedLine;
@@ -100,7 +100,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// files are wrapped in an implicit <c>Module</c>/<c>Class</c> block before parsing,
         /// which shifts every line down by one, and the correction has always lived on
         /// CompilationUnit where no backend can see it. Mapping the raw SourceLine is correct
-        /// for <c>.bas</c> and off by exactly one line for every <c>.mod</c> and <c>.cls</c> —
+        /// for <c>.bas</c> and off by exactly one line for every <c>.mod</c> and <c>.cls</c> â€”
         /// the worst shape of bug, because the obvious test passes.</para>
         /// </summary>
         private void RecordMapping(int sourceLine)
@@ -121,7 +121,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (module == null) throw new ArgumentNullException(nameof(module));
 
             // Refuse before emitting anything. rejectCollections: false because
-            // List/Dictionary DO lower here (Array/Map) — the LLVM/MSIL posture of
+            // List/Dictionary DO lower here (Array/Map) â€” the LLVM/MSIL posture of
             // rejecting them outright would be wrong. ownInlineLanguage "javascript" lets
             // a js{} block through while a cpp{} block is still an error: an inline block
             // this backend cannot emit must fail loudly, not be dropped into a
@@ -129,17 +129,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             //
             // allowForeignIdentifiers: true is the ONE thing that separates this backend's row in
             // the honesty matrix from C#/LLVM/MSIL. A `::`-qualified name in EXPRESSION position
-            // is not a C++ construct here — it is a raw JavaScript identifier, the interop escape
+            // is not a C++ construct here â€” it is a raw JavaScript identifier, the interop escape
             // hatch (`::console.log(x)`). Turning the flag on hands this backend the obligation
             // the checker gave up: see ForeignName, through which EVERY name-rendering site
             // routes. A `::` TYPE is still refused by the checker, which is why the flag is
             // narrow enough to be safe.
             //
-            // allowJsImports: true for the same structural reason and only here — #JsImport is
+            // allowJsImports: true for the same structural reason and only here â€” #JsImport is
             // this backend's own directive, and every OTHER backend must refuse it rather than
             // silently drop it. See the mirror-row note on the checker's honesty matrix.
             // allowExternClasses: true because a JS runtime is exactly what an Extern Class
-            // declares a type IN. Every other backend must refuse it — see the checker's arm.
+            // declares a type IN. Every other backend must refuse it â€” see the checker's arm.
             ForeignFeatureChecker.Check(module, "JavaScript", rejectCollections: false,
                 ownInlineLanguage: "javascript", allowForeignIdentifiers: true,
                 allowJsImports: true, allowExternClasses: true);
@@ -156,11 +156,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // anyway, so this is for a human reading the output in devtools.
             //
             // De-duplicated because two files in one project accumulate into ONE combined module,
-            // and both may import the same library. ⛔ Keyed on the CLAUSE AND the specifier, not
+            // and both may import the same library. â›” Keyed on the CLAUSE AND the specifier, not
             // the specifier alone: `{ a } From "./m.js"` and `{ b } From "./m.js"` are two
             // different imports of one module, and collapsing them would silently drop `b`.
             //
-            // ⛔ Emitted through Line(), never by appending to _output — Line() is what maintains
+            // â›” Emitted through Line(), never by appending to _output â€” Line() is what maintains
             // _generatedLine, and RecordMapping reads it. A direct Append here would silently
             // shift every source-map segment by the number of imports, sending the debugger to
             // the wrong .bas line in exactly the files that use interop.
@@ -182,19 +182,21 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // The exception hierarchy this program needs, BEFORE any user class: a user
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
+            if (JavaScriptCodeGenerator.UsesDecimal(module))
+                EmitDecimalPrelude(module);
             EmitConversionPrelude(module);
             EmitIntegerDivisionPrelude(module);
             EmitPrimitiveStaticsPrelude(module);
             EmitDelegatePrelude(module);
 
-            // Enums before globals and classes — an initialiser may read one.
+            // Enums before globals and classes â€” an initialiser may read one.
             EmitEnums(module);
 
-            // Module-level Dims, also before classes — a static field initialiser may read one.
+            // Module-level Dims, also before classes â€” a static field initialiser may read one.
             EmitGlobals(module);
 
             // Class and interface member bodies also live in module.Functions, under their
-            // UNQUALIFIED name — `Class A.Handle` and `Class B.Handle` are both "Handle".
+            // UNQUALIFIED name â€” `Class A.Handle` and `Class B.Handle` are both "Handle".
             // Emitting them here would produce two top-level `function Handle()` declarations
             // and the second would silently win. Class emission is plan task 17; until then
             // they are skipped rather than emitted under a colliding name.
@@ -212,7 +214,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `class Sq extends Base` ahead of `class Base` is a ReferenceError on load.
             foreach (var irClass in module.ClassesBaseFirst())
             {
-                // ⛔ An EXTERN type already exists in the runtime — emit nothing for it.
+                // â›” An EXTERN type already exists in the runtime â€” emit nothing for it.
                 //
                 // MEASURED before this guard, from a build that reported success:
                 //     class Element {
@@ -220,7 +222,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 //         querySelector(sel) { return null; }
                 //     }
                 // Two failures in one. The declaration SHADOWS the real DOM Element, and every
-                // member gets a SYNTHESIZED stub — so `el.querySelector("p")` answered null
+                // member gets a SYNTHESIZED stub â€” so `el.querySelector("p")` answered null
                 // instead of reaching the runtime. Member ACCESSES still emit normally; it is
                 // only the declaration that must not exist.
                 if (irClass.IsExtern) continue;
@@ -234,8 +236,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (function.IsExternal) continue;
                 if (memberBodies.Contains(function)) continue;
 
-                // ⛔ Lambdas are NOT hoisted. They are rendered inline as arrow functions at
-                // their use site, so JavaScript's own lexical scope supplies the capture —
+                // â›” Lambdas are NOT hoisted. They are rendered inline as arrow functions at
+                // their use site, so JavaScript's own lexical scope supplies the capture â€”
                 // see RenderLambda for why the hoisting alternative cannot work.
                 if (function.IsLambda) continue;
 
@@ -280,10 +282,146 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return false;
         }
 
+        internal static bool UsesDecimal(IRModule module)
+        {
+            if (module == null) return false;
+            foreach (var t in ModuleTypeWalker.AllTypes(module))
+                if (IsDecimalTypeName(t)) return true;
+            if (module.GlobalVariables != null)
+                foreach (var gv in module.GlobalVariables.Values)
+                    if (IsDecimalTypeName(gv?.Type)) return true;
+            if (module.Functions != null)
+                foreach (var func in module.Functions)
+                {
+                    if (func == null) continue;
+                    if (IsDecimalTypeName(func.ReturnType)) return true;
+                    if (func.Parameters != null)
+                        foreach (var p in func.Parameters)
+                            if (IsDecimalTypeName(p?.Type)) return true;
+                    if (func.LocalVariables != null)
+                        foreach (var lv in func.LocalVariables)
+                            if (IsDecimalTypeName(lv?.Type)) return true;
+                    if (func.Blocks != null)
+                        foreach (var block in func.Blocks)
+                            if (block?.Instructions != null)
+                                foreach (var ins in block.Instructions)
+                                {
+                                    if (IsDecimalTypeName(ins?.Type)) return true;
+                                    if (ins != null && InstructionUsesDecimal(ins)) return true;
+                                }
+                }
+            if (module.Classes != null)
+                foreach (var cls in module.Classes.Values)
+                {
+                    if (cls == null) continue;
+                    if (cls.Fields != null)
+                        foreach (var f in cls.Fields)
+                            if (IsDecimalTypeName(f?.Type)) return true;
+                    if (cls.Properties != null)
+                        foreach (var p in cls.Properties)
+                            if (IsDecimalTypeName(p?.Type)) return true;
+                    if (cls.Methods != null)
+                        foreach (var m in cls.Methods)
+                        {
+                            if (m == null) continue;
+                            if (IsDecimalTypeName(m.ReturnType)) return true;
+                            if (m.Parameters != null)
+                                foreach (var p in m.Parameters)
+                                    if (IsDecimalTypeName(p?.Type)) return true;
+                        }
+                    if (cls.Constructors != null)
+                        foreach (var c in cls.Constructors)
+                            if (c?.Parameters != null)
+                                foreach (var p in c.Parameters)
+                                    if (IsDecimalTypeName(p?.Type)) return true;
+                }
+            if (module.Interfaces != null)
+                foreach (var iface in module.Interfaces.Values)
+                {
+                    if (iface == null) continue;
+                    if (iface.Methods != null)
+                        foreach (var m in iface.Methods)
+                        {
+                            if (m == null) continue;
+                            if (IsDecimalTypeName(m.ReturnType)) return true;
+                            if (m.Parameters != null)
+                                foreach (var p in m.Parameters)
+                                    if (IsDecimalTypeName(p?.Type)) return true;
+                        }
+                    if (iface.Properties != null)
+                        foreach (var p in iface.Properties)
+                            if (IsDecimalTypeName(p?.Type)) return true;
+                }
+            if (module.Delegates != null)
+                foreach (var d in module.Delegates.Values)
+                {
+                    if (d == null) continue;
+                    if (IsDecimalTypeName(d.ReturnType)) return true;
+                    if (d.Parameters != null)
+                        foreach (var p in d.Parameters)
+                            if (IsDecimalTypeName(p?.Type)) return true;
+                }
+            return false;
+        }
+
+        private static bool IsDecimalTypeName(TypeInfo t) =>
+            t != null && string.Equals(t.Name, "Decimal", StringComparison.OrdinalIgnoreCase);
+
+        private static bool InstructionUsesDecimal(IRInstruction ins)
+        {
+            var type = ins.GetType();
+            foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (!prop.CanRead || prop.GetIndexParameters().Length > 0) continue;
+                object val;
+                try { val = prop.GetValue(ins); } catch { continue; }
+                if (ValueUsesDecimal(val, new HashSet<object>())) return true;
+            }
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                object val;
+                try { val = field.GetValue(ins); } catch { continue; }
+                if (ValueUsesDecimal(val, new HashSet<object>())) return true;
+            }
+            return false;
+        }
+
+        private static bool ValueUsesDecimal(object val, HashSet<object> visited)
+        {
+            if (val == null) return false;
+            if (val is TypeInfo ti) return IsDecimalTypeName(ti);
+            if (val is IRConstant c) return c.Value is decimal || IsDecimalTypeName(c.Type);
+            if (val is decimal) return true;
+            if (val is string) return false;
+            if (val.GetType().IsPrimitive || val.GetType().IsEnum) return false;
+            if (!visited.Add(val)) return false;
+            if (val is System.Collections.IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                    if (ValueUsesDecimal(item, visited)) return true;
+                return false;
+            }
+            var t = val.GetType();
+            foreach (var prop in t.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (!prop.CanRead || prop.GetIndexParameters().Length > 0) continue;
+                object v;
+                try { v = prop.GetValue(val); } catch { continue; }
+                if (ValueUsesDecimal(v, visited)) return true;
+            }
+            foreach (var field in t.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                object v;
+                try { v = field.GetValue(val); } catch { continue; }
+                if (ValueUsesDecimal(v, visited)) return true;
+            }
+            return false;
+        }
+
         /// <summary>
-        /// The delegate helpers (spec §4.4, M2; portable-controls Task 12) — .NET's delegate rules on the page:
+        /// The delegate helpers (spec Â§4.4, M2; portable-controls Task 12) â€” .NET's delegate rules on the page:
         /// <c>__blBind</c> makes a bound method that REMEMBERS its (instance, method), so a second <c>AddressOf Me.H</c>
-        /// is EQUAL to the first (<c>__blSameDelegate</c>); an event is an invocation LIST (an array — the same handler
+        /// is EQUAL to the first (<c>__blSameDelegate</c>); an event is an invocation LIST (an array â€” the same handler
         /// twice fires twice) and <c>__blRemoveHandler</c> removes the LAST equal entry, as <c>Delegate.Remove</c> does. A
         /// lambda value is equal only to itself (<c>===</c>), as in .NET.
         /// </summary>
@@ -306,7 +444,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// The prelude goes in when the module could reach a helper: any class declares an event, or any body takes an
-        /// <c>AddressOf</c>. A scan rather than a flag set during emission, because the prelude is written FIRST —
+        /// <c>AddressOf</c>. A scan rather than a flag set during emission, because the prelude is written FIRST â€”
         /// the same reason as <see cref="UsesRoundingHelper"/>.
         /// </summary>
         private static bool UsesDelegateHelpers(IRModule module)
@@ -331,7 +469,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>Whether <see cref="EmitDelegatePrelude"/> wrote the helpers; a bind with none would be a ReferenceError.</summary>
         private bool _delegateHelpersEmitted;
 
-        /// <summary>A bound method that remembers its (instance, method) — or a plain bind if the scan saw no need.</summary>
+        /// <summary>A bound method that remembers its (instance, method) â€” or a plain bind if the scan saw no need.</summary>
         private string BoundMethod(string target, string method) =>
             _delegateHelpersEmitted ? $"__blBind({target}, {method})" : $"{method}.bind({target})";
 
@@ -343,7 +481,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// A <c>When</c> guard is built with emission SUPPRESSED, so its nodes are in no block and
-        /// the block walk above cannot see a rounding cast inside one — yet
+        /// the block walk above cannot see a rounding cast inside one â€” yet
         /// <see cref="ExprInline"/> renders that cast as a call to the helper. Missed, the build
         /// succeeded and Node died with "__blCInt is not defined". Reachable since IRBuilder
         /// converts a floating operand of <c>\</c> (ADR-0005 D1): <c>When y \ 2 = 4</c>.
@@ -375,6 +513,130 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>The emitted name of the runtime value-to-text helper (see <see cref="TextOf"/>).</summary>
         private const string TextHelperName = "__blStr";
+        private const string DecimalPrelude = """
+            // VgsDecimal ΓÇö exact System.Decimal semantics for BasicLang's JavaScript backend.
+            // Portions derived from dotnet/runtime (System.Decimal.DecCalc: VarR8FromDec, VarDecFromR8 and its
+            // power-of-ten table) ΓÇö (c) .NET Foundation and Contributors, MIT License.
+            class VgsDecimal {
+              static MAX = (1n << 96n) - 1n;
+              static ZERO = new VgsDecimal(false, 0n, 0);
+              // .NET's double powers of ten, as double LITERALS (from 1e23 on a literal is not exact ΓÇö the table must
+              // be literals, never a computed power). A static FIELD: built once, not per call.
+              static DOUBLE_POWERS_10 = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14,
+                                         1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28];
+              constructor(neg, mant, scale) { this.neg = neg && mant !== 0n; this.mant = mant; this.scale = scale; }
+              static pow10(n) { return 10n ** BigInt(n); }
+              signed() { return this.neg ? -this.mant : this.mant; }
+              // .NET's rule: at most 28 fractional digits and a 96-bit magnitude; drop digits with ONE banker's
+              // rounding over everything dropped (never digit by digit ΓÇö that double-rounds).
+              static reduce(neg, mant, scale) {
+                const MAX = VgsDecimal.MAX;
+                let k = Math.max(0, scale - 28);
+                while (k < scale && mant / VgsDecimal.pow10(k) > MAX) k++;
+                if (k > 0) {
+                  const p = VgsDecimal.pow10(k), q = mant / p, r = mant % p, half = p / 2n;
+                  mant = (r > half || (r === half && (q & 1n) === 1n)) ? q + 1n : q;
+                  scale -= k;
+                  if (mant > MAX && scale > 0) return VgsDecimal.reduce(neg, mant, scale);
+                }
+                if (mant > MAX) throw new OverflowException("Value was either too large or too small for a Decimal.");
+                return new VgsDecimal(neg, mant, scale);
+              }
+              static fromSigned(v, scale) { return VgsDecimal.reduce(v < 0n, v < 0n ? -v : v, scale); }
+              static align(a, b) {
+                const s = Math.max(a.scale, b.scale);
+                return [a.signed() * VgsDecimal.pow10(s - a.scale), b.signed() * VgsDecimal.pow10(s - b.scale), s];
+              }
+              static fromInt(n) { const v = BigInt(Math.trunc(n)); return new VgsDecimal(v < 0n, v < 0n ? -v : v, 0); }
+              // Γ¢ö (decimal)double is .NET's DecCalc.VarDecFromR8 ΓÇö PORT IT, line for line (Task 22), from
+              // dotnet/runtime src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs (MIT; add the
+              // attribution is the notice at the top of this prelude + THIRD-PARTY-NOTICES.md). It scales the DOUBLE by a double power of ten chosen from the
+              // binary exponent, rounds the scaled double half-to-even to an integer of ~15 significant digits, and
+              // strips trailing zeros ΓÇö arithmetic in IEEE doubles, which JavaScript reproduces exactly when the same
+              // operations and the same power-of-ten table are used. A decimal-string approach (toExponential/
+              // toPrecision) rounds the EXACT binary value instead and differs from .NET on edge cases.
+              static fromNumber(d) { return VgsDecimal.varDecFromR8(d); }
+              static varDecFromR8(d) { /* the port ΓÇö Task 22 */ throw new Error("VarDecFromR8 not yet ported"); }
+              // NumberStyles.Number, invariant: white space, a leading or trailing sign, group separators, one point.
+              static parse(text) {
+                const m = String(text).trim().match(/^([+-])?([\d,]*)(?:\.(\d*))?([+-])?$/);
+                if (!m || (m[1] && m[4])) throw new FormatException("The input string '" + text + "' was not in a correct format.");
+                const whole = m[2].replace(/,/g, ""), frac = m[3] ?? "";
+                if (whole === "" && frac === "") throw new FormatException("The input string '" + text + "' was not in a correct format.");
+                return VgsDecimal.reduce((m[1] ?? m[4]) === "-", BigInt((whole || "0") + frac), frac.length);
+              }
+              add(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x + y, s); }
+              sub(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x - y, s); }
+              mul(b) { return VgsDecimal.fromSigned(this.signed() * b.signed(), this.scale + b.scale); }
+              div(b) {
+                if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
+                let scale = this.scale - b.scale, num = this.mant;
+                const den = b.mant, MAX = VgsDecimal.MAX;
+                while (scale < 0) { num *= 10n; scale++; }
+                let q = num / den, r = num % den;
+                while (r !== 0n && scale < 28) {
+                  const next = q * 10n + (r * 10n) / den;
+                  if (next > MAX) break;
+                  r = (r * 10n) % den; q = next; scale++;
+                }
+                if (r !== 0n) { const twice = r * 2n; if (twice > den || (twice === den && (q & 1n) === 1n)) q++; }
+                return VgsDecimal.reduce(this.neg !== b.neg, q, scale);
+              }
+              mod(b) {
+                if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
+                const [x, y, s] = VgsDecimal.align(this, b);
+                return VgsDecimal.fromSigned(x % y, s);
+              }
+              negate() { return new VgsDecimal(!this.neg, this.mant, this.scale); }
+              cmp(b) { const [x, y] = VgsDecimal.align(this, b); return x < y ? -1 : (x > y ? 1 : 0); }
+              equals(b) { return b instanceof VgsDecimal && this.cmp(b) === 0; }
+              // mode: "even" (Math.Round / CInt), "floor", "ceiling", "trunc".
+              roundTo(n, mode) {
+                if (this.scale <= n) return this;
+                const p = VgsDecimal.pow10(this.scale - n), r = this.mant % p;
+                let q = this.mant / p;
+                if (r !== 0n) {
+                  if (mode === "even") { const half = p / 2n; if (r > half || (r === half && (q & 1n) === 1n)) q++; }
+                  else if (mode === "floor" && this.neg) q++;
+                  else if (mode === "ceiling" && !this.neg) q++;
+                }
+                return new VgsDecimal(this.neg, q, n);
+              }
+              abs() { return new VgsDecimal(false, this.mant, this.scale); }
+              // VB's Decimal ΓåÆ integral (CInt/CShort/CByte and CType/implicit narrowing ΓÇö exception row E1/E4): round
+              // half-to-even, then OverflowException outside the target's range (never a wrap).
+              toIntegral(min, max, typeName) {
+                const v = this.roundTo(0, "even").signed();
+                if (v < min || v > max) throw new OverflowException("Value was either too large or too small for " + typeName + ".");
+                return Number(v);
+              }
+              toInt32() { return this.toIntegral(-2147483648n, 2147483647n, "an Int32"); }
+              toInt16() { return this.toIntegral(-32768n, 32767n, "an Int16"); }
+              toByte() { return this.toIntegral(0n, 255n, "an unsigned byte"); }
+              // (double)decimal is .NET's DecCalc.VarR8FromDec: ((double)lo64 + (double)hi32 * 2^64) / 10^scale ΓÇö the
+              // ulongΓåÆdouble conversion, the sum and the division each round in IEEE doubles, and JS rounds the same
+              // operations identically; 10^scale is DOUBLE_POWERS_10 (the same literals .NET uses).
+              toNumber() {
+                const lo = this.mant & ((1n << 64n) - 1n), hi = this.mant >> 64n;
+                const d = (Number(lo) + Number(hi) * 18446744073709551616) / VgsDecimal.DOUBLE_POWERS_10[this.scale];
+                return this.neg ? -d : d;
+              }
+              toString() {
+                let digits = this.mant.toString();
+                if (this.scale > 0) {
+                  digits = digits.padStart(this.scale + 1, "0");
+                  digits = digits.slice(0, digits.length - this.scale) + "." + digits.slice(digits.length - this.scale);
+                }
+                return (this.neg ? "-" : "") + digits;
+              }
+              ToString() { return this.toString(); }
+              static objEquals(a, b) {
+                if (a instanceof VgsDecimal && b instanceof VgsDecimal) return a.cmp(b) === 0;
+                return a === b;
+              }
+            }
+
+            """;
 
         private bool _textHelperEmitted;
 
@@ -383,7 +645,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>StringifyForText</c>: <c>&amp;</c>, interpolation (which lowers to the same Concat),
         /// <c>CStr</c>, <c>Console.Write</c>/<c>WriteLine</c> and a primitive's <c>.ToString()</c>.
         ///
-        /// <para>⛔ A Boolean is <c>True</c>/<c>False</c>, as .NET and the C# and C++ backends print
+        /// <para>â›” A Boolean is <c>True</c>/<c>False</c>, as .NET and the C# and C++ backends print
         /// it. JavaScript's own conversion gives lowercase <c>true</c>, and every one of those
         /// sites used it: <c>"b=" &amp; flag</c> printed <c>b=true</c>.</para>
         ///
@@ -392,10 +654,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// else keeps the conversion it had: <paramref name="mustBeString"/> false leaves it to
         /// JS's <c>+</c> / <c>console.log</c>, true wraps it in <c>String(...)</c>.</para>
         ///
-        /// <para>⛔ <paramref name="nothingIsEmpty"/>: at <c>&amp;</c> and <c>Console.Write</c>/<c>WriteLine</c>
+        /// <para>â›” <paramref name="nothingIsEmpty"/>: at <c>&amp;</c> and <c>Console.Write</c>/<c>WriteLine</c>
         /// a <c>Nothing</c> String is <c>""</c>, as VB and C# have it. JavaScript's own conversion
         /// spells it <c>null</c>: <c>"[" &amp; s &amp; "]"</c> printed <c>[null]</c>, a bare
-        /// <c>WriteLine(s)</c> printed <c>null</c>, and — silently worse — <c>acc = acc &amp; i</c>
+        /// <c>WriteLine(s)</c> printed <c>null</c>, and â€” silently worse â€” <c>acc = acc &amp; i</c>
         /// from a Nothing <c>acc</c> was <c>null + 1</c>, NUMERIC addition, so the loop summed
         /// 1+2+3 and printed <c>6</c> where VB prints <c>123</c>. Only a value that CAN hold Nothing
         /// is wrapped (<see cref="MayHoldNothing"/>); a literal, another <c>&amp;</c> and a number are
@@ -440,7 +702,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// VB's <c>&amp;</c>: each operand as its text (<see cref="TextOf"/>, Nothing as <c>""</c>),
         /// joined by JS <c>+</c>.
         ///
-        /// <para>⛔ JS <c>+</c> concatenates only when a side IS a string at run time — <c>null + 1</c>
+        /// <para>â›” JS <c>+</c> concatenates only when a side IS a string at run time â€” <c>null + 1</c>
         /// is <c>1</c>. TextOf now spells every String, Object, Boolean and Nothing operand as a
         /// real string, and the front end refuses an <c>&amp;</c> with no String operand, so one
         /// side always qualifies; should neither (an operand whose static type was lost), the left
@@ -467,8 +729,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Whether a String-typed value can be <c>Nothing</c> at run time. A string literal cannot,
         /// and neither can the result of another <c>&amp;</c> (TextOf makes every one a real
-        /// string) or of <c>CStr</c> (<c>String(...)</c> / the text helper). Everything else — a
-        /// variable, a parameter, a field, a call's result — can.
+        /// string) or of <c>CStr</c> (<c>String(...)</c> / the text helper). Everything else â€” a
+        /// variable, a parameter, a field, a call's result â€” can.
         /// </summary>
         private bool MayHoldNothing(IRValue value) => value switch
         {
@@ -492,7 +754,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             };
 
         private static bool NeedsRuntimeTextCheck(IRValue value) =>
-            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase);
+            string.Equals(value?.Type?.Name, "Object", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value?.Type?.Name, "Decimal", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>The single-argument calls TextOf lowers (see TryTextCall).</summary>
         private static bool IsTextCall(string name, int argCount) =>
@@ -500,7 +763,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                               name == "Console.WriteLine" || name == "Console.Write");
 
         /// <summary>
-        /// Whether any TextOf site will need <see cref="TextHelperName"/>. ⛔ SCANNED for the same
+        /// Whether any TextOf site will need <see cref="TextHelperName"/>. â›” SCANNED for the same
         /// reason as <see cref="UsesRoundingHelper"/>: the prelude is written before any body.
         /// </summary>
         private static bool UsesTextHelper(IRModule module)
@@ -525,18 +788,27 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// The half-to-even rounding CInt means, which JavaScript has no built-in for.
         ///
-        /// <para>⚠ Written out longhand rather than as <c>Math.round</c> plus a correction:
+        /// <para>âš  Written out longhand rather than as <c>Math.round</c> plus a correction:
         /// <c>Math.round</c> is half-up TOWARD +INFINITY, so it answers -7 for -7.5 where CInt
         /// answers -8, and the sign correction needed to patch that is easier to get wrong than
         /// the floor-and-compare below. Checked against <c>Convert.ToInt32</c> on the same ten
         /// values as the other backends, midpoints included.</para>
         /// </summary>
         /// <param name="module">
-        /// ⛔ SCANNED, not a flag set during lowering. The prelude is emitted BEFORE any function
-        /// body, so a flag would still be false here and the helper would never appear —
+        /// â›” SCANNED, not a flag set during lowering. The prelude is emitted BEFORE any function
+        /// body, so a flag would still be false here and the helper would never appear â€”
         /// measured: the call sites emitted and the program died in Node with
         /// "__blCInt is not defined". Same shape as <c>JsExceptionTypes.CollectRequired</c>.
         /// </param>
+        private void EmitDecimalPrelude(IRModule module)
+        {
+            Line("/* VgsDecimal prelude */");
+            // Emit the DecimalPrelude constant string line by line? Instead, emit as a raw block.
+            foreach (var line in DecimalPrelude.Split('\n'))
+                Line(line.TrimEnd('\r'));
+            Line();
+        }
+
         private void EmitConversionPrelude(IRModule module)
         {
             _textHelperEmitted = UsesTextHelper(module);
@@ -546,7 +818,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // `x == null` is Nothing (null or undefined), which VB and C# print as "".
                 Line($"function {TextHelperName}(x) {{");
                 _indentLevel++;
-                Line("return x == null ? \"\" : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
+                Line("return x == null ? \"\" : (typeof VgsDecimal !== \"undefined\" && x instanceof VgsDecimal) ? x.toString() : typeof x === \"boolean\" ? (x ? \"True\" : \"False\") : String(x);");
                 _indentLevel--;
                 Line("}");
                 Line();
@@ -579,9 +851,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             op.Operation == BinaryOpKind.IntDiv || (op.Operation == BinaryOpKind.Mod && IsCheckedMod(op));
 
         /// <summary>
-        /// True when the module lowers an integral <c>\</c> or <c>Mod</c> anywhere — a block
+        /// True when the module lowers an integral <c>\</c> or <c>Mod</c> anywhere â€” a block
         /// instruction or a <c>When</c> guard (built with emission suppressed, so in no block; the
-        /// same blind spot <see cref="GuardUsesRoundingHelper"/> covers). ⛔ Scanned up front for
+        /// same blind spot <see cref="GuardUsesRoundingHelper"/> covers). â›” Scanned up front for
         /// the reason <see cref="EmitConversionPrelude"/> gives: the prelude precedes every body.
         /// </summary>
         internal static bool UsesIntegerDivisionHelper(IRModule module)
@@ -625,7 +897,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Integral <c>\</c> and <c>Mod</c> with .NET's checks. JavaScript numbers are doubles, so
         /// a zero divisor gave <c>Infinity</c> / <c>NaN</c> and the program carried on printing
-        /// them — MEASURED: <c>Try : Console.WriteLine(7 \ z) : Catch e As DivideByZeroException</c>
+        /// them â€” MEASURED: <c>Try : Console.WriteLine(7 \ z) : Catch e As DivideByZeroException</c>
         /// printed "Infinity" and never entered the handler. <c>-2147483648 \ -1</c> is 2147483648,
         /// outside Integer, where .NET throws <c>OverflowException</c> (for <c>Mod</c> as well).
         /// Only 32-bit and narrower types reach this backend (Long is refused, BL7003), so that
@@ -650,7 +922,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line("}");
             }
 
-            // ⛔ A Short/SByte `\`: its quotient only fails to fit for MinValue \ -1 (+32768 /
+            // â›” A Short/SByte `\`: its quotient only fails to fit for MinValue \ -1 (+32768 /
             // +128), which .NET reports as OverflowException. MEASURED on master 7a62bdea:
             // `-32768 \ -1` printed 32768, a value no Short can hold.
             Line($"function {NarrowDivHelperName}(a, b, max) {{");
@@ -712,10 +984,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Each user <c>Enum</c> as a frozen object of its member values: <c>const Shade = Object.freeze({ Light: 0, … })</c>,
-        /// and — when any exists — <see cref="EnumNameHelper"/>, which spells a value as its member name.
+        /// Each user <c>Enum</c> as a frozen object of its member values: <c>const Shade = Object.freeze({ Light: 0, â€¦ })</c>,
+        /// and â€” when any exists â€” <see cref="EnumNameHelper"/>, which spells a value as its member name.
         ///
-        /// <para>⛔ Portable-controls Task 9 (M12). This backend emitted NO Enum declaration at all. It was invisible
+        /// <para>â›” Portable-controls Task 9 (M12). This backend emitted NO Enum declaration at all. It was invisible
         /// while the front end refused <c>Shade.Dark</c> (typed Object); once the member types as the Enum, the access
         /// is emitted as <c>Shade.Dark</c> and died at load with <c>ReferenceError: Shade is not defined</c> from a
         /// green build. A member is its NUMBER, as on every other backend (<c>CInt(k)</c>, <c>=</c>, <c>Select Case</c>);
@@ -751,15 +1023,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Module-level <c>Dim</c>s as top-level <c>let</c>s.
         ///
         /// <para>MEASURED before this: <c>module.GlobalVariables</c> was never emitted, and a
-        /// function's <c>n = n + 1</c> came out as <c>const n = ((n + 1) | 0)</c> — IRBuilder
+        /// function's <c>n = n + 1</c> came out as <c>const n = ((n + 1) | 0)</c> â€” IRBuilder
         /// renames the result to the variable it assigns, and <see cref="Bind"/> knew only
-        /// locals and members — so Node died with "Cannot access 'n' before initialization"
+        /// locals and members â€” so Node died with "Cannot access 'n' before initialization"
         /// from a build that reported success. <see cref="DeclareGlobals"/> is the other half:
         /// inside every body the globals count as declared, so that rename is an assignment.</para>
         ///
         /// <para>Only a CONSTANT initializer is lowered. IRBuilder evaluates a module-level
         /// initializer with no current function, so anything else has already lost its
-        /// instructions (EmitInstruction drops them when there is no block) — a call or a
+        /// instructions (EmitInstruction drops them when there is no block) â€” a call or a
         /// <c>New</c> here would be a silently defaulted global. Refuse instead.</para>
         /// </summary>
         private void EmitGlobals(IRModule module)
@@ -772,7 +1044,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (g?.Name == null) continue;
 
                 // JavaScript has ONE top-level scope; two modules' same-named globals would be
-                // a duplicate `let` — a SyntaxError — or, mangled apart, a silent split.
+                // a duplicate `let` â€” a SyntaxError â€” or, mangled apart, a silent split.
                 if (!seen.Add(g.Name))
                     throw NotYet($"two module-level variables named '{g.Name}' in one program");
 
@@ -798,7 +1070,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// A local's declaration initializer: a sized array's allocation, else the type's
-        /// DEFAULT value. ⛔ Never a bare <c>let x;</c> — a BasicLang local is default-initialised
+        /// DEFAULT value. â›” Never a bare <c>let x;</c> â€” a BasicLang local is default-initialised
         /// (<c>Dim n As Integer</c> is 0), and a bare <c>let</c> is <c>undefined</c>, which
         /// propagates as NaN through arithmetic rather than raising. Fields and globals already
         /// defaulted; locals did not, and a read-before-write printed "undefined".
@@ -807,7 +1079,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             ArrayInitializer(type) ?? TypeMapper.GetDefaultValue(type);
 
         /// <summary>
-        /// Module-level Dims, in their OWN set — not in <see cref="_declaredNames"/>, which is
+        /// Module-level Dims, in their OWN set â€” not in <see cref="_declaredNames"/>, which is
         /// the function's parameters and locals. The three are consulted in scope order by
         /// <see cref="Bind"/> and <see cref="VariableRef"/>: locals/parameters, then class
         /// members, then globals. Found by review: with the globals mixed into the declared
@@ -829,7 +1101,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private HashSet<string> _memberNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>The events of the class being emitted, by name — what a <c>raise_X</c> call resolves against.</summary>
+        /// <summary>The events of the class being emitted, by name â€” what a <c>raise_X</c> call resolves against.</summary>
         private Dictionary<string, IREvent> _currentClassEvents = new Dictionary<string, IREvent>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
@@ -857,12 +1129,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     {
                         if (m?.Name == null) continue;
 
-                        // ⛔ The STATIC half of this walk used to be simply dropped, and an
+                        // â›” The STATIC half of this walk used to be simply dropped, and an
                         // unqualified sibling call fell through to a BARE name: `Helper()`
                         // inside the class, which is a ReferenceError because a member body is
                         // not a top-level function. It compiled clean and died at run time.
                         // Statics are keyed to their DECLARING class, instance methods to
-                        // `this` — see MethodReference.
+                        // `this` â€” see MethodReference.
                         if (m.IsStatic)
                         {
                             if (!_staticMethodOwners.ContainsKey(m.Name))
@@ -882,7 +1154,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (!string.IsNullOrEmpty(irClass.BaseClass))
                 header += $" extends {ClassReference(irClass.BaseClass)}";
 
-            // Interfaces and generic parameters ERASE — JS has neither.
+            // Interfaces and generic parameters ERASE â€” JS has neither.
             Line(header + " {");
             _indentLevel++;
 
@@ -891,7 +1163,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             foreach (var field in irClass.Fields ?? new List<IRField>())
             {
-                // IRField.Initializer is a constant or null — IRBuilder drops every
+                // IRField.Initializer is a constant or null â€” IRBuilder drops every
                 // non-constant initializer, so `Private items As New List(...)` arrives null
                 // with nothing constructing it anywhere.
                 var init = field.Initializer != null
@@ -903,7 +1175,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // An event is a Set of handlers on the INSTANCE: AddHandler is `add`, RemoveHandler
             // `delete`, RaiseEvent iterates (see TryEventCall). Per instance, so two objects of
             // the class have separate subscribers, and a Set so a handler added twice fires once
-            // — the closest JS reading of a multicast delegate.
+            // â€” the closest JS reading of a multicast delegate.
             foreach (var evt in irClass.Events ?? new List<IREvent>())
                 Line($"{(evt.IsStatic ? "static " : "")}{SanitizeName(evt.Name)} = [];");
 
@@ -926,7 +1198,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Fields, properties and events of a class AND of its bases — the set an unqualified
+        /// Fields, properties and events of a class AND of its bases â€” the set an unqualified
         /// reference inside a method must resolve to <c>this.</c>.
         /// </summary>
         private static HashSet<string> MemberNames(IRClass irClass, IRModule module)
@@ -955,18 +1227,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Every STATIC member name in scope for <paramref name="irClass"/>, mapped to the JS name
         /// of the class that DECLARES it.
         ///
-        /// <para>⛔ Without this a Shared member was read and written through <c>this</c>. The class
-        /// emitted <c>static K = 9;</c> and its methods emitted <c>this.K</c> — which is undefined
+        /// <para>â›” Without this a Shared member was read and written through <c>this</c>. The class
+        /// emitted <c>static K = 9;</c> and its methods emitted <c>this.K</c> â€” which is undefined
         /// for a JS static, so a read answered <b>undefined</b> and a write silently created an
         /// INSTANCE property shadowing nothing. Measured: <c>a.Bump()</c> then <c>b.Read()</c> on
         /// two instances printed <b>undefined</b> on JavaScript where C++ printed <b>7</b>, so
-        /// Shared did not mean shared. A single-instance probe hides it — the write's own instance
+        /// Shared did not mean shared. A single-instance probe hides it â€” the write's own instance
         /// property reads back fine, which is why this needs two objects to show.</para>
         ///
-        /// <para>⚠ The DECLARING class, not the current one, because a write must land where the
+        /// <para>âš  The DECLARING class, not the current one, because a write must land where the
         /// field lives: JS resolves a static READ up the prototype chain, but
         /// <c>Derived.K = 7</c> creates a NEW static on Derived and leaves Base's untouched. First
-        /// writer wins while walking up, so a nearer class shadows a farther one — the same
+        /// writer wins while walking up, so a nearer class shadows a farther one â€” the same
         /// precedence <see cref="MemberNames"/> gives instance members.</para>
         /// </summary>
         private static Dictionary<string, string> StaticMemberOwners(IRClass irClass, IRModule module)
@@ -1013,15 +1285,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return;
             }
 
-            // ⛔ `static` WAS MISSING HERE, though the auto-property arm above has always had it.
+            // â›” `static` WAS MISSING HERE, though the auto-property arm above has always had it.
             // A `Shared` property emitted INSTANCE accessors, so nothing reached them: reading
             // `Box.P` answered `undefined` (the getter lives on the prototype, not the class), and
-            // `Box.P = 7` did not call the setter at all — it quietly created a plain own-property
+            // `Box.P = 7` did not call the setter at all â€” it quietly created a plain own-property
             // on the class. The backing field was never touched.
             //
-            // ⛔ A READ-WRITE Shared property therefore LOOKED CORRECT while doing nothing: the
+            // â›” A READ-WRITE Shared property therefore LOOKED CORRECT while doing nothing: the
             // write created `Box.P` and the read handed the same value back. Measured with a setter
-            // that doubles — `Box.P = 7` then reading both the property and the backing field gave
+            // that doubles â€” `Box.P = 7` then reading both the property and the backing field gave
             // `7|0` where every other backend gives `14|14`. Only a setter with an observable
             // effect can tell the two apart, which is why the tests use one.
             var modifier = prop.IsStatic ? "static " : "";
@@ -1042,16 +1314,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var impl = ctor.Implementation;
             if (impl == null) return;
 
-            // ⛔ ctor.Parameters is ALWAYS EMPTY — reading it yields a zero-arg constructor
+            // â›” ctor.Parameters is ALWAYS EMPTY â€” reading it yields a zero-arg constructor
             // that ignores every argument. Parameters live on the implementation.
             var parameters = string.Join(", ", impl.Parameters.ConvertAll(p => SanitizeName(p.Name)));
 
-            // ⭐ ADR-0016 D1: `super(...)` is where the IR puts the base call. JavaScript may run
+            // â­ ADR-0016 D1: `super(...)` is where the IR puts the base call. JavaScript may run
             // statements before super() as long as they never touch `this`, and D4 (BC31095/6)
-            // guarantees no MyBase.New argument does — so a computed or lambda argument's
+            // guarantees no MyBase.New argument does â€” so a computed or lambda argument's
             // PROLOGUE is emitted as ordinary statements (declarations, temporaries, an
             // AndAlso's branches) and `super(...)` follows it in place. A base call with nothing
-            // before it keeps the old spelling: `super(...)` first, then the declarations —
+            // before it keeps the old spelling: `super(...)` first, then the declarations â€”
             // byte-identical for every constructor whose arguments are parameters and literals.
             var prologue = new List<string>();
             IRBaseConstructorCall superFirst = null;
@@ -1073,8 +1345,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>The <c>super(...)</c> statement for <paramref name="baseCall"/>. Rendered inside the
         /// constructor's own context (<see cref="EmitMemberBody"/>), so a lambda argument that assigns
-        /// a parameter assigns it — rendered before that context existed, the arrow function saw no
-        /// declared <c>p</c> and emitted <c>const p = …</c>, a TDZ ReferenceError (#170, B1).</summary>
+        /// a parameter assigns it â€” rendered before that context existed, the arrow function saw no
+        /// declared <c>p</c> and emitted <c>const p = â€¦</c>, a TDZ ReferenceError (#170, B1).</summary>
         private string SuperCall(IRBaseConstructorCall baseCall) =>
             $"super({string.Join(", ", baseCall.Args.Select(Expr))});";
 
@@ -1083,8 +1355,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private IRBaseConstructorCall _superFirst;
 
         /// <summary>
-        /// ADR-0016 D1: a base call with a PROLOGUE before it — the statements evaluating its
-        /// arguments — is emitted in place, after them.
+        /// ADR-0016 D1: a base call with a PROLOGUE before it â€” the statements evaluating its
+        /// arguments â€” is emitted in place, after them.
         /// </summary>
         public void Visit(IRBaseConstructorCall baseConstructorCall)
         {
@@ -1100,8 +1372,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // the base's real implementation, so omit the member entirely.
             if (impl == null || method.IsAbstract) return;
 
-            // ⛔ Implementation is bound with Functions.LastOrDefault(), so a method whose
-            // body declares a lambda gets the LAMBDA's function instead — a pre-existing
+            // â›” Implementation is bound with Functions.LastOrDefault(), so a method whose
+            // body declares a lambda gets the LAMBDA's function instead â€” a pre-existing
             // compiler defect that would emit a scrambled class. Refuse rather than emit it.
             if (impl.IsLambda)
                 throw NotYet($"a lambda inside method '{irClass.Name}.{method.Name}' (IRMethod.Implementation binds to the lambda)");
@@ -1158,7 +1430,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 DeclareLocal(local);
             }
 
-            // Globals after the locals — see Visit(IRFunction) for why the order matters.
+            // Globals after the locals â€” see Visit(IRFunction) for why the order matters.
             DeclareGlobals();
 
             EmitStructured(impl.EntryBlock ?? impl.Blocks?.FirstOrDefault());
@@ -1173,24 +1445,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// A module that defines Main runs it. Unlike C#, JS has no implicit entry point —
+        /// A module that defines Main runs it. Unlike C#, JS has no implicit entry point â€”
         /// without this the emitted file declares functions and does nothing.
         ///
-        /// <para>⛔⛔ Then the page's FORM starts (owner decision 2026-09-28: Sub Main in a web
-        /// project with forms is STARTUP, like WinForms — Main first, so what it adds to the page
+        /// <para>â›”â›” Then the page's FORM starts (owner decision 2026-09-28: Sub Main in a web
+        /// project with forms is STARTUP, like WinForms â€” Main first, so what it adds to the page
         /// is there, then the form, as <c>Application.Run(New Form1)</c>). The rule is
         /// <see cref="global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch"/>; the generated dispatch exists
         /// only in a build with forms. With no Main the form starts on load. Before this, nothing
         /// called the dispatch unless Main did, the build said so only as warning BL8018, and the
         /// owner's page loaded blank.</para>
         ///
-        /// <para>⛔ ONLY when no user code calls the dispatch itself (<see cref="UserCodeCallsDispatch"/>):
+        /// <para>â›” ONLY when no user code calls the dispatch itself (<see cref="UserCodeCallsDispatch"/>):
         /// such a user chose when the form starts. The dispatch also runs once per page, so two
         /// user calls never build two forms.</para>
         ///
-        /// <para>⚠ After Main RETURNS: an <c>Async Sub Main</c> with no dispatch call of its own
-        /// returns at its first Await and the form starts there. ⚠ A Main that THROWS stops the
-        /// script, so the form never starts — as a WinForms Main that throws before
+        /// <para>âš  After Main RETURNS: an <c>Async Sub Main</c> with no dispatch call of its own
+        /// returns at its first Await and the form starts there. âš  A Main that THROWS stops the
+        /// script, so the form never starts â€” as a WinForms Main that throws before
         /// <c>Application.Run</c> never shows its form.</para>
         /// </summary>
         private void EmitEntryPoint(IRModule module)
@@ -1212,9 +1484,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     m => global::BasicLang.Forms.FormAssetEmitter.IsStartupDispatch(irClass.Name, m.Name, m.IsStatic));
                 if (dispatch == null) continue;
 
-                // ⛔⛔ Only when NO user code calls it (review of 27af2e46). A user who calls the
-                // dispatch chose WHEN the form starts — after an Await in an Async Main, from a
-                // button, from a timer — and BL8018 told every user to write that call, so such
+                // â›”â›” Only when NO user code calls it (review of 27af2e46). A user who calls the
+                // dispatch chose WHEN the form starts â€” after an Await in an Async Main, from a
+                // button, from a timer â€” and BL8018 told every user to write that call, so such
                 // projects exist. Starting it here anyway pre-empted them: an Async Main returns at
                 // its first Await, the form started there, and the user's own later call was a
                 // no-op under the once-per-page guard. Asked of the IR, so a mention in a comment
@@ -1227,8 +1499,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// True when any function OUTSIDE <paramref name="dispatchClass"/> — Main, a module Sub, a
-        /// class method, a handler, a lambda — calls <paramref name="methodName"/>. The generated
+        /// True when any function OUTSIDE <paramref name="dispatchClass"/> â€” Main, a module Sub, a
+        /// class method, a handler, a lambda â€” calls <paramref name="methodName"/>. The generated
         /// class's own bodies are excluded: the dispatch does not call itself, and a future helper
         /// on that class calling it is not the USER choosing when the form starts.
         /// </summary>
@@ -1243,8 +1515,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 (string.Equals(name, methodName, StringComparison.OrdinalIgnoreCase) ||
                  name.EndsWith("." + methodName, StringComparison.OrdinalIgnoreCase));
 
-            // ⛔ A REFERENCE counts as a call (re-review of 4d064773): `AddressOf VgsForms.VgsDispatchForm`
-            // handed to a button or stored in an Action is the user deciding when, exactly as a call is —
+            // â›” A REFERENCE counts as a call (re-review of 4d064773): `AddressOf VgsForms.VgsDispatchForm`
+            // handed to a button or stored in an Action is the user deciding when, exactly as a call is â€”
             // but it lowers to an AddressOf unary over the method's name, not a call node. Missed, the form
             // auto-started on load and the user's click was a no-op under the once-per-page guard.
             bool Calls(IRValue? value) => value switch
@@ -1321,9 +1593,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRCall call:
                     return Bound(call) ? SanitizeName(call.Name) : CallExpr(call);
 
-                // ⛔ A gep is a POINTER, and it is rendered INLINE as an L-value rather than
+                // â›” A gep is a POINTER, and it is rendered INLINE as an L-value rather than
                 // bound to a temp. Materialising it as a value (`const t1 = a[0];`) makes a
-                // following IRStore write to the TEMP and silently drops the array write —
+                // following IRStore write to the TEMP and silently drops the array write â€”
                 // this repo has already measured that exact bug, where C++ printed 0 where C#
                 // printed 5. Safe to inline because a gep's operands are a base and indices,
                 // with no side effects; do not extend inlining to nodes that have any.
@@ -1334,8 +1606,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 // IRBuilder gives an array local a memory slot named `<name>_addr` (only arrays:
                 // see Visit(VariableDeclarationNode)). In JavaScript the slot IS the local, as the
-                // C# backend also renders it. ⛔ Unhandled, an initialised array local —
-                // `Dim a[] As Integer = {1, 2}` — failed the build ("IRAlloca (as an expression)").
+                // C# backend also renders it. â›” Unhandled, an initialised array local â€”
+                // `Dim a[] As Integer = {1, 2}` â€” failed the build ("IRAlloca (as an expression)").
                 case IRAlloca alloca:
                     return SanitizeName(alloca.Name != null && alloca.Name.EndsWith("_addr", StringComparison.Ordinal)
                         ? alloca.Name.Substring(0, alloca.Name.Length - "_addr".Length)
@@ -1348,9 +1620,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRFieldAccess fa when IsLengthAccess(fa):
                     return $"{Expr(fa.Object)}.length";
 
-                // ⛔ These are IRValues that ALSO appear in block.Instructions, so their
+                // â›” These are IRValues that ALSO appear in block.Instructions, so their
                 // visitor has already bound them. Referring to the NAME is not a nicety: a
-                // `new` or a call RE-RENDERED here would run a SECOND time — measured, a
+                // `new` or a call RE-RENDERED here would run a SECOND time â€” measured, a
                 // constructor printed twice. Only render inline when nothing bound it.
                 //
                 // Fields and properties share one node (there is no IRPropertyAccess), which
@@ -1376,33 +1648,33 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case IRBaseMethodCall bc:
                     return Bound(bc) ? SanitizeName(bc.Name) : BaseCall(bc);
 
-                // The inline-renderer twin of Visit(IRCast) — see TryNumericCast for what each
+                // The inline-renderer twin of Visit(IRCast) â€” see TryNumericCast for what each
                 // numeric shape renders as and why narrowing is not a no-op here.
                 //
-                // ⛔ BOTH ARMS ARE REQUIRED. The renderer rebuilds operand trees rather than
+                // â›” BOTH ARMS ARE REQUIRED. The renderer rebuilds operand trees rather than
                 // looking names up, so patching only the statement form left `a / b` throwing
                 // from RenderBinary the moment the division sat inside a larger expression.
                 // Any cast that is NOT numeric still throws, on both paths.
                 case IRCast c when TryNumericCast(c, out var castRendered) || TryReferenceCast(c, out castRendered):
                     return Bound(c) ? SanitizeName(c.Name) : castRendered;
 
-                // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path — the M4 shape
+                // Task 24a. See Visit(IRArrayAlloc). BOUND is the ordinary path â€” the M4 shape
                 // passes the temp as a call argument AFTER its stores, so the name is declared.
                 //
-                // ⛔ UNBOUND WITH ELEMENTS IS NOT A RENDERING CHOICE, IT IS A DROPPED PROGRAM.
-                // The whole compiler builds an IRArrayAlloc in exactly one place —
-                // Visit(CollectionInitializerNode), IRBuilder.cs:1926 — which emits the alloc and
+                // â›” UNBOUND WITH ELEMENTS IS NOT A RENDERING CHOICE, IT IS A DROPPED PROGRAM.
+                // The whole compiler builds an IRArrayAlloc in exactly one place â€”
+                // Visit(CollectionInitializerNode), IRBuilder.cs:1926 â€” which emits the alloc and
                 // then exactly Size IRArrayStores through the SAME EmitInstruction. So when
                 // `_suppressEmit` swallows the alloc (a `When` guard: IRBuilder.cs:349, set at
                 // :2883-2885) it swallowed every element store with it, and `new Array(Size)`
                 // renders a SPARSE array of holes wearing the right length. MEASURED through the
                 // real CLI: `Case Is > 0 When Total(New Integer() {1, 2}) = 3` built clean, emitted
-                // `Total(new Array(2))`, and node printed the ELSE arm — iterating two holes sums
+                // `Total(new Array(2))`, and node printed the ELSE arm â€” iterating two holes sums
                 // to 0, not 3. The C# backend is LOUD on that same source (`Total(t0)` with t0
                 // declared nowhere, CS0103), and the doctrine at :823-825 is that an unrenderable
                 // shape THROWS rather than falling back to something plausible.
                 //
-                // ⚠ Size == 0 is deliberately NOT refused. `New Integer() {}` has no element
+                // âš  Size == 0 is deliberately NOT refused. `New Integer() {}` has no element
                 // stores to lose, so `new Array(0)` IS the whole value; MEASURED, that program
                 // builds and prints the correct arm today, and throwing would regress a working
                 // shape to buy nothing. Size > 0 is therefore the exact condition for "stores
@@ -1417,7 +1689,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                         return "[" + string.Join(", ", alloc.InlineElements.Select(Expr)) + "]";
                     throw NotYet(
                         "IRArrayAlloc with unemitted element stores (an array literal inside a "
-                        + "`When` guard — IRBuilder suppresses the allocation and its element "
+                        + "`When` guard â€” IRBuilder suppresses the allocation and its element "
                         + "stores together, so rendering it here would silently produce an array "
                         + "of holes)");
 
@@ -1431,13 +1703,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         ///
         /// <para>Needed for <c>Select Case</c> pattern operands and <c>When</c> guards. IRBuilder
         /// builds a guard's expression with emission SUPPRESSED, so its nodes never appear in
-        /// any block and no <c>const</c> was ever emitted for them — the ordinary by-name path
+        /// any block and no <c>const</c> was ever emitted for them â€” the ordinary by-name path
         /// would render an identifier that exists nowhere, giving a ReferenceError from a build
         /// that succeeded. Range bounds and case constants are NOT suppressed, but rendering
         /// them inline too costs nothing and keeps one path for all pattern operands.</para>
         ///
-        /// <para>⛔ Pattern operands carry a NULL Type — the analyzer never visits case
-        /// patterns — so nothing here may consult <c>value.Type</c>.</para>
+        /// <para>â›” Pattern operands carry a NULL Type â€” the analyzer never visits case
+        /// patterns â€” so nothing here may consult <c>value.Type</c>.</para>
         /// </summary>
         private string ExprInline(IRValue value)
         {
@@ -1445,14 +1717,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 case null: return "null";
                 case IRConstant c: return Constant(c);
-                // ⛔ A FIFTH `::` site, and the only one that is not a "name rendering" method by
+                // â›” A FIFTH `::` site, and the only one that is not a "name rendering" method by
                 // name. `Case mathlib::kAnswer` / `Case Is > 0 When ::isValid(y)` reach the output
-                // ONLY through here — pattern operands never appear in any block, so no other
+                // ONLY through here â€” pattern operands never appear in any block, so no other
                 // renderer sees them. ForeignFeatureChecker used to catch these via the operand
                 // scan; that scan is now skipped for this backend, so without this line a foreign
                 // case constant would emit as `mathlibkAnswer`.
                 //
-                // ForeignName reads only the NAME, never .Type — which is what makes it usable
+                // ForeignName reads only the NAME, never .Type â€” which is what makes it usable
                 // here: pattern operands carry a NULL Type (the analyzer never visits them).
                 case IRVariable v when ForeignName(v.Name, out var foreign): return foreign;
                 case IRVariable v: return SanitizeName(v.Name);
@@ -1468,7 +1740,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Renders a binary operation. Every arm is deliberate — an unmapped kind THROWS
+        /// Renders a binary operation. Every arm is deliberate â€” an unmapped kind THROWS
         /// rather than falling back to a plausible operator, because the failure mode of a
         /// wrong arm here is a program that runs and computes the wrong number.
         /// </summary>
@@ -1480,7 +1752,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// arithmetic must wrap to int32 to match every other backend and the IR optimizer.
         ///
         /// <para>Deliberately NOT true for Double/Single/Decimal (they are genuinely
-        /// floating-point and coercing them would truncate every fraction), nor for Long —
+        /// floating-point and coercing them would truncate every fraction), nor for Long â€”
         /// which BL7003 refuses outright, because a 64-bit integer has no exact JavaScript
         /// representation at all.</para>
         /// </summary>
@@ -1495,7 +1767,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// the NARROW integral <paramref name="type"/>: sign-extended for Short / SByte, masked
         /// for UShort / Byte; unchanged for Integer.
         ///
-        /// <para>⛔ The int32 wrap alone let a Short leave its range. MEASURED on master
+        /// <para>â›” The int32 wrap alone let a Short leave its range. MEASURED on master
         /// <c>e69ec64e</c>: <c>32767 + 1</c> as Short printed 32768 (C# and C++: -32768),
         /// <c>32767 * 2</c> printed 65534 (-2), and SByte <c>127 + 1</c> printed 128 (-128).</para>
         /// </summary>
@@ -1513,11 +1785,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var l = render(op.Left);
             var r = render(op.Right);
 
-            // ⚠ 32-BIT WRAPPING FOR `Integer`, and it is a bug fix rather than a nicety.
+            // âš  32-BIT WRAPPING FOR `Integer`, and it is a bug fix rather than a nicety.
             //
             // `Integer` is 32-bit everywhere else in this compiler ("integer" => "int",
             // CSharpBackend.cs), and ConstantFoldingPass folds in int32 and WRAPS. JavaScript
-            // numbers are doubles and do not wrap — so the same program produced two different
+            // numbers are doubles and do not wrap â€” so the same program produced two different
             // answers depending only on whether the optimizer could see the operands:
             //
             //     Dim x As Integer = 1000000000
@@ -1526,8 +1798,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             //
             // Every shipping route optimizes unconditionally, so users met both. Coercing here
             // makes the backend agree with itself, with the optimizer, and with the C# and C++
-            // backends. (⚠ It does NOT match VB.NET, where Integer overflow raises
-            // OverflowException — matching THAT is a separate language decision, and neither
+            // backends. (âš  It does NOT match VB.NET, where Integer overflow raises
+            // OverflowException â€” matching THAT is a separate language decision, and neither
             // behaviour was reachable before this.)
             var wrap = IsInt32(op.Type);
 
@@ -1536,7 +1808,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.Add: return wrap ? NarrowWrap(op.Type, $"(({l} + {r}) | 0)") : $"({l} + {r})";
                 case BinaryOpKind.Sub: return wrap ? NarrowWrap(op.Type, $"(({l} - {r}) | 0)") : $"({l} - {r})";
 
-                // ⛔ Math.imul, NOT `(a * b) | 0`. A double multiply loses precision above 2^53
+                // â›” Math.imul, NOT `(a * b) | 0`. A double multiply loses precision above 2^53
                 // BEFORE the coercion can wrap it, so `| 0` gives the wrong int32 for large
                 // operands. Math.imul is an exact 32-bit multiply and is what every JS
                 // transpiler uses for this.
@@ -1544,16 +1816,16 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
                 case BinaryOpKind.Div: return $"({l} / {r})";
 
-                // BasicLang `\`. JS has NO integer-division operator — `/` is always floating
-                // point — and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
+                // BasicLang `\`. JS has NO integer-division operator â€” `/` is always floating
+                // point â€” and .NET truncates TOWARD ZERO. Math.floor is the tempting wrong
                 // answer: it agrees for positives and gives -4 where .NET gives -3.
                 //
-                // ⚠ Both operands are INTEGRAL here: IRBuilder converts a floating operand to
+                // âš  Both operands are INTEGRAL here: IRBuilder converts a floating operand to
                 // Long, half to even, before the divide (ADR-0005 D1). Before that, this trunc
                 // was applied to the float QUOTIENT and 7.5 \ 2 printed 3, not VB's 4. It is not
-                // dead now — it is the integer division itself: without it 7 \ 2 is 3.5.
+                // dead now â€” it is the integer division itself: without it 7 \ 2 is 3.5.
                 //
-                // ⛔ Through the checked helper, not a bare Math.trunc: `7 \ 0` was Infinity and
+                // â›” Through the checked helper, not a bare Math.trunc: `7 \ 0` was Infinity and
                 // `7 Mod 0` NaN, printed as numbers where .NET throws DivideByZeroException (see
                 // EmitIntegerDivisionPrelude).
                 case BinaryOpKind.IntDiv when op.Type?.Name == "Short": return $"{NarrowDivHelperName}({l}, {r}, 32767)";
@@ -1561,7 +1833,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case BinaryOpKind.IntDiv: return $"{IntDivHelperName}({l}, {r})";
 
                 // .NET's Mod takes the sign of the DIVIDEND, and so does JS's %. They agree
-                // exactly — except by zero, hence the helper for an integral Mod. A floating Mod
+                // exactly â€” except by zero, hence the helper for an integral Mod. A floating Mod
                 // by zero is NaN in .NET too, so it keeps the bare operator.
                 case BinaryOpKind.Mod when IsCheckedMod(op): return $"{ModHelperName}({l}, {r})";
                 case BinaryOpKind.Mod: return $"({l} % {r})";
@@ -1587,14 +1859,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // assumed, and the measurement settled it: BasicLang's And/Or are
                 // BOOLEAN-ONLY. SemanticAnalyzer rejects integral operands, `&` is string
                 // concatenation, and BitwiseAnd/BitwiseOr have no producer anywhere in the
-                // compiler — so the bitwise half of VB's overload is simply not in this
+                // compiler â€” so the bitwise half of VB's overload is simply not in this
                 // language, and every And reaching here provably has Boolean operands.
                 //
                 // That makes `&&` correct rather than a guess, and `&` actively WRONG:
                 // JavaScript's `&` coerces to int32, so `true & false` is 0 and a
                 // Boolean-typed expression would print 0/1 instead of false/true.
                 //
-                // Short-circuiting is not a divergence either — the IR optimizer already
+                // Short-circuiting is not a divergence either â€” the IR optimizer already
                 // rewrites `x And False` to `False`, discarding the left operand, which is
                 // sound only under short-circuit evaluation. The C# backend and both
                 // interpreters emit `&&` too.
@@ -1615,10 +1887,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// A unary operation as text. <c>AddressOf</c> is the one operator with no JavaScript
-        /// token — a function is already a value — so it renders as the bare operand rather
+        /// token â€” a function is already a value â€” so it renders as the bare operand rather
         /// than a parenthesised no-op (<c>f = (Greet)</c>).
         ///
-        /// <para>⛔ An INSTANCE METHOD of the class being emitted must be BOUND. Member bodies
+        /// <para>â›” An INSTANCE METHOD of the class being emitted must be BOUND. Member bodies
         /// are not top-level functions, so the bare name is a ReferenceError; and the event
         /// lowering invokes handlers as <c>h(args)</c>, so an unbound <c>this.M</c> loses
         /// <c>this</c> at the first field access. Found by review: <c>AddHandler Clicked,
@@ -1642,7 +1914,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // `AddressOf obj.Method` (obj may be Me) is an IRFieldAccess whose field is a METHOD
             // of the receiver's class. A .NET delegate to an instance method captures the
             // instance, so the reference is bound to the RECEIVER: `recv.Method.bind(recv)`.
-            // Checked structurally — the receiver is usually bound to a temp first, so its
+            // Checked structurally â€” the receiver is usually bound to a temp first, so its
             // rendered text is `t0`, never `this`.
             if (op.Operand is IRFieldAccess fa && fa.FieldName != null &&
                 DeclaredInstanceMethod(fa.Object?.Type?.Name, fa.FieldName) is string viaReceiver)
@@ -1657,12 +1929,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             return operand;
         }
 
-        /// <summary>The methods of the class being emitted (and its bases), use-site name → declared name.</summary>
+        /// <summary>The methods of the class being emitted (and its bases), use-site name â†’ declared name.</summary>
         private Dictionary<string, string> _currentClassMethods = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// STATIC methods in scope for the class being emitted, mapped to their DECLARING class's
-        /// name — the method-side twin of <see cref="_staticMemberOwners"/>.
+        /// name â€” the method-side twin of <see cref="_staticMemberOwners"/>.
         /// </summary>
         private Dictionary<string, string> _staticMethodOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -1673,18 +1945,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// The call target an UNQUALIFIED name lowers to inside a class body, or null when the
         /// name is not a sibling method and the caller should fall through.
         ///
-        /// <para>⛔ Without this, an unqualified sibling call emitted the BARE name — `Helper()`
-        /// — which is a ReferenceError at run time, because a class member body is not a
+        /// <para>â›” Without this, an unqualified sibling call emitted the BARE name â€” `Helper()`
+        /// â€” which is a ReferenceError at run time, because a class member body is not a
         /// top-level function. It affected STATIC and INSTANCE siblings alike (both measured),
         /// and it compiled clean every time: nothing failed until the program ran.</para>
         ///
-        /// <para>⚠ A static is called on its DECLARING class and an instance method through
+        /// <para>âš  A static is called on its DECLARING class and an instance method through
         /// <c>this</c>, the same split <see cref="MemberReference"/> makes for fields. Statics
         /// are checked FIRST so a Shared method shadowing a base's instance method of the same
         /// name resolves the way the nearest declaration says.</para>
         ///
-        /// <para>⛔ An unqualified INSTANCE call from inside a <c>Shared</c> member is deliberately
-        /// NOT rewritten. `this` is the class there, so `this.Inst()` would be a TypeError — and
+        /// <para>â›” An unqualified INSTANCE call from inside a <c>Shared</c> member is deliberately
+        /// NOT rewritten. `this` is the class there, so `this.Inst()` would be a TypeError â€” and
         /// the shape is invalid VB (BC30469, "Reference to a non-shared member requires an object
         /// reference") that this front end WRONGLY ACCEPTS. Measured: MSIL compiles it and dies
         /// with MissingMethodException. It is left alone rather than given a plausible-looking
@@ -1761,7 +2033,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private string CompareExprInline(IRCompare op) => RenderCompare(op, ExprInline);
 
         /// <summary>
-        /// <c>Is</c> / <c>IsNot</c> (ADR-0011). Two operands compare with <c>===</c> — reference
+        /// <c>Is</c> / <c>IsNot</c> (ADR-0011). Two operands compare with <c>===</c> â€” reference
         /// identity for an object, which is every operand the analyzer admits here (a String or a
         /// delegate is refused against anything but Nothing, D4). A Nothing test is the SAME test
         /// <c>Case Is Nothing</c> makes (<see cref="NullTest"/>), so the two can never disagree
@@ -1771,7 +2043,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (identity.GetNullTestSubject() is IRValue subject)
             {
-                // A lambda reference renders as the arrow function itself, and `() => {…} === null`
+                // A lambda reference renders as the arrow function itself, and `() => {â€¦} === null`
                 // is a SyntaxError: an arrow body swallows what follows it. Parenthesised, it is a
                 // value like any other.
                 var rendered = render(subject);
@@ -1825,17 +2097,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // rather than a syntax error. Pinned by Emits_DoubleConstant_InvariantCulture.
                 case double d: return d.ToString("R", CultureInfo.InvariantCulture);
                 case float f: return f.ToString("R", CultureInfo.InvariantCulture);
-                case decimal m: return m.ToString(CultureInfo.InvariantCulture);
+                case decimal m: return $"VgsDecimal.parse(\"{m.ToString(CultureInfo.InvariantCulture)}\")";
 
                 // A Char or a 64-bit integer can reach the output as a BARE LITERAL with no
                 // declared position anywhere, so JsCapabilityChecker's declaration walk is
-                // structurally blind to it — on IRBuilder output a constant is only ever an
-                // operand. (⚠ On OPTIMIZED IR that is no longer true: ConstantFoldingPass puts
+                // structurally blind to it â€” on IRBuilder output a constant is only ever an
+                // operand. (âš  On OPTIMIZED IR that is no longer true: ConstantFoldingPass puts
                 // IRConstant nodes into block.Instructions, which is why Visit(IRConstant) now
                 // binds instead of throwing. The guard still holds either way because it lives
                 // in the RENDERER, which both paths go through.) This is the only guard on
                 // that channel, and it is not theoretical: before it existed,
-                // Console.WriteLine("a"c) emitted `console.log(a);` — a bare undeclared
+                // Console.WriteLine("a"c) emitted `console.log(a);` â€” a bare undeclared
                 // identifier, a ReferenceError in the browser from a green build.
                 // A Char is a one-character string (Task 14, O13). The character is escaped like any string literal.
                 case char ch: return "\"" + EscapeJsString(ch.ToString()) + "\"";
@@ -1876,52 +2148,52 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// A `::`-qualified name is RAW JAVASCRIPT and must reach the output untouched —
+        /// A `::`-qualified name is RAW JAVASCRIPT and must reach the output untouched â€”
         /// <see cref="SanitizeName"/> would drop the dots and turn `console.log` into `consolelog`.
         ///
-        /// <para>⛔ Only a LEADING `::` is a passthrough. An INTERIOR one is a C++ namespace
+        /// <para>â›” Only a LEADING `::` is a passthrough. An INTERIOR one is a C++ namespace
         /// qualification with no JavaScript meaning; stripping it yields an undefined identifier.
         /// Refuse it.</para>
         ///
-        /// <para>Named ForeignName rather than TryForeignName because it THROWS — a `Try*` that
+        /// <para>Named ForeignName rather than TryForeignName because it THROWS â€” a `Try*` that
         /// can throw breaks the convention every caller relies on.</para>
         ///
-        /// <para><b>THE INVARIANT — stated so that nobody has to keep a COUNT in sync.</b> An
+        /// <para><b>THE INVARIANT â€” stated so that nobody has to keep a COUNT in sync.</b> An
         /// earlier revision of this comment claimed "there are FIVE" sites and was already wrong
         /// when it was written: <see cref="FieldAccess"/> was the sixth, and the miss was not
         /// theoretical (see the <see cref="IsLengthAccess"/> note). A count is the wrong shape for
         /// an exhaustiveness claim, so use the MECHANICAL test instead:
         /// <b>if a method splices a name that can come from user source into the emitted text, it
-        /// routes through this helper — or, when the name is a MEMBER of a foreign object rather
-        /// than the foreign name itself, through <see cref="IsForeignValue"/> — before anything
+        /// routes through this helper â€” or, when the name is a MEMBER of a foreign object rather
+        /// than the foreign name itself, through <see cref="IsForeignValue"/> â€” before anything
         /// else looks at it.</b> Grep <c>SanitizeName(</c> for the candidate list; every other call
         /// on it takes a compiler-generated temp or a DECLARED local, neither of which can carry a
         /// `::`. Miss one and that shape mangles SILENTLY, because ForeignFeatureChecker no longer
-        /// refuses `::` values on this backend — these renderers ARE the guard now.</para>
+        /// refuses `::` values on this backend â€” these renderers ARE the guard now.</para>
         ///
         /// <para>The `::` does not always land where the syntax suggests, so the sites cannot be
         /// read off the grammar. Measured:
         /// <list type="bullet">
-        /// <item><c>::alert("hi")</c> is an IRCall named `::alert` → <see cref="CallTarget"/>.</item>
+        /// <item><c>::alert("hi")</c> is an IRCall named `::alert` â†’ <see cref="CallTarget"/>.</item>
         /// <item><c>::console.log("hi")</c> is an IRInstanceMethodCall whose METHOD name is the
-        /// plain `log`; the `::` rides on the RECEIVER, an IRVariable named `::console` →
+        /// plain `log`; the `::` rides on the RECEIVER, an IRVariable named `::console` â†’
         /// <see cref="VariableRef"/>. Measured, and not obvious from the source.
         /// (<see cref="InstanceCall"/> guards the rarer spelling that puts a `::` on the method
         /// name itself, and skips the collection/LINQ rewrites for a foreign receiver.)</item>
         /// <item><c>Console.WriteLine(::a::b)</c> reaches VariableRef too, as a bare operand.</item>
-        /// <item><c>New ::Chart(ctx)</c> is an IRNewObject → <see cref="NewObject"/>.</item>
+        /// <item><c>New ::Chart(ctx)</c> is an IRNewObject â†’ <see cref="NewObject"/>.</item>
         /// <item><c>Case mathlib::kAnswer</c> is a pattern operand and reaches ONLY
-        /// <see cref="ExprInline"/> — it appears in no block, so no other renderer sees it.</item>
-        /// <item><c>::s.Length</c> is an IRFieldAccess → <see cref="FieldAccess"/>, whose FIELD
-        /// name is an ordinary segment that must still be emitted verbatim. ⚠ And the
+        /// <see cref="ExprInline"/> â€” it appears in no block, so no other renderer sees it.</item>
+        /// <item><c>::s.Length</c> is an IRFieldAccess â†’ <see cref="FieldAccess"/>, whose FIELD
+        /// name is an ordinary segment that must still be emitted verbatim. âš  And the
         /// <see cref="IsLengthAccess"/> arm in <see cref="Expr"/> SHORT-CIRCUITS ahead of it, so
-        /// gating FieldAccess alone is not enough — that arm has its own foreign gate.</item>
+        /// gating FieldAccess alone is not enough â€” that arm has its own foreign gate.</item>
         /// </list></para>
         ///
-        /// <para>⛔ The FIRST test is "does the name contain `::` at all", NOT "does it START with
-        /// `::`". Getting that backwards leaves the commonest interior form — `mathlib::freeAdd`,
+        /// <para>â›” The FIRST test is "does the name contain `::` at all", NOT "does it START with
+        /// `::`". Getting that backwards leaves the commonest interior form â€” `mathlib::freeAdd`,
         /// with NO leading `::`, which is what every pre-existing foreign-passthrough test in the
-        /// repo is written with — falling straight through to SanitizeName as `mathlibfreeAdd`.
+        /// repo is written with â€” falling straight through to SanitizeName as `mathlibfreeAdd`.
         /// That is the precise silent miscompile this whole helper exists to prevent, so the
         /// containment check has to come before the passthrough check.</para>
         /// </summary>
@@ -1936,8 +2208,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             raw = name.Substring(2);
 
-            // ⛔ A name of exactly "::" strips to "", which contains no "::" and would therefore be
-            // reported as a SUCCESSFUL passthrough that emits NOTHING — the callee silently deleted
+            // â›” A name of exactly "::" strips to "", which contains no "::" and would therefore be
+            // reported as a SUCCESSFUL passthrough that emits NOTHING â€” the callee silently deleted
             // from the output. Unreachable through the parser today, and guarded anyway: this
             // helper is the boundary that decides what reaches the browser unchecked, and a
             // boundary must not have a success path that returns an empty name.
@@ -1956,8 +2228,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// `.Length` must stay `.Length`, `.Count` must not become `.size`, and `Me` must not
         /// become `this`. BasicLang's member spellings mean nothing to it.</para>
         ///
-        /// <para>⛔ TRANSITIVE, and it has to be. The receiver of the `.Length` in `::a.b.Length`
-        /// is not an IRVariable named `::a.b` — MEASURED, it is an IRFieldAccess BOUND to a temp
+        /// <para>â›” TRANSITIVE, and it has to be. The receiver of the `.Length` in `::a.b.Length`
+        /// is not an IRVariable named `::a.b` â€” MEASURED, it is an IRFieldAccess BOUND to a temp
         /// (`const t7 = a.b;`), whose own Name is `t7` and carries no `::` at all. The same holds
         /// for `::makeThing().Length` (IRCall), `::doc.getThing().Length` (IRInstanceMethodCall)
         /// and `::arr(0).Length`. A "does the receiver's Name start with `::`" test answers NO to
@@ -1988,14 +2260,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Lower a call target to its JS form.
         ///
         /// <para>An UNQUALIFIED name is a user function and emits as itself. A DOTTED name
-        /// is a stdlib/framework call needing a deliberate mapping — the full table lands
+        /// is a stdlib/framework call needing a deliberate mapping â€” the full table lands
         /// in <c>JavaScriptStdLib</c> (plan task 24). Until then anything unmapped throws,
         /// so an unimplemented builtin cannot silently emit a call to a function that does
         /// not exist in the browser.</para>
         /// </summary>
         /// <summary>
         /// Functions this program declares. A user's own <c>Function Len(...)</c> must WIN over
-        /// the builtin — otherwise declaring it silently rebinds every call to the JS member
+        /// the builtin â€” otherwise declaring it silently rebinds every call to the JS member
         /// form and the user's code never runs.
         /// </summary>
         private HashSet<string> _userFunctionNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2033,7 +2305,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     result = $"{Recv()}.trim()"; return true;
 
                 // START IS 1-BASED. substr (rather than substring/slice) so the start
-                // expression is evaluated ONCE — the two-argument alternatives need it twice.
+                // expression is evaluated ONCE â€” the two-argument alternatives need it twice.
                 case "mid" when args.Count == 3:
                     result = $"{Recv()}.substr({args[1]} - 1, {args[2]})"; return true;
                 case "mid" when args.Count == 2:
@@ -2052,11 +2324,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     result = $"({Recv()}.indexOf({args[1]}) + 1)"; return true;
 
                 // split/join replaces EVERY occurrence. `.replace(string, string)` changes
-                // only the FIRST — a plausible-looking wrong answer rather than an error.
+                // only the FIRST â€” a plausible-looking wrong answer rather than an error.
                 case "replace" when args.Count == 3:
                     result = $"{Recv()}.split({args[1]}).join({args[2]})"; return true;
 
-                // Task 7e: VB's String default property (`s(i)` = s.Chars(i), IRBuilder.StringCharsIntrinsic) —
+                // Task 7e: VB's String default property (`s(i)` = s.Chars(i), IRBuilder.StringCharsIntrinsic) â€”
                 // CHECKED: a JavaScript index past the end answers undefined, VB throws.
                 case "chars" when args.Count == 2:
                     result = "((s, i) => { if (i < 0 || i >= s.length) throw new RangeError("
@@ -2102,7 +2374,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// false when the name is not one (or is shadowed by a user function).
         ///
         /// <para>Routed through the registry rather than a private table so the JavaScript
-        /// provider is a peer of the C#/C++ ones and the roster stays in one place —
+        /// provider is a peer of the C#/C++ ones and the roster stays in one place â€”
         /// CLAUDE.md's "change it once, not per-consumer".</para>
         ///
         /// <para>The shadowing check comes FIRST, matching TryStringBuiltin: a user's own
@@ -2130,7 +2402,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (string.IsNullOrEmpty(functionName)) throw NotYet("a call with no target name");
 
-            // ⚠ FIRST, ahead of everything below — not merely in place of the SanitizeName at the
+            // âš  FIRST, ahead of everything below â€” not merely in place of the SanitizeName at the
             // end. A `::` name is raw JavaScript and must not be interpreted at all: the dotted
             // arm at the bottom of this method THROWS on any name it has no stdlib mapping for,
             // so `::foo.bar` reaching it would be refused as an unsupported builtin rather than
@@ -2138,25 +2410,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (ForeignName(functionName, out var foreign)) return foreign;
 
             // Conversion builtins are bare names, so they must be intercepted BEFORE the
-            // user-function passthrough below — otherwise `CInt(x)` emits a call to a
+            // user-function passthrough below â€” otherwise `CInt(x)` emits a call to a
             // function named CInt that exists nowhere.
             switch (functionName)
             {
-                // ⛔ Math.trunc WAS WRONG HERE, and the comment that used to sit on this line
+                // â›” Math.trunc WAS WRONG HERE, and the comment that used to sit on this line
                 // ("truncates toward zero, matching .NET ... only trunc agrees with CInt") had it
-                // backwards — its own example gives the game away, because .NET's CInt(3.7) IS 4.
+                // backwards â€” its own example gives the game away, because .NET's CInt(3.7) IS 4.
                 // Measured across the backends on CInt(7.5)/CInt(8.5)/CInt(7.9)/CInt(-7.5): C#
                 // emits Convert.ToInt32 and printed 8,8,8,-8 (the VB answer), while MSIL,
                 // JavaScript and C++ all printed 7,8,7,-7.
                 //
                 // CInt rounds HALF-TO-EVEN. Convert.ToInt32 is exactly
-                // Math.Round(x, MidpointRounding.ToEven) — verified on ten values, and the
+                // Math.Round(x, MidpointRounding.ToEven) â€” verified on ten values, and the
                 // midpoints are what separate it from both trunc and AwayFromZero (8.5 -> 8, not
                 // 9; 2.5 -> 2, not 3). JavaScript has no built-in for it: Math.round is
                 // half-up-toward-+Infinity, so it answers -7 for -7.5. Hence the emitted helper.
                 case "CInt": return CIntHelperName;
 
-                // Identity under erasure — Integer/Single/Double are all one JS number.
+                // Identity under erasure â€” Integer/Single/Double are all one JS number.
                 // Number() is the identity rename rather than a no-op, so the call shape
                 // stays a call and argument evaluation order is unchanged.
                 case "CDbl":
@@ -2170,14 +2442,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             if (functionName.IndexOf('.') < 0)
             {
-                // ⛔ THE HOLE THIS CLOSES: a bare stdlib name used to pass straight through as
-                // if it were a user function, so `HttpGet(url)` emitted a call to `HttpGet` —
-                // which exists nowhere — and a clean-looking build died in Node with
+                // â›” THE HOLE THIS CLOSES: a bare stdlib name used to pass straight through as
+                // if it were a user function, so `HttpGet(url)` emitted a call to `HttpGet` â€”
+                // which exists nowhere â€” and a clean-looking build died in Node with
                 // "HttpGet is not defined".
                 //
                 // The question asked is deliberately NARROW: is this a name some backend's
                 // stdlib knows, that THIS backend refuses? Asking the broader "did the program
-                // declare it" instead is wrong — a lambda in a local is called through a bare
+                // declare it" instead is wrong â€” a lambda in a local is called through a bare
                 // name that is not a module function, and that guard rejected seven passing
                 // lambda tests. A name nobody claims still passes through, exactly as before.
                 if (!_userFunctionNames.Contains(functionName) &&
@@ -2200,13 +2472,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // `Type.Method(...)` where Method is Shared on Type (or on one of its bases).
             //
-            // ⛔ Every such call was REFUSED outright — "no lowering for 'Box.Read'" — because
+            // â›” Every such call was REFUSED outright â€” "no lowering for 'Box.Read'" â€” because
             // this arm knew only the two Console names. That is the whole Shared-method surface:
             // a qualified call, a call qualified by the class's own name from inside it, and an
             // unqualified call from a Shared member (which arrives here already qualified).
             //
-            // ⚠ Emitted on the DECLARING class, not the written one. A call would survive the
-            // written spelling — JS resolves statics up the prototype chain — but the declaring
+            // âš  Emitted on the DECLARING class, not the written one. A call would survive the
+            // written spelling â€” JS resolves statics up the prototype chain â€” but the declaring
             // class is what the method actually belongs to, and it keeps this arm agreeing with
             // MemberReference, where naming the wrong class silently creates a second static.
             var dot = functionName.LastIndexOf('.');
@@ -2226,7 +2498,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         //
         // NEVER convert one of these to an empty body to make a test pass. A silent
         // no-op here is indistinguishable from correct codegen at build time and shows
-        // up as wrong output at runtime — the exact bug class this backend exists to
+        // up as wrong output at runtime â€” the exact bug class this backend exists to
         // avoid inheriting.
         // ------------------------------------------------------------------
 
@@ -2236,14 +2508,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <para>Binding a call's result is keyed on ACTUAL USE, not on its declared type: a
         /// <c>Console.WriteLine</c> IRCall carries a non-Void Type even though nothing reads
         /// it, so a type test emits <c>const t0 = console.log(x);</c> for every print. That is
-        /// harmless at runtime but this backend's output is meant to be READ in devtools —
+        /// harmless at runtime but this backend's output is meant to be READ in devtools â€”
         /// readability is half of what the source maps exist for.</para>
         /// </summary>
         private HashSet<string> _usedOperandNames = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>
         /// Collects every operand name the function consumes, using the repo's shared
-        /// "values an instruction CONSUMES" enumeration rather than a private copy —
+        /// "values an instruction CONSUMES" enumeration rather than a private copy â€”
         /// CLAUDE.md: change it once, not per-consumer.
         /// </summary>
         private void CollectUsedOperands(IRFunction function)
@@ -2260,7 +2532,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // IROperandWalker is FLAT and does not cover every node this backend emits, so
                 // the rest are added explicitly. A miss here is not cosmetic: an operand that
                 // is never marked used is never BOUND, and the consumer then references a name
-                // that was never declared. Measured — `Await GetValue()` emitted
+                // that was never declared. Measured â€” `Await GetValue()` emitted
                 // `const t1 = await t0;` with t0 undefined, because IRAwait's operand was not
                 // being counted.
                 void Use(IRValue v)
@@ -2303,10 +2575,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// True when the value must be bound: something later in this body reads it, or it is a
-        /// STORE — its name is a variable (IRBuilder renames a result to the variable it
+        /// STORE â€” its name is a variable (IRBuilder renames a result to the variable it
         /// initialises), so dropping the binding drops the assignment.
         ///
-        /// <para>⛔ "Read later in this body" alone is the wrong test for a store. MEASURED: the
+        /// <para>â›” "Read later in this body" alone is the wrong test for a store. MEASURED: the
         /// reader need not be in this body at all. <c>Dim n1 = MinusOne()</c> read only inside a
         /// lambda (a separate IRFunction, rendered inline) emitted a bare <c>MinusOne();</c> and
         /// the lambda saw 0; <c>g = MinusOne()</c> in a Sub, for a module-level <c>g</c> read by
@@ -2322,14 +2594,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             || (value.NamedAfterVariable && _memberNames.Contains(value.Name))
             || _globalNames.Contains(value.Name);
 
-        /// <summary>Parameters and locals — names that are already declared in scope.</summary>
+        /// <summary>Parameters and locals â€” names that are already declared in scope.</summary>
         private HashSet<string> _declaredNames = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>
         /// Emits a value-producing instruction's result.
         ///
         /// <para><b>Why this is not always a <c>const</c>.</b> IRBuilder RENAMES an
-        /// expression's result to the variable it initialises — <c>i = i + 1</c> produces an
+        /// expression's result to the variable it initialises â€” <c>i = i + 1</c> produces an
         /// IRBinaryOp whose Name is literally <c>i</c>. Emitting <c>const i = (i + 1)</c>
         /// declares a NEW binding that shadows the loop variable, and reading <c>i</c> in its
         /// own initialiser is a temporal-dead-zone ReferenceError. So a result whose name is
@@ -2340,7 +2612,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Names actually BOUND by an emitted statement in the current body.
         ///
         /// <para>Not the same question as "is it used". Some IRValues are operand-only and
-        /// never appear in <c>block.Instructions</c> at all — measured: <c>Await GetValue()</c>
+        /// never appear in <c>block.Instructions</c> at all â€” measured: <c>Await GetValue()</c>
         /// puts the IRCall solely on <c>IRAwait.Expression</c>, so nothing ever emits it.
         /// Returning its NAME from Expr then produced <c>await t0</c> with <c>t0</c> declared
         /// nowhere. Referring to a name is only safe once something has defined it.</para>
@@ -2356,7 +2628,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         ///
         /// <para><b>Why a side table rather than the type.</b> MEASURED: the result of
         /// <c>l.Where(f)</c> is an IRInstanceMethodCall whose <c>Type.Name</c> is
-        /// <c>"Object"</c> — IRBuilder's universal fallback — NOT <c>IEnumerable</c>. So in
+        /// <c>"Object"</c> â€” IRBuilder's universal fallback â€” NOT <c>IEnumerable</c>. So in
         /// <c>l.Where(f).Select(g)</c> the receiver of <c>Select</c> is <c>t2:Object</c>, and
         /// asking <c>CollectionKindOf</c> about it answers None. Chaining is the normal way
         /// LINQ is written, so without this every chain past the first operator would emit the
@@ -2372,7 +2644,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// Binds a value-producing instruction's result. The member arm is taken only for a
-        /// value IRBuilder RENAMED after a variable (<see cref="IRValue.NamedAfterVariable"/>) —
+        /// value IRBuilder RENAMED after a variable (<see cref="IRValue.NamedAfterVariable"/>) â€”
         /// a temp that merely shares a member's name (<c>t0</c>) is still a temp.
         /// </summary>
         private void Bind(IRValue value, string expression) =>
@@ -2383,17 +2655,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (!string.IsNullOrEmpty(name)) _boundNames.Add(name);
             var js = SanitizeName(name);
 
-            // A parameter or local — assign.
+            // A parameter or local â€” assign.
             if (_declaredNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             // A CLASS MEMBER. `Count = Count + 1` produces an IRBinaryOp named `Count`
             // (IRBuilder renames a result to the variable it initialises), so a `const` here
-            // would declare a fresh local and the member would never change — the method
+            // would declare a fresh local and the member would never change â€” the method
             // would silently do nothing. Checked BEFORE the globals: class scope is nearer.
             if (allowMember && _memberNames.Contains(name))
             { Line($"{MemberReference(name, js)} = {expression};"); return; }
 
-            // A module-level Dim — assign.
+            // A module-level Dim â€” assign.
             if (_globalNames.Contains(name)) { Line($"{js} = {expression};"); return; }
 
             Line($"const {js} = {expression};");
@@ -2412,7 +2684,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// whose holes read as <c>undefined</c> and which iteration treats differently from
         /// filled slots. BasicLang expects 0 / "" / false per element type.</para>
         ///
-        /// <para>⚠ <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS: do not add one here.
+        /// <para>âš  <c>ArrayDimensionSizes</c> entries are ELEMENT COUNTS: do not add one here.
         /// The parser has already turned the paren form's upper bound into a count
         /// (<c>Dim a(4)</c> reaches every backend as 5, <c>Dim a[4]</c> as 4), so every backend
         /// allocates exactly what it is given.</para>
@@ -2425,7 +2697,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var sizes = type.ArrayDimensionSizes;
             if (sizes == null || sizes.Count == 0) return null;
 
-            // Zero is a legitimate size — `Dim a(0)` is an EMPTY array, and leaving it
+            // Zero is a legitimate size â€” `Dim a(0)` is an EMPTY array, and leaving it
             // undefined makes `For Each` throw at runtime rather than iterate zero times.
             // Only a negative size means "not a sized array".
             foreach (var s in sizes) if (s < 0) return null;
@@ -2434,7 +2706,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var init = $"new Array({sizes[sizes.Count - 1]}).fill({element})";
 
             // Build outward from the innermost dimension. Array.from with a FACTORY, never
-            // `new Array(d0).fill(new Array(d1)...)` — fill would share ONE row object across
+            // `new Array(d0).fill(new Array(d1)...)` â€” fill would share ONE row object across
             // every row, so a write to one row appears in all of them.
             for (var d = sizes.Count - 2; d >= 0; d--)
                 init = $"Array.from({{length: {sizes[d]}}}, () => {init})";
@@ -2463,7 +2735,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _boundNames.Clear();
             _sequenceValued.Clear();
 
-            // Native async and native generators — the C++ backend emulates async
+            // Native async and native generators â€” the C++ backend emulates async
             // synchronously with no scheduler and hand-builds C++20 coroutines for iterators;
             // here the runtime provides both. `function*` keeps iteration LAZY, which a
             // materialise-an-array lowering would silently lose.
@@ -2474,7 +2746,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // Declare user locals up front. `let`, not `const`: unlike SSA temps these are
             // reassigned by IRAssignment. Declaring them here rather than at first assignment
-            // matches BasicLang scoping — a `Dim` inside an If branch is visible after it,
+            // matches BasicLang scoping â€” a `Dim` inside an If branch is visible after it,
             // whereas a JS `let` at the assignment site would not be.
             _declaredNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in function.Parameters ?? new List<IRVariable>())
@@ -2485,7 +2757,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             {
                 if (!_declaredNames.Add(local.Name)) continue;
 
-                // An array's SIZE is not in the instruction stream — Dim a(4) emits only an
+                // An array's SIZE is not in the instruction stream â€” Dim a(4) emits only an
                 // IRAlloca with Size == 1. The element count lives on the DECLARATION, so
                 // allocation belongs here.
                 DeclareLocal(local);
@@ -2495,7 +2767,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // global's name keeps its own `let` and shadows it.
             DeclareGlobals();
 
-            // EntryBlock-rooted, following terminators — never a walk of function.Blocks.
+            // EntryBlock-rooted, following terminators â€” never a walk of function.Blocks.
             EmitStructured(function.EntryBlock ?? function.Blocks?.FirstOrDefault());
 
             _indentLevel--;
@@ -2508,9 +2780,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         //
         // BasicLang IR is a goto-style CFG; JavaScript has no goto. Emission therefore
         // starts at EntryBlock and follows TERMINATORS, re-deriving if/else and loops from
-        // the branch graph — it never walks IRFunction.Blocks.
+        // the branch graph â€” it never walks IRFunction.Blocks.
         //
-        // ⛔ Walking Blocks linearly is not merely untidy, it is WRONG: that list is in
+        // â›” Walking Blocks linearly is not merely untidy, it is WRONG: that list is in
         // CREATION order, and `if0.end` is created BEFORE `if0.elseif0.then`, so a linear
         // walk emits the merge block before the ElseIf body. Back-edges have no linear
         // rendering at all.
@@ -2519,7 +2791,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private readonly HashSet<BasicBlock> _emitted = new HashSet<BasicBlock>();
 
         /// <summary>
-        /// ⭐ ADR-0014: the captured loop-body locals of the function being emitted. Each is declared
+        /// â­ ADR-0014: the captured loop-body locals of the function being emitted. Each is declared
         /// with <c>let</c> at the top of its loop's body from a carrier, so every iteration has its own
         /// binding for a lambda to capture, and the rest of the body is a <c>try</c> whose
         /// <c>finally</c> writes the carrier back however the iteration is left (A1).
@@ -2527,7 +2799,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// </summary>
         private PerIterationPlan _perIter = PerIterationPlan.Empty;
 
-        /// <summary>A local's function-top <c>let</c> — or, for a captured loop-body local, its carrier's.</summary>
+        /// <summary>A local's function-top <c>let</c> â€” or, for a captured loop-body local, its carrier's.</summary>
         private void DeclareLocal(IRVariable local)
         {
             var perIter = _perIter.For(local);
@@ -2553,9 +2825,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// ADR-0014 A1, the end of that body: <c>} finally { __carry_x = x; }</c> — the carrier is
+        /// ADR-0014 A1, the end of that body: <c>} finally { __carry_x = x; }</c> â€” the carrier is
         /// written however the iteration is left (its end, a <c>break</c>, a <c>return</c>, an
-        /// exception), after every user <c>finally</c> it crosses — then a counted For's step.
+        /// exception), after every user <c>finally</c> it crosses â€” then a counted For's step.
         /// </summary>
         private void CloseIteration(BasicBlock body)
         {
@@ -2579,7 +2851,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// <c>For Each</c> exit blocks. Separate from <see cref="_loopEnds"/> because for-of
         /// is the one loop whose body fall-through and whose <c>Exit For</c> emit the SAME
-        /// branch to the SAME block — the other loops fall through to a condition block
+        /// branch to the SAME block â€” the other loops fall through to a condition block
         /// instead, so their exits are unambiguous.
         /// </summary>
         private readonly Stack<BasicBlock> _forEachEnds = new Stack<BasicBlock>();
@@ -2594,9 +2866,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// A block is a loop header when it is a loop's condition block. Matched on the
-        /// `.cond` SUFFIX — only loops create one.
+        /// `.cond` SUFFIX â€” only loops create one.
         ///
-        /// <para>⛔ Not <c>StartsWith("for.")</c>: the real names are <c>for0.cond</c>, so that
+        /// <para>â›” Not <c>StartsWith("for.")</c>: the real names are <c>for0.cond</c>, so that
         /// test is always false. The C# backend carries exactly that dead check.</para>
         /// </summary>
         private static bool IsLoopHeader(BasicBlock block) =>
@@ -2610,8 +2882,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private BasicBlock FindMergeBlock(BasicBlock branchTarget) => FindSibling(branchTarget, "end");
 
         /// <summary>
-        /// The block <c>{prefix}.{suffix}</c> that shares <paramref name="block"/>'s prefix —
-        /// <c>do0.body</c> → <c>do0.cond</c> / <c>do0.end</c>. IRBuilder names every block a
+        /// The block <c>{prefix}.{suffix}</c> that shares <paramref name="block"/>'s prefix â€”
+        /// <c>do0.body</c> â†’ <c>do0.cond</c> / <c>do0.end</c>. IRBuilder names every block a
         /// construct creates with one prefix, so this is how a body finds its own header and
         /// its own exit without guessing from position.
         /// </summary>
@@ -2633,10 +2905,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             if (block == null || _emitted.Contains(block)) return;
 
-            // A body reached BEFORE its own header is a post-test loop: `Do … Loop While`
+            // A body reached BEFORE its own header is a post-test loop: `Do â€¦ Loop While`
             // branches into the body first and the condition block follows it. Pre-test loops
-            // never arrive here this way — their header is emitted (and marked) before it
-            // hands the body to EmitLoop — so "header not yet emitted" is the whole test.
+            // never arrive here this way â€” their header is emitted (and marked) before it
+            // hands the body to EmitLoop â€” so "header not yet emitted" is the whole test.
             if (IsPostTestLoopBody(block, out var header))
             {
                 EmitPostTestLoop(block, header);
@@ -2654,7 +2926,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             EmitInstructions(block);
 
-            // Control-flow HEADERS never reach EmitInstructions — If/While/Select are
+            // Control-flow HEADERS never reach EmitInstructions â€” If/While/Select are
             // terminators, which that loop skips by design. Without a second record here the
             // map has no entry for any `if (...)` or `while (...)` line, so a breakpoint on
             // an `If` in the .bas has nothing to bind to.
@@ -2680,7 +2952,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Emits a block's instructions, skipping terminators — control flow is reconstructed
+        /// Emits a block's instructions, skipping terminators â€” control flow is reconstructed
         /// structurally and must never be emitted as a statement.
         /// </summary>
         private void EmitInstructions(BasicBlock block)
@@ -2690,7 +2962,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (instruction is IRBranch || instruction is IRConditionalBranch || instruction is IRSwitch)
                     continue;
 
-                // ADR-0016: the constructor already wrote this `super(...)` first — no mapping, no line.
+                // ADR-0016: the constructor already wrote this `super(...)` first â€” no mapping, no line.
                 if (instruction is IRBaseConstructorCall && ReferenceEquals(instruction, _superFirst))
                     continue;
 
@@ -2700,7 +2972,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Loops emit as <c>while (true) { …condition…; if (!c) break; …body… }</c>.
+        /// Loops emit as <c>while (true) { â€¦conditionâ€¦; if (!c) break; â€¦bodyâ€¦ }</c>.
         ///
         /// <para>The condition's INSTRUCTIONS live in the header block and must be
         /// re-evaluated every iteration. Hoisting them above the loop would run a
@@ -2723,7 +2995,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _indentLevel++;
 
             // Header instructions FIRST, then the test: Expr renders an operand by name only
-            // once its instruction has been emitted, and inline otherwise — rendering the
+            // once its instruction has been emitted, and inline otherwise â€” rendering the
             // condition before its temps exist would re-evaluate the whole operand tree.
             EmitInstructions(header);
             Line(ExitTest(cond, leaveWhenTrue));
@@ -2750,8 +3022,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Which arm of a loop header's branch is the body and which is the exit, and whether
         /// the loop leaves on a TRUE condition (<c>Until</c>) or a false one (<c>While</c>).
         ///
-        /// <para>⛔ <b>Not "TrueTarget is the body".</b> IRBuilder lowers <c>Until</c> by SWAPPING
-        /// the targets — <c>condbr c, end, body</c> — so that assumption emitted the loop's
+        /// <para>â›” <b>Not "TrueTarget is the body".</b> IRBuilder lowers <c>Until</c> by SWAPPING
+        /// the targets â€” <c>condbr c, end, body</c> â€” so that assumption emitted the loop's
         /// CONTINUATION inside the loop and its real body after it, for a program that compiled
         /// cleanly and printed the wrong thing. The exit is identified by IDENTITY with the
         /// header's own <c>.end</c> sibling; whichever arm is not the exit is the body.</para>
@@ -2776,7 +3048,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// A <c>.body</c> block whose <c>.cond</c> sibling has not been emitted yet. Every
         /// pre-test loop marks its header emitted before it reaches the body, so an unemitted
-        /// header can only mean the walk entered through the body — the post-test shape. The
+        /// header can only mean the walk entered through the body â€” the post-test shape. The
         /// header must also branch back to this body, which rules out a stray name match.
         /// </summary>
         private bool IsPostTestLoopBody(BasicBlock block, out BasicBlock header)
@@ -2800,11 +3072,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// <c>Do … Loop While/Until</c> and the condition-less <c>Do … Loop</c>:
-        /// <c>while (true) { body; condition-instructions; if (…) break; }</c>.
+        /// <c>Do â€¦ Loop While/Until</c> and the condition-less <c>Do â€¦ Loop</c>:
+        /// <c>while (true) { body; condition-instructions; if (â€¦) break; }</c>.
         ///
-        /// <para><b>Why not <c>do { … } while (c)</c>.</b> The condition's instructions live in
-        /// the header block — its temps are declared where they are computed — and inside a
+        /// <para><b>Why not <c>do { â€¦ } while (c)</c>.</b> The condition's instructions live in
+        /// the header block â€” its temps are declared where they are computed â€” and inside a
         /// <c>do</c> body they would be block-scoped <c>const</c>s the <c>while (c)</c> clause
         /// cannot see. Running them at the END of a <c>while (true)</c> body keeps them in scope
         /// and re-evaluates them after every iteration, which is what post-test means.</para>
@@ -2832,7 +3104,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     break;
 
                 case IRBranch:
-                    // `Do … Loop` with no condition: the header is a bare back-edge and the
+                    // `Do â€¦ Loop` with no condition: the header is a bare back-edge and the
                     // only way out is Exit Do. Its .end still exists and carries the continuation.
                     end = FindSibling(header, "end");
                     break;
@@ -2864,7 +3136,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // ADR-0014 A1: the finally that writes the carriers, before the condition's instructions.
             CloseIteration(body);
 
-            // Header instructions first, THEN the test — see EmitLoop for why the order matters.
+            // Header instructions first, THEN the test â€” see EmitLoop for why the order matters.
             EmitInstructions(header);
             if (exitCond != null)
             {
@@ -2883,9 +3155,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private void EmitConditional(IRConditionalBranch cond)
         {
             var merge = FindMergeBlock(cond.TrueTarget);
-            // ⛔ An ElseIf's nested conditional resolves to the OUTER If's end (see FindMergeBlock),
+            // â›” An ElseIf's nested conditional resolves to the OUTER If's end (see FindMergeBlock),
             // which that If already owns. Emitting it here put it inside the outer `else`, so the
-            // code after an ElseIf chain was lost on the Then path — MEASURED, and a For loop whose
+            // code after an ElseIf chain was lost on the Then path â€” MEASURED, and a For loop whose
             // body ended with such a chain lost its increment and never terminated.
             if (merge != null && _pendingMerges.Contains(merge)) merge = null;
             if (merge != null) _pendingMerges.Push(merge);
@@ -2895,7 +3167,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             EmitStructured(cond.TrueTarget);
             _indentLevel--;
 
-            // No `else` when the false path IS the merge point — that is a bare `If … End If`.
+            // No `else` when the false path IS the merge point â€” that is a bare `If â€¦ End If`.
             if (cond.FalseTarget != null && cond.FalseTarget != merge)
             {
                 Line("} else {");
@@ -2914,7 +3186,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// <c>Select Case</c> lowers to an if/else-if chain over a subject temp — never a JS
+        /// <c>Select Case</c> lowers to an if/else-if chain over a subject temp â€” never a JS
         /// <c>switch</c>. JavaScript's switch has no <c>when</c> guard syntax, and ranges,
         /// comparisons, type/or/tuple patterns have no <c>case</c> form either; only bare
         /// constants could map, so one chain is both simpler and correct for every arm.
@@ -2924,8 +3196,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var subject = $"_sel{_selectCount++}";
             Line($"const {subject} = {Expr(sw.Value)};");
 
-            // ⛔ The pattern variables are `const`s ahead of the chain, so they get a block of
-            // their own: two clauses binding the same name (`Case k When k > 3` … `Case k When
+            // â›” The pattern variables are `const`s ahead of the chain, so they get a block of
+            // their own: two clauses binding the same name (`Case k When k > 3` â€¦ `Case k When
             // k > 0`), or two sibling Selects that each bind `k`, otherwise declare it twice in
             // one scope and node refuses the whole program. Every binding aliases the subject,
             // so one declaration per name is exact. The code after the Select stays outside.
@@ -2968,7 +3240,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 _indentLevel--;
             }
 
-            // DefaultTarget is always non-null — IRBuilder creates `switch{N}.default` even
+            // DefaultTarget is always non-null â€” IRBuilder creates `switch{N}.default` even
             // with no `Case Else` and branches it straight to `.end`. Emitting it as a real
             // `else` is therefore safe and costs one empty block at worst.
             if (arms.Count > 0)
@@ -2998,9 +3270,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// Numbers the <c>_selN</c> subject temps of the function being emitted: counts every
-        /// Select, never goes down, reset per function. ⛔ It was a nesting DEPTH, decremented
+        /// Select, never goes down, reset per function. â›” It was a nesting DEPTH, decremented
         /// before the code after the Select was emitted, so two SIBLING Selects in one function
-        /// both declared <c>const _sel0</c> in the same scope — MEASURED: node refused the whole
+        /// both declared <c>const _sel0</c> in the same scope â€” MEASURED: node refused the whole
         /// program ("Identifier '_sel0' has already been declared"), and nothing ran.
         /// </summary>
         private int _selectCount;
@@ -3051,7 +3323,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 && (_selectBindings == null || _selectBindings.Add(pattern.BindingVariable)))
                 Line($"const {SanitizeName(pattern.BindingVariable)} = {subject};");
 
-            // `Case <pattern> When <guard>` — the guard narrows the arm further.
+            // `Case <pattern> When <guard>` â€” the guard narrows the arm further.
             if (pattern.WhenGuard != null)
                 test = $"({test} && {ExprInline(pattern.WhenGuard)})";
 
@@ -3078,7 +3350,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// a loop exit (<c>break</c>), a merge an enclosing construct owns (emit nothing), or
         /// an ordinary fall-through (emit the target here).
         ///
-        /// <para>⛔ Never key this on the <c>.end</c> NAME: two sibling loops both produce
+        /// <para>â›” Never key this on the <c>.end</c> NAME: two sibling loops both produce
         /// `.end` blocks, and a name test would turn a jump out of one into a `break` of the
         /// other.</para>
         /// </summary>
@@ -3088,11 +3360,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // For Each: fall-through and Exit For are the same branch to the same block.
             // IRBranch.IsLoopExit (chip task_4cc381f1) is the ONLY thing that tells them apart
-            // — the end of an iteration emits nothing, a real exit is `break`.
+            // â€” the end of an iteration emits nothing, a real exit is `break`.
             //
-            // ⛔ Not position. This used to guess "inside a conditional arm ⇒ exit", which
+            // â›” Not position. This used to guess "inside a conditional arm â‡’ exit", which
             // called a bare `Exit For` as the body's last statement undecidable and lowered it
-            // as fall-through — every element printed. The flag is set at the one place the
+            // as fall-through â€” every element printed. The flag is set at the one place the
             // distinction still exists (Visit(ExitStatementNode)), and the optimized-IR tests
             // pin that the shipping passes carry it through.
             if (_forEachEnds.Contains(br.Target))
@@ -3113,13 +3385,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// Not the emission driver — <see cref="EmitStructured"/> is. Kept because
+        /// Not the emission driver â€” <see cref="EmitStructured"/> is. Kept because
         /// <see cref="IIRVisitor"/> requires it.
         /// </summary>
         public void Visit(BasicBlock block) => EmitInstructions(block);
 
         /// <summary>
-        /// A constant reached as an INSTRUCTION — which happens only on optimized IR.
+        /// A constant reached as an INSTRUCTION â€” which happens only on optimized IR.
         ///
         /// <para><b>This threw until Phase 5, and it was right to.</b> On IRBuilder output a
         /// constant is operand-only and never an entry in <c>block.Instructions</c>, so
@@ -3128,39 +3400,39 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// the instruction list, and every shipping route runs that pass unconditionally.</para>
         ///
         /// <para><b>Emitting nothing is correct here, and this is the one place in this file
-        /// where that is true</b> — the surrounding rule against silencing a Visit exists
+        /// where that is true</b> â€” the surrounding rule against silencing a Visit exists
         /// because a no-op usually hides a dropped side effect. Two facts make this node the
         /// exception, and BOTH matter:</para>
         ///
-        /// <para>1. <see cref="Expr"/> renders a constant INLINE unconditionally — its
+        /// <para>1. <see cref="Expr"/> renders a constant INLINE unconditionally â€” its
         /// <c>IRConstant</c> arm returns the literal without ever consulting
         /// <c>_boundNames</c>, unlike every other value-producing node. So no consumer can
         /// ever refer to a constant by name, and a binding would be a declaration nobody
         /// reads.</para>
         ///
-        /// <para>2. The name is <c>$"const_{value}"</c> — derived from the VALUE, so it is
+        /// <para>2. The name is <c>$"const_{value}"</c> â€” derived from the VALUE, so it is
         /// neither unique nor stable through <see cref="SanitizeName"/>: three folded
         /// <c>True</c>s all want <c>const_True</c>, and <c>-5</c> and <c>5</c> both sanitize
         /// to <c>const_5</c>. Binding therefore emits duplicate <c>const</c> declarations,
         /// which is a SyntaxError that stops the whole module parsing.</para>
         ///
-        /// <para>⚠ This shipped briefly as a binding, and <c>If x &gt; 0 And y &gt; 0</c> was
+        /// <para>âš  This shipped briefly as a binding, and <c>If x &gt; 0 And y &gt; 0</c> was
         /// enough to produce <c>const const_True</c> three times over. Pinned by
         /// JavaScriptOptimizedExecutionTests.</para>
         /// </summary>
         public void Visit(IRConstant constant) { }
         public void Visit(IRVariable variable) => throw NotYet(nameof(IRVariable));
         // Value-producing instructions declare their result, and every later reference is by
-        // name (see Expr). `const` because the IR is SSA — each temp is assigned exactly once,
+        // name (see Expr). `const` because the IR is SSA â€” each temp is assigned exactly once,
         // so a rebind would be a bug worth having the JS engine catch.
         public void Visit(IRBinaryOp binaryOp) => Bind(binaryOp, BinaryExpr(binaryOp));
 
         public void Visit(IRUnaryOp unaryOp) => Bind(unaryOp, UnaryExpr(unaryOp));
         // VariableRef, not SanitizeName: an assignment whose target is an unqualified class
-        // member must become `this.X = …`, or it writes a fresh global instead.
+        // member must become `this.X = â€¦`, or it writes a fresh global instead.
         public void Visit(IRAssignment assignment) =>
             Line($"{VariableRef(assignment.Target)} = {Expr(assignment.Value)};");
-        // A load produces no statement — Expr renders it at the use site.
+        // A load produces no statement â€” Expr renders it at the use site.
         public void Visit(IRLoad load) { }
 
         public void Visit(IRStore store)
@@ -3172,11 +3444,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // already a no-op), and rendering the address threw
             // NotYet("IRAlloca (as an expression)") before any JS existed.
             //
-            // ⛔ SKIPPING THE STORE IS SAFE, BUT NOT FOR THE REASON IT IS TEMPTING TO GIVE. It is
+            // â›” SKIPPING THE STORE IS SAFE, BUT NOT FOR THE REASON IT IS TEMPTING TO GIVE. It is
             // NOT true that "an IRAssignment always follows because TryRenameToVariable never
             // renames an IRArrayAlloc". The alloca+store pair is emitted for EVERY array-typed
             // local, while the IRAssignment is emitted ONLY when that rename DECLINES (:683-687)
-            // — and it ACCEPTS any non-foreign IRCall/IRAwait (:243-250). The node list is not
+            // â€” and it ACCEPTS any non-foreign IRCall/IRAwait (:243-250). The node list is not
             // what protects this.
             //
             // What holds today is narrower and more fragile: no array-typed local can currently
@@ -3186,12 +3458,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // parse errors), `Dim a() As Byte = Convert.FromBase64String(...)` is refused with
             // "Cannot assign value of type 'Object'", and `s.Split(",")` is parsed as an ARRAY
             // INDEX ("Array index must be an integer type"). So the rename never fires for this
-            // shape — by front-end gap, not by design.
+            // shape â€” by front-end gap, not by design.
             //
-            // ⚠ THEREFORE: if array return types or the `.Split` parse are ever fixed, this skip
+            // âš  THEREFORE: if array return types or the `.Split` parse are ever fixed, this skip
             // must be RE-DERIVED, not assumed. The value would then reach `a` through Bind's
             // declared-local arm (:1552) binding the renamed value, with IsUsed true via
-            // IROperandWalker's IRStore arm (IROperandWalker.cs:72-75) — that is the path to
+            // IROperandWalker's IRStore arm (IROperandWalker.cs:72-75) â€” that is the path to
             // re-verify. Do not widen this skip on the strength of the node list above.
             //
             // The C# backend renders the alloca as its variable and lives with a duplicate
@@ -3204,15 +3476,15 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var value = Expr(store.Value);
 
             // `Dim a[] As Integer = {1, 2}` stores the literal into the local's `a_addr` slot AND
-            // renames the literal to `a` — the store would read `a = a;`. Skip it.
+            // renames the literal to `a` â€” the store would read `a = a;`. Skip it.
             if (store.Address is IRAlloca && target == value) return;
 
             Line($"{target} = {value};");
         }
 
         /// <summary>
-        /// ⛔ Indices NEST as <c>[i][j]</c>. Joining them <c>[i, j]</c> — what the C# backend
-        /// emits for its own target — is VALID JavaScript: the comma operator discards every
+        /// â›” Indices NEST as <c>[i][j]</c>. Joining them <c>[i, j]</c> â€” what the C# backend
+        /// emits for its own target â€” is VALID JavaScript: the comma operator discards every
         /// index but the last and evaluates to <c>a[j]</c>. No syntax error, no exception, just
         /// a silently wrong element.
         /// </summary>
@@ -3225,7 +3497,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
         public void Visit(IRCall call)
         {
-            // DEFENCE IN DEPTH — do not delete this now that BL7002 checks declarations.
+            // DEFENCE IN DEPTH â€” do not delete this now that BL7002 checks declarations.
             // ByRefArguments has a second source the declaration walk cannot see: a resolved
             // .NET target carries ref/out in its descriptor (IRBuilder.cs:3585), so no
             // BasicLang parameter is marked IsByRef and JsCapabilityChecker finds nothing.
@@ -3247,8 +3519,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// The three event statements, which IRBuilder lowers to CALLS by convention:
-        /// <c>AddHandler e, h</c> → <c>Delegate.Combine(e, h)</c>, <c>RemoveHandler</c> →
-        /// <c>Delegate.Remove</c>, <c>RaiseEvent X(args)</c> → <c>raise_X(args)</c>. An event
+        /// <c>AddHandler e, h</c> â†’ <c>Delegate.Combine(e, h)</c>, <c>RemoveHandler</c> â†’
+        /// <c>Delegate.Remove</c>, <c>RaiseEvent X(args)</c> â†’ <c>raise_X(args)</c>. An event
         /// is a Set of handlers on the instance (see EmitClass), so these are <c>add</c>,
         /// <c>delete</c>, and a loop. MEASURED before: the whole class was refused, and had it
         /// not been, <c>raise_X</c> would have been a call to nothing.
@@ -3262,9 +3534,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var name = call.FunctionName ?? string.Empty;
             var args = call.Arguments ?? new List<IRValue>();
 
-            // Spec §4.4 (Task 12): an event is an invocation LIST. AddHandler appends; RemoveHandler takes the LAST equal
+            // Spec Â§4.4 (Task 12): an event is an invocation LIST. AddHandler appends; RemoveHandler takes the LAST equal
             // delegate (__blSameDelegate: the same function, or the same instance + method); a raise iterates a COPY,
-            // so a handler added or removed during the raise takes effect from the next one — .NET's rules. (Before: a
+            // so a handler added or removed during the raise takes effect from the next one â€” .NET's rules. (Before: a
             // Set, `delete` of a fresh `.bind` found nothing, and the live Set ran a handler added mid-raise.)
             if (name == "Delegate.Combine" && args.Count == 2)
             {
@@ -3302,12 +3574,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var rendered = call.Arguments.ConvertAll(Expr);
 
             // ADR-0010 D8: a call through a delegate VALUE invokes that value, rendered like any
-            // other operand — as IRCall.CalleeValue documents — and never its FunctionName, which
-            // is only the value's IR name. ⛔ A delegate-typed field read bare (#188) is named
+            // other operand â€” as IRCall.CalleeValue documents â€” and never its FunctionName, which
+            // is only the value's IR name. â›” A delegate-typed field read bare (#188) is named
             // after the FIELD, and CallTarget spells a bare name unqualified: `Callback()`,
             // "Callback is not defined", where the value is `this.Callback`. Anything that is not
             // a plain name or member chain (an inline arrow function, above all) is parenthesised,
-            // or `(x) => {…}(5)` would not even parse.
+            // or `(x) => {â€¦}(5)` would not even parse.
             if (call.CalleeValue != null)
             {
                 var callee = Expr(call.CalleeValue);
@@ -3326,7 +3598,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             }
 
             // String builtins arrive as a BARE FunctionName, which CallTarget would pass
-            // straight through as if it were a user function — emitting `Len(s)`, a call to
+            // straight through as if it were a user function â€” emitting `Len(s)`, a call to
             // something that exists nowhere in JavaScript. They also cannot be expressed as a
             // renamed callee, since `Len(s)` becomes the MEMBER expression `s.length`, so they
             // are rendered whole here.
@@ -3357,12 +3629,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (TryStdLib(call.FunctionName, rendered, out var stdlib, call.IsIntrinsic))
                 return stdlib;
 
-            // ⛔ A VB-qualified built-in (IRCall.IsIntrinsic) with no row above is REFUSED — never handed to
-            // CallTarget, which would resolve the bare name against the class (`this.Len(…)`) or a user
+            // â›” A VB-qualified built-in (IRCall.IsIntrinsic) with no row above is REFUSED â€” never handed to
+            // CallTarget, which would resolve the bare name against the class (`this.Len(â€¦)`) or a user
             // procedure: the qualified spelling always means VB's function.
             if (call.IsIntrinsic) throw NoLowering(call.FunctionName);
 
-            // ⛔ A call the IR builder OWNED by a Module (CalleeModule) is the Module's procedure even
+            // â›” A call the IR builder OWNED by a Module (CalleeModule) is the Module's procedure even
             // where the class, or a base, has a method of that name: the IR builder already applied VB's
             // class-scope-first rule (a written `Util.Hello()`, or a base's inaccessible Private method).
             // Resolving it against the class again here called Base.Hello where C# called Util.Hello.
@@ -3390,7 +3662,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "Console.Write":
                     result = $"process.stdout.write({TextOf(arg, rendered[0], mustBeString: true, nothingIsEmpty: true)})";
                     return true;
-                default: // CStr — unless the program declares its own, which must win.
+                default: // CStr â€” unless the program declares its own, which must win.
                     if (_userFunctionNames.Contains(name)) return false;
                     result = TextOf(arg, rendered[0], mustBeString: true);
                     return true;
@@ -3399,18 +3671,18 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// The VB conversion rules JavaScript's own coercions get wrong, keyed on the argument's
-        /// SOURCE type (<c>CType(x, T)</c> lowers to these same calls — IRBuilder.ConversionBuiltinFor):
+        /// SOURCE type (<c>CType(x, T)</c> lowers to these same calls â€” IRBuilder.ConversionBuiltinFor):
         /// <list type="bullet">
         /// <item>A Boolean converts to a number as <b>True = -1</b>, False = 0 (VB's CInt(True) is
         /// -1; <c>__blCInt(true)</c> and <c>Number(true)</c> both answered 1).</item>
         /// <item><c>CBool</c> of a String parses: "True"/"False" in any case, else a number, else it
-        /// throws, as VB's InvalidCastException. <c>Boolean("False")</c> is <c>true</c> — any
-        /// non-empty string is — so <c>CBool("False")</c> and <c>CBool("0")</c> printed True.</item>
+        /// throws, as VB's InvalidCastException. <c>Boolean("False")</c> is <c>true</c> â€” any
+        /// non-empty string is â€” so <c>CBool("False")</c> and <c>CBool("0")</c> printed True.</item>
         /// </list>
         /// Rendered inline (an arrow for the String parse) so no prelude scan is needed.
         /// </summary>
         /// <summary>
-        /// VB's <c>Val</c> and <c>Str</c> (Task 7d review — both were a run-time ReferenceError here). Val:
+        /// VB's <c>Val</c> and <c>Str</c> (Task 7d review â€” both were a run-time ReferenceError here). Val:
         /// blanks, tabs and line breaks stripped; <c>&amp;H</c>/<c>&amp;O</c> hexadecimal/octal, a value that
         /// fits 16 bits a Short and 32 bits an Integer (<c>Val("&amp;HFFFF")</c> is -1); otherwise the longest
         /// leading number (sign, digits, one '.', an E/D exponent), 0 when there is none. Str: the number's
@@ -3487,14 +3759,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Emits nothing: the access is rendered inline by Expr, as an L-value. See the
         // IRGetElementPtr arm there for why binding it to a temp drops writes.
         public void Visit(IRGetElementPtr gep) { }
-        // A numeric WIDENING cast — what IRBuilder inserts so `/` divides in floating point
+        // A numeric WIDENING cast â€” what IRBuilder inserts so `/` divides in floating point
         // rather than truncating its integral operands first. In JavaScript every number is
         // already an IEEE double, so the widening is a no-op and the destination simply binds
         // the operand.
         //
-        // ⛔ ONLY numeric shapes. CType is genuinely unimplemented on this backend, and passing
+        // â›” ONLY numeric shapes. CType is genuinely unimplemented on this backend, and passing
         // an arbitrary cast through silently would convert an unsupported construct into a
-        // miscompile — the exact trade this file's NotYet() exists to refuse.
+        // miscompile â€” the exact trade this file's NotYet() exists to refuse.
         public void Visit(IRCast cast)
         {
             if (TryNumericCast(cast, out var rendered) || TryReferenceCast(cast, out rendered))
@@ -3507,14 +3779,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// A cast between REFERENCES — <c>CType</c>/<c>DirectCast</c>/<c>TryCast</c> to a class, an
+        /// A cast between REFERENCES â€” <c>CType</c>/<c>DirectCast</c>/<c>TryCast</c> to a class, an
         /// interface or an array. There was no lowering at all ("IRCast lowering is not implemented
         /// yet"), so any program with one failed its whole build. (A cast to a primitive never gets
-        /// here: IRBuilder lowers it to the matching CInt/CStr/… call.)
+        /// here: IRBuilder lowers it to the matching CInt/CStr/â€¦ call.)
         /// <list type="bullet">
         /// <item>A user CLASS target is checked with <c>instanceof</c>: <c>TryCast</c> answers
         /// <c>null</c> for the wrong type, and <c>CType</c>/<c>DirectCast</c> throw VB's
-        /// InvalidCastException for a non-null value of the wrong type — never pass it on to fail
+        /// InvalidCastException for a non-null value of the wrong type â€” never pass it on to fail
         /// later somewhere else.</item>
         /// <item>An interface, an array or an <c>Extern Class</c> target is the value itself: JS has
         /// no interfaces to test, an array is already an array, and an Extern class may not exist
@@ -3543,12 +3815,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return true;
             }
 
-            // ⛔ A TypeOf test must TEST. Passing the value through (right for a cast to an
+            // â›” A TypeOf test must TEST. Passing the value through (right for a cast to an
             // interface, which JS cannot check) would make `TypeOf x Is IShape` True for every
-            // non-null object — a green build with the wrong branch taken.
+            // non-null object â€” a green build with the wrong branch taken.
             if (cast.IsTypeOfTest)
                 throw new ForeignFeatureException(
-                    $"BL7013: 'TypeOf … Is {target.Name}' cannot be tested on JavaScript — it has no " +
+                    $"BL7013: 'TypeOf â€¦ Is {target.Name}' cannot be tested on JavaScript â€” it has no " +
                     "interfaces (and no class to test for an Extern type), so every object would " +
                     "match. Test for a class instead, or add a method to the interface that answers.");
 
@@ -3559,37 +3831,37 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Renders a numeric <see cref="IRCast"/>, or reports that this is not one.
         ///
-        /// <para>⛔ <b>Narrowing is NOT a no-op here, and the note that used to sit above
+        /// <para>â›” <b>Narrowing is NOT a no-op here, and the note that used to sit above
         /// <see cref="Visit(IRCast)"/> was right to say so.</b> Every JS number is an IEEE double,
         /// so a Double reaching an Integer slot keeps its fraction unless something removes it:
         /// <c>Function Half(v As Integer) As Integer : Return v / 2</c> returned <c>3.5</c> for
-        /// <c>Half(7)</c> — a wrong answer from a build that succeeded. It only looked correct
+        /// <c>Half(7)</c> â€” a wrong answer from a build that succeeded. It only looked correct
         /// for inputs whose quotient was already whole.</para>
         ///
-        /// <para>⚠ It ROUNDS HALF-TO-EVEN, via the same helper <c>CInt</c> lowers to. This note
+        /// <para>âš  It ROUNDS HALF-TO-EVEN, via the same helper <c>CInt</c> lowers to. This note
         /// used to say <c>Math.trunc</c> "matches what the C++ and MSIL backends do ... that
         /// disagrees with VB.NET's banker's rounding, which is a pre-existing decision about the
-        /// whole narrowing surface and not this function's to make" — correct at the time, and
+        /// whole narrowing surface and not this function's to make" â€” correct at the time, and
         /// that decision has since been made: the whole narrowing surface rounds, so
         /// <c>7 / 2</c> into an Integer is <b>4</b> on all four backends, not 3. VB rounds it.</para>
         ///
-        /// <para>⚠ A floating→<c>Long</c> cast DOES reach this backend, although no declared
+        /// <para>âš  A floatingâ†’<c>Long</c> cast DOES reach this backend, although no declared
         /// position may be Long: IRBuilder inserts one on each floating operand of <c>\</c>
-        /// (ADR-0005 D1). It takes the floating arm above like any other narrowing — the helper
+        /// (ADR-0005 D1). It takes the floating arm above like any other narrowing â€” the helper
         /// rounds without an int32 wrap, and the value never leaves an expression.</para>
         ///
-        /// <para>⛔ Integral→integral is NOT handled, and a <c>| 0</c> arm for it was written here
+        /// <para>â›” Integralâ†’integral is NOT handled, and a <c>| 0</c> arm for it was written here
         /// and then removed as unreachable speculation. Measured: <c>Long</c> never reaches this
-        /// backend in a DECLARED position (<c>JsCapabilityChecker</c> rejects it with BL7003 — a
-        /// JS number is exact only to 2^53), and <c>Function … As Short</c> returning an Integer produces NO
+        /// backend in a DECLARED position (<c>JsCapabilityChecker</c> rejects it with BL7003 â€” a
+        /// JS number is exact only to 2^53), and <c>Function â€¦ As Short</c> returning an Integer produces NO
         /// cast, because the analyzer already types the expression <c>Short</c>. With no shape
-        /// that reaches it, the arm could not be tested, so it keeps throwing — this file's
+        /// that reaches it, the arm could not be tested, so it keeps throwing â€” this file's
         /// <c>NotYet()</c> exists to refuse exactly that trade. (A Short return not being wrapped
         /// to 16 bits is a real defect, but it is the analyzer's, and it is not this seam's.)
-        /// ⚠ That premise has one known exception, measured 2026-09-24 and refused identically
+        /// âš  That premise has one known exception, measured 2026-09-24 and refused identically
         /// before and after ADR-0005 D1: the analyzer types <c>x \ y</c> with a floating operand
         /// Long, so <c>Dim i As Integer = 7.5 \ 2</c> (or returning it As Integer) narrows
-        /// Long→Integer here and is refused. Deciding that arm is its own change.</para>
+        /// Longâ†’Integer here and is refused. Deciding that arm is its own change.</para>
         /// </summary>
         private bool TryNumericCast(IRCast cast, out string rendered)
         {
@@ -3599,7 +3871,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (source == null || target == null) return false;
 
             // An Enum widened to a number (VB's implicit `Dim n As Integer = Shade.Keyed`), or a number made an Enum
-            // (`CType(i, Shade)` — the only Integer → Enum route, the library's key code → Keys): the member IS its number
+            // (`CType(i, Shade)` â€” the only Integer â†’ Enum route, the library's key code â†’ Keys): the member IS its number
             // here, so the value is unchanged either way.
             if (source.Kind == TypeKind.Enum && target.IsNumeric()
                 || source.IsNumeric() && target.Kind == TypeKind.Enum
@@ -3609,7 +3881,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return true;
             }
 
-            // Widening to floating point, and Single↔Double: the double already holds it.
+            // Widening to floating point, and Singleâ†”Double: the double already holds it.
             if (target.IsFloatingPoint() && (source.IsIntegral() || source.IsFloatingPoint()))
             {
                 rendered = Expr(cast.Value);
@@ -3632,8 +3904,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRLabel label) => throw NotYet(nameof(IRLabel));
         public void Visit(IRComment comment) => throw NotYet(nameof(IRComment));
         // Task 24a. An array literal is an allocation of N slots followed by N index stores; both
-        // arms are required (the renderer rebuilds operand trees). ⛔ The expression arm returns the
-        // BOUND name when the alloc already appeared in block.Instructions — the M4 shape passes the
+        // arms are required (the renderer rebuilds operand trees). â›” The expression arm returns the
+        // BOUND name when the alloc already appeared in block.Instructions â€” the M4 shape passes the
         // temp as a call argument AFTER its stores, and re-rendering it inline would allocate a
         // second, empty array.
         public void Visit(IRArrayAlloc arrayAlloc) => Bind(arrayAlloc, ArrayAlloc(arrayAlloc));
@@ -3643,7 +3915,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private static string ArrayAlloc(IRArrayAlloc a) => $"new Array({a.Size})";
         // `await` binds tighter than most operators but not all, so the operand is
-        // parenthesised — `await a + b` would await only `a`.
+        // parenthesised â€” `await a + b` would await only `a`.
         private string AwaitExpr(IRAwait a) => $"await {Receiver(Expr(a.Expression))}";
 
         public void Visit(IRAwait awaitInst) => EmitValueOrStatement(awaitInst, AwaitExpr(awaitInst));
@@ -3658,9 +3930,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string NewObject(IRNewObject n)
         {
-            // ⛔ THE FOURTH `::` SITE, and the one it is easiest to forget. ForeignFeatureChecker's
+            // â›” THE FOURTH `::` SITE, and the one it is easiest to forget. ForeignFeatureChecker's
             // IRNewObject arm used to refuse every `::` class name; it now steps aside for this
-            // backend, so this is what stops `New std::mutex()` emitting `new stdmutex()` — a
+            // backend, so this is what stops `New std::mutex()` emitting `new stdmutex()` â€” a
             // ReferenceError in the browser from a build that reported success. It also makes
             // `New ::Chart(ctx)` work, which is the same passthrough the call sites give.
             // Checked BEFORE the collection mapping: a `::` name is raw JS and is never a
@@ -3668,19 +3940,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (ForeignName(n.ClassName, out var foreignClass))
                 return $"new {foreignClass}({string.Join(", ", n.Arguments.ConvertAll(Expr))})";
 
-            // Collections lower to NATIVE JS types. `new List()` would be a ReferenceError —
+            // Collections lower to NATIVE JS types. `new List()` would be a ReferenceError â€”
             // there is no List in JavaScript. Array and Map are reference types, which is what
             // gives these the .NET reference semantics the spec requires, for free.
             var kind = CollectionKindOf(n.ClassName);
             if (kind != CollectionKind.None)
             {
-                // ⛔ Arguments must NOT be forwarded, and must NOT be dropped either.
-                // `New List(Of Integer)(64)` is a CAPACITY — `new Array(64)` would create 64
+                // â›” Arguments must NOT be forwarded, and must NOT be dropped either.
+                // `New List(Of Integer)(64)` is a CAPACITY â€” `new Array(64)` would create 64
                 // holes, and ignoring it silently yields an empty list. The copy form
                 // `New List(Of T)(other)` is worse: `new Array(other)` is a ONE-element array.
                 // Neither has a safe silent lowering, so refuse the argument forms.
                 if (n.Arguments != null && n.Arguments.Count > 0)
-                    throw NotYet($"New {n.ClassName}(…) with constructor arguments");
+                    throw NotYet($"New {n.ClassName}(â€¦) with constructor arguments");
 
                 switch (kind)
                 {
@@ -3694,11 +3966,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// A class name as JavaScript will resolve it — in the DECLARATION's casing.
+        /// A class name as JavaScript will resolve it â€” in the DECLARATION's casing.
         /// BasicLang is case-insensitive and JavaScript is not, so <c>New myerror()</c> against
         /// <c>Class MyError</c> must emit <c>new MyError()</c>; the IR carries the use-site
         /// spelling. A provided exception type maps to its canonical .NET spelling, and a
-        /// <c>…Exception</c> that is neither declared nor provided is refused (BL7012) rather
+        /// <c>â€¦Exception</c> that is neither declared nor provided is refused (BL7012) rather
         /// than emitted as a name nothing defines.
         /// </summary>
         private string ClassReference(string name)
@@ -3758,13 +4030,13 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <c>this.X</c>.
         ///
         /// <para><b>Why this is mandatory.</b> Inside a method, <c>Count = Count + 1</c> does
-        /// not produce an IRFieldAccess — IRBuilder's identifier resolution has no arm for
+        /// not produce an IRFieldAccess â€” IRBuilder's identifier resolution has no arm for
         /// class fields, so it yields a bare IRVariable that is neither a parameter nor a
         /// local. C# and C++ survive on implicit <c>this.</c> resolution; JavaScript does not,
         /// and an ES module is always strict, so the bare name is a ReferenceError at runtime
         /// from a build that reported success.</para>
         ///
-        /// <para>Parameters and locals SHADOW members, so they are checked first — rewriting a
+        /// <para>Parameters and locals SHADOW members, so they are checked first â€” rewriting a
         /// shadowed name would silently read the wrong value.</para>
         /// </summary>
         private IRModule _module;
@@ -3783,20 +4055,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Renders a lambda INLINE as an arrow function.
         ///
-        /// <para><b>Why inline is the only workable route.</b> The alternative — hoist
-        /// <c>__lambda_N</c> to a top-level function and pass its captures as parameters —
+        /// <para><b>Why inline is the only workable route.</b> The alternative â€” hoist
+        /// <c>__lambda_N</c> to a top-level function and pass its captures as parameters â€”
         /// would need a declared free-variable list, and <c>IRFunction.CapturedVariables</c> is
         /// not one. It was ALWAYS EMPTY when this was measured (populated from a list IRBuilder
         /// never filled): a hoisted body referenced every captured variable as a FREE
-        /// identifier — a ReferenceError at runtime from a build that reported success, with
+        /// identifier â€” a ReferenceError at runtime from a build that reported success, with
         /// the non-capturing lambda tests passing while all three capture tests failed. Since
         /// task #122 it holds the lambda's capture SET, which is a name-based OVER-approximation
         /// built for the optimizer's kill rule (it includes the lambda's own locals, temps,
-        /// members and globals, and some entries carry no type) — still not something a hoisted
+        /// members and globals, and some entries carry no type) â€” still not something a hoisted
         /// function could take as its parameter list.</para>
         ///
         /// <para>Emitted where the value is used, so JavaScript's lexical scope does the
-        /// capture — and captures by REFERENCE, matching BasicLang. Passing captures as
+        /// capture â€” and captures by REFERENCE, matching BasicLang. Passing captures as
         /// parameters would copy them, which is wrong for a lambda that writes one.</para>
         /// </summary>
         private string RenderLambda(IRFunction fn)
@@ -3815,11 +4087,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var savedBound = new HashSet<string>(_boundNames, StringComparer.Ordinal);
             var savedSequences = new HashSet<string>(_sequenceValued, StringComparer.Ordinal);
 
-            // ⛔ SOURCE MAP: this method renders into the shared buffer and then REWINDS it,
+            // â›” SOURCE MAP: this method renders into the shared buffer and then REWINDS it,
             // handing the text back to be re-emitted somewhere else at a different position
             // and a different indent. Any mapping recorded in between describes output lines
             // that are about to stop existing, so they are DISCARDED at the end rather than
-            // re-based — re-basing would need to know where the enclosing expression finally
+            // re-based â€” re-basing would need to know where the enclosing expression finally
             // lands, which the caller decides after this returns.
             //
             // The cost is honest: no stepping INSIDE a lambda body, with the enclosing
@@ -3834,9 +4106,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             _boundNames.Clear();
             _sequenceValued.Clear();
 
-            // ⛔ The ENCLOSING scope's names stay declared inside the lambda. An arrow function
+            // â›” The ENCLOSING scope's names stay declared inside the lambda. An arrow function
             // captures by lexical scope, so an assignment to a captured local must be an
-            // assignment — MEASURED with a fresh set: `Sub(x) total = total + x` emitted
+            // assignment â€” MEASURED with a fresh set: `Sub(x) total = total + x` emitted
             // `const total = ((total + x) | 0)` inside the arrow (IRBuilder names the result
             // after the variable), a TDZ ReferenceError, and the accumulator never changed.
             // The lambda's OWN parameters and locals still shadow: they are tracked separately
@@ -3896,7 +4168,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // identifier. Returns BEFORE the member-name logic below on purpose: `::console` is a
             // global, and prefixing `this.` to it would be nonsense.
             //
-            // ⚠ This is the site that carries `::console.log(x)` — the dotted form's `::` lives on
+            // âš  This is the site that carries `::console.log(x)` â€” the dotted form's `::` lives on
             // the RECEIVER, not on the method name, so CallTarget never sees it.
             if (ForeignName(v.Name, out var foreign)) return foreign;
 
@@ -3912,7 +4184,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// ByRef is re-checked here because IRInstanceMethodCall carries its OWN
-        /// ByRefArguments list — a separate channel from IRCall's, which the declaration walk
+        /// ByRefArguments list â€” a separate channel from IRCall's, which the declaration walk
         /// cannot see for a resolved .NET target.
         /// </summary>
         private string InstanceCall(IRInstanceMethodCall mc)
@@ -3923,10 +4195,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var args = mc.Arguments.ConvertAll(Expr);
             var receiver = Expr(mc.Object);
 
-            // ⚠ THE FOREIGN ARM RUNS FIRST, matching the ordering rule CallTarget states: a `::`
+            // âš  THE FOREIGN ARM RUNS FIRST, matching the ordering rule CallTarget states: a `::`
             // name is raw JavaScript and must not be INTERPRETED by any arm below it. It used to
             // sit last, which was harmless only because a foreign receiver types
-            // CollectionKind.None so both rewrites decline — a property of the TYPE TABLE, not of
+            // CollectionKind.None so both rewrites decline â€” a property of the TYPE TABLE, not of
             // this method, and nothing pinned it. Running the guard first makes the invariant
             // local to the code that depends on it.
             //
@@ -3966,12 +4238,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return linq;
             }
 
-            // ⛔ `obj.SharedMethod()` — legal BasicLang, and it emitted `obj.Read()`, which is a
+            // â›” `obj.SharedMethod()` â€” legal BasicLang, and it emitted `obj.Read()`, which is a
             // TypeError because a JS static does not live on the instance. It compiled clean and
             // died at run time. The call goes to the DECLARING class instead.
             //
-            // ⚠ The RECEIVER IS STILL EVALUATED, because it may have side effects and VB
-            // evaluates it — `Make().Shared()` must still run Make(). A bare identifier cannot
+            // âš  The RECEIVER IS STILL EVALUATED, because it may have side effects and VB
+            // evaluates it â€” `Make().Shared()` must still run Make(). A bare identifier cannot
             // have any, so the common case stays clean; anything else rides a comma expression,
             // which keeps both the effect and its order. MSIL does the same thing by evaluating
             // and then popping.
@@ -3985,7 +4257,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
 
         /// <summary>
-        /// The collection kind of a call receiver — by declared type, else by the side table of
+        /// The collection kind of a call receiver â€” by declared type, else by the side table of
         /// LINQ results. See <see cref="_sequenceValued"/> for why the type alone is not enough.
         /// </summary>
         private CollectionKind ReceiverKind(IRValue receiver)
@@ -4005,7 +4277,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// lazy sequence re-evaluated on each enumeration; <c>.filter</c> returns a materialised
         /// Array. So mutating the source after the call is invisible to the result here, where
         /// on .NET it would show up. This is the plan's chosen lowering and it is pinned by a
-        /// test rather than left to be discovered — the alternative (generator-based lazy
+        /// test rather than left to be discovered â€” the alternative (generator-based lazy
         /// helpers) would break <c>.Count</c> and indexing on the result.</para>
         ///
         /// <para><paramref name="yieldsSequence"/> reports whether the RESULT is itself an
@@ -4033,8 +4305,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "distinct" when args.Count == 0:
                     yieldsSequence = true; result = $"[...new Set({receiver})]"; return true;
 
-                // ⚠ `.reverse()` and `.sort()` mutate IN PLACE and return the same Array.
-                // `OrderBy` does not touch its source, so both copy first — without the
+                // âš  `.reverse()` and `.sort()` mutate IN PLACE and return the same Array.
+                // `OrderBy` does not touch its source, so both copy first â€” without the
                 // `.slice()` a sort would silently reorder the caller's list.
                 case "reverse" when args.Count == 0:
                     yieldsSequence = true; result = $"{receiver}.slice().reverse()"; return true;
@@ -4062,7 +4334,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     result = $"{receiver}.map({args[0]}).reduce((a, b) => a + b, 0)"; return true;
             }
 
-            // Everything else that LOOKS like LINQ is refused rather than approximated —
+            // Everything else that LOOKS like LINQ is refused rather than approximated â€”
             // see LinqRejection for why these have no honest one-line lowering.
             if (JsCapabilityChecker.IsUnlowerableLinqOperator(method))
                 throw JsCapabilityChecker.LinqRejection(method);
@@ -4072,7 +4344,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// A key-comparator sort. <c>.sort()</c> with no argument compares elements as STRINGS,
-        /// so <c>[10, 9, 1]</c> sorts to <c>[1, 10, 9]</c> — wrong, and silently so. The
+        /// so <c>[10, 9, 1]</c> sorts to <c>[1, 10, 9]</c> â€” wrong, and silently so. The
         /// relational form below orders numbers and strings alike without assuming either.
         /// </summary>
         private static string OrderBy(string receiver, string keySelector, bool descending)
@@ -4084,9 +4356,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// <c>List.Sort</c>. With a comparer it is <c>Array.prototype.sort</c>'s contract exactly
-        /// — negative / zero / positive — so <c>l.Sort(AddressOf Desc)</c> is <c>l.sort(Desc)</c>.
+        /// â€” negative / zero / positive â€” so <c>l.Sort(AddressOf Desc)</c> is <c>l.sort(Desc)</c>.
         ///
-        /// <para>⛔ Without one, JavaScript's default sort is LEXICOGRAPHIC even for numbers:
+        /// <para>â›” Without one, JavaScript's default sort is LEXICOGRAPHIC even for numbers:
         /// <c>[10, 9, 1].sort()</c> is <c>[1, 10, 9]</c>, from a build that succeeded. So a
         /// numeric element type gets a numeric comparator, <c>String</c> keeps the default, and
         /// any other element type is refused rather than silently misordered.</para>
@@ -4097,8 +4369,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (args.Count != 0) throw NotYet("List.Sort with more than one argument");
 
             var element = mc.Object?.Type?.GenericArguments?.FirstOrDefault();
-            // ⛔ `a - b` is NaN for any pair with a NaN, which Array.prototype.sort treats as
-            // "equal" — an inconsistent comparator, and the NaN stayed wherever it was. MEASURED:
+            // â›” `a - b` is NaN for any pair with a NaN, which Array.prototype.sort treats as
+            // "equal" â€” an inconsistent comparator, and the NaN stayed wherever it was. MEASURED:
             // [2.5, NaN, -1, 0.5] sorted to 2.5, NaN, -1, 0.5. .NET sorts NaN FIRST.
             if (element != null && element.IsFloatingPoint())
                 return $"{receiver}.sort((a, b) => a !== a ? (b !== b ? 0 : -1) : b !== b ? 1 : a - b)";
@@ -4111,7 +4383,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// Renames a collection method onto its native JS equivalent. Emitting the BasicLang
-        /// name verbatim would call a member that does not exist — an Array has
+        /// name verbatim would call a member that does not exist â€” an Array has
         /// <c>push</c>, not <c>Add</c>.
         /// </summary>
         private static bool TryCollectionMethod(CollectionKind kind, string method, string receiver,
@@ -4131,7 +4403,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     case "indexof" when args.Count == 1: result = $"{receiver}.indexOf({args[0]})"; return true;
                     case "removeat" when args.Count == 1: result = $"{receiver}.splice({args[0]}, 1)"; return true;
                     case "insert" when args.Count == 2: result = $"{receiver}.splice({args[0]}, 0, {args[1]})"; return true;
-                    // List.ForEach(Sub(x) …) is the everyday shape a Sub lambda appears in.
+                    // List.ForEach(Sub(x) â€¦) is the everyday shape a Sub lambda appears in.
                     // MEASURED before this arm: emitted verbatim, "items.ForEach is not a function".
                     case "foreach" when args.Count == 1: result = $"{receiver}.forEach({args[0]})"; return true;
                     // Array has no Clear; length = 0 empties it IN PLACE, which preserves the
@@ -4167,10 +4439,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// `.Length` on a BasicLang array or String, which must be renamed to JavaScript's
         /// `.length`.
         ///
-        /// <para>⛔ NOT on a FOREIGN receiver. `::s.Length` is a member of a raw JavaScript
+        /// <para>â›” NOT on a FOREIGN receiver. `::s.Length` is a member of a raw JavaScript
         /// object, and the hatch's whole promise is that such a name reaches the output exactly
         /// as written. MEASURED before the gate existed: <c>Console.WriteLine(::s.Length)</c>
-        /// emitted <c>console.log(s.length)</c> — right by accident for a DOM string, and a
+        /// emitted <c>console.log(s.length)</c> â€” right by accident for a DOM string, and a
         /// silent miscompile for any foreign object with a capital-`Length` property, from a
         /// build that reported success.</para>
         ///
@@ -4184,22 +4456,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         public void Visit(IRFieldAccess fieldAccess)
         {
-            // `.Length` is pure and renders inline via Expr — no statement needed.
+            // `.Length` is pure and renders inline via Expr â€” no statement needed.
             if (IsLengthAccess(fieldAccess)) return;
 
-            // ⛔ FieldAccess(...), never Expr(...): once the node is used, Expr returns its
-            // NAME, so binding through Expr emits `const t2 = t2;` — a self-reference and a
+            // â›” FieldAccess(...), never Expr(...): once the node is used, Expr returns its
+            // NAME, so binding through Expr emits `const t2 = t2;` â€” a self-reference and a
             // TDZ error. The renderer and the name lookup must stay separate.
             if (IsUsed(fieldAccess)) Bind(fieldAccess.Name, FieldAccess(fieldAccess));
         }
 
         private string FieldAccess(IRFieldAccess fa)
         {
-            // `MyBase.P` on a property: the BASE's getter (spec §4.5, Task 13) — `this.P` called the override itself.
+            // `MyBase.P` on a property: the BASE's getter (spec Â§4.5, Task 13) â€” `this.P` called the override itself.
             if (fa.ThroughBase)
                 return $"super.{SanitizeName(fa.FieldName)}";
 
-            // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). ⛔ Never the bare
+            // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). â›” Never the bare
             // member: `String.Empty` read a property of JavaScript's String constructor, which has none,
             // and `String.Empty & "x"` printed "undefinedx" from a clean build.
             if (fa.Object is IRVariable keywordRecv && PrimitiveStaticSurface.IsTypeKeyword(keywordRecv.Name))
@@ -4212,10 +4484,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             var receiver = Expr(fa.Object);
 
-            // ⚠ FIRST, ahead of every rewrite below. A member of a FOREIGN object is raw
+            // âš  FIRST, ahead of every rewrite below. A member of a FOREIGN object is raw
             // JavaScript and its spelling is the user's, not ours: `::el.Length` stays `.Length`
             // and `::el.Count` stays `.Count`. SanitizeName is not merely unnecessary here, it is
-            // WRONG — it maps `Me` to `this`, so `::obj.Me` MEASURED as `obj.this`, a read of an
+            // WRONG â€” it maps `Me` to `this`, so `::obj.Me` MEASURED as `obj.this`, a read of an
             // entirely different property from a green build.
             //
             // ForeignName still runs on the segment so an interior `::` is refused rather than
@@ -4240,7 +4512,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         }
         // Statement-only: it has no Name and can never be an operand.
         //
-        // A member of a FOREIGN object is raw JavaScript, spelled by the user — the same rule
+        // A member of a FOREIGN object is raw JavaScript, spelled by the user â€” the same rule
         // FieldAccess applies on reads (SanitizeName would turn `::obj.Me = 1` into `obj.this`).
         // Reachable since plan 2 Task 7 let a `::` member be assigned at all.
         public void Visit(IRFieldStore fieldStore)
@@ -4257,7 +4529,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// Try / Catch / Finally, all three native in JavaScript.
         ///
         /// <para>Like IRForEach this is an INSTRUCTION carrying its own blocks, not a
-        /// terminator — so the continuation lives in EndBlock and is emitted here.</para>
+        /// terminator â€” so the continuation lives in EndBlock and is emitted here.</para>
         ///
         /// <para>A <c>Return</c> inside the try is emitted as a plain <c>return</c>: the
         /// language guarantees the <c>finally</c> still runs, which is exactly the guarantee
@@ -4297,25 +4569,25 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// The <c>Catch</c> clauses as one JS <c>catch (_ex)</c> holding an <c>instanceof</c>
-        /// ladder — JavaScript has a single catch binding, and typed selection is done by hand:
+        /// ladder â€” JavaScript has a single catch binding, and typed selection is done by hand:
         /// <code>
         ///   } catch (_ex) {
-        ///       if (_ex instanceof InvalidOperationException) { const e = _ex; … }
-        ///       else if (_ex instanceof ArgumentException)    { const a = _ex; … }
+        ///       if (_ex instanceof InvalidOperationException) { const e = _ex; â€¦ }
+        ///       else if (_ex instanceof ArgumentException)    { const a = _ex; â€¦ }
         ///       else { throw _ex; }
         ///   }
         /// </code>
         ///
-        /// <para>⛔ <b>The binding is ALWAYS <c>_ex</c>, and the user's variable is a
+        /// <para>â›” <b>The binding is ALWAYS <c>_ex</c>, and the user's variable is a
         /// <c>const</c> inside its arm.</b> Two things depend on that. A bare <c>Throw</c> lowers
         /// to <c>throw _ex;</c> (Visit(IRThrow)), so the name must exist whatever the clause
-        /// called its variable — before this, <c>Catch e As Exception … Throw</c> was a
+        /// called its variable â€” before this, <c>Catch e As Exception â€¦ Throw</c> was a
         /// ReferenceError. And the typed test must run on the RAW object: a clause's variable is
         /// bound only once its arm is chosen.</para>
         ///
         /// <para><b>A single typed clause gets the same guard.</b> MEASURED: <c>Catch e As
         /// FormatException</c> around a thrown <c>ArgumentException</c> printed the clause's body
-        /// and stole the exception from the correct outer handler — the over-catch that shipped.
+        /// and stole the exception from the correct outer handler â€” the over-catch that shipped.
         /// A non-matching exception is rethrown, never swallowed.</para>
         ///
         /// <para><b><c>Catch e As Exception</c> (and an untyped <c>Catch</c>) is the catch-all</b>,
@@ -4381,7 +4653,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         /// <summary>
         /// The <c>instanceof</c> test for a clause, or null for the catch-all (untyped, or
-        /// typed <c>Exception</c> — the root of every exception this backend can see).
+        /// typed <c>Exception</c> â€” the root of every exception this backend can see).
         /// </summary>
         private string CatchTest(IRCatchClause clause)
         {
@@ -4395,7 +4667,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>
         /// Emits one arm of a try/catch/finally. The arm's blocks are also in
         /// <c>function.Blocks</c>, so they are marked emitted to stop the structured walk
-        /// reaching them again, and a branch to the construct's EndBlock emits nothing —
+        /// reaching them again, and a branch to the construct's EndBlock emits nothing â€”
         /// the continuation belongs to the enclosing statement, not to the arm.
         /// </summary>
         private void EmitNestedBlock(BasicBlock block, BasicBlock endBlock)
@@ -4419,23 +4691,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         public void Visit(IRThrow throwInst) =>
             Line(throwInst.Exception == null ? "throw _ex;" : $"throw {Expr(throwInst.Exception)};");
         /// <summary>
-        /// <c>javascript{ … }</c> → the block's text, verbatim.
+        /// <c>javascript{ â€¦ }</c> â†’ the block's text, verbatim.
         ///
-        /// <para><b>The universal escape hatch.</b> <c>::</c> is call-only — a member assignment
+        /// <para><b>The universal escape hatch.</b> <c>::</c> is call-only â€” a member assignment
         /// through it dies in the SemanticAnalyzer and a <c>::</c> value cannot be stored in a
-        /// local — so anything stateful (the DOM idioms above all) has to come through here.
+        /// local â€” so anything stateful (the DOM idioms above all) has to come through here.
         /// There is no type checking and no BL70xx protection inside a block; that is the
         /// deliberate bargain (spec D4), not a gap.</para>
         ///
         /// <para><b>Line by line through <see cref="Line"/>, never one Append.</b> Line() is what
-        /// maintains <c>_generatedLine</c>, which every subsequent <c>RecordMapping</c> reads —
+        /// maintains <c>_generatedLine</c>, which every subsequent <c>RecordMapping</c> reads â€”
         /// bypassing it would shift the whole source map below this block by the number of lines
         /// in it, so a devtools breakpoint on any later statement would bind to the wrong
         /// <c>.bas</c> line. The block's OWN mapping is already recorded by EmitInstructions
         /// before this runs, which is what makes a breakpoint on the <c>javascript{</c> line land.</para>
         ///
-        /// <para>A block tagged for another language cannot normally arrive — ForeignFeatureChecker
-        /// refuses anything but <c>ownInlineLanguage</c> before generation starts — but this
+        /// <para>A block tagged for another language cannot normally arrive â€” ForeignFeatureChecker
+        /// refuses anything but <c>ownInlineLanguage</c> before generation starts â€” but this
         /// re-checks rather than trusting that. The generator is reachable directly (every test in
         /// this repo constructs it and calls Generate), and emitting the body of a <c>cpp{ }</c>
         /// block as JavaScript would be a silent miscompile of exactly the kind this backend
@@ -4452,7 +4724,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 Line(line.TrimEnd());
         }
         /// <summary>
-        /// <c>For Each</c> → <c>for (const v of collection)</c>.
+        /// <c>For Each</c> â†’ <c>for (const v of collection)</c>.
         ///
         /// <para>Unlike every other loop this is a single INSTRUCTION, not a terminator: it
         /// carries BodyBlock and EndBlock itself, with no condition block, no increment block
@@ -4462,7 +4734,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <para><b>Fall-through and <c>Exit For</c> are the same branch.</b> Both emit
         /// <c>IRBranch(EndBlock)</c>; <c>IRBranch.IsLoopExit</c> is what separates them, and
         /// <see cref="EmitBranch"/> reads it. (Position used to be the guess, which made a
-        /// bare <c>Exit For</c> as the body's last statement undecidable — it is not any more.)</para>
+        /// bare <c>Exit For</c> as the body's last statement undecidable â€” it is not any more.)</para>
         /// </summary>
         public void Visit(IRForEach forEach)
         {
@@ -4499,7 +4771,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             EmitStructured(forEach.EndBlock);
         }
-        // A List index is a plain subscript; a Dictionary lookup is Map.get — `d["k"]` on a
+        // A List index is a plain subscript; a Dictionary lookup is Map.get â€” `d["k"]` on a
         // Map is NOT an error, it silently returns undefined, which is exactly the kind of
         // wrong-but-running output this backend refuses.
         private string IndexerAccess(IRIndexerAccess ix)
