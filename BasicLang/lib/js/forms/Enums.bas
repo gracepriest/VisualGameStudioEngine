@@ -114,6 +114,12 @@ Namespace System.Windows.Forms
         Fixed3D = 2
     End Enum
 
+    Public Enum HorizontalAlignment
+        Left = 0
+        Right = 1
+        Center = 2
+    End Enum
+
     Public Enum ContentAlignment
         TopLeft = 1
         TopCenter = 2

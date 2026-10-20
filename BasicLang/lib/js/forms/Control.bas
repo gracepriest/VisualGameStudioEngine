@@ -229,6 +229,10 @@ Namespace System.Windows.Forms
         ' M25: these declarations must stay above VgsAttachListeners, the method that
         ' takes their AddressOf. A listener declared below is refused by the backend.
         Private Sub VgsOnDomClick(e As DomEvent)
+            Me.VgsHandleDomClick(e)
+        End Sub
+
+        Public Overridable Sub VgsHandleDomClick(e As DomEvent)
             Me.OnClick(EventArgs.Empty)
         End Sub
 
@@ -266,6 +270,14 @@ Namespace System.Windows.Forms
             If related Is Nothing OrElse Not Me.VgsElement().contains(related) Then
                 Me.OnEnter(EventArgs.Empty)
             End If
+        End Sub
+
+        ' Kind hooks never change the common event surface. Delegates are retained by each
+        ' kind so removing or replacing an element removes the SAME listener identities.
+        Public Overridable Sub VgsAttachExtraListeners()
+        End Sub
+
+        Public Overridable Sub VgsDetachExtraListeners()
         End Sub
 
         Public Function VgsMouseArgs(e As DomEvent) As MouseEventArgs
@@ -381,6 +393,12 @@ Namespace System.Windows.Forms
                 el.style.cursor = value
             ElseIf name = "padding" Then
                 el.style.padding = value
+            ElseIf name = "text-align" Then
+                el.style.textAlign = value
+            ElseIf name = "border" Then
+                el.style.border = value
+            ElseIf name = "overflow" Then
+                el.style.overflow = value
             End If
         End Sub
 
@@ -406,6 +424,7 @@ Namespace System.Windows.Forms
             If element Is Nothing Then
                 Throw New InvalidOperationException("Control '" & _name & "' has no element to attach to.")
             End If
+            If _element IsNot Nothing Then Me.VgsRemoveListeners()
             _element = element
             _parent = parent
             Me.VgsAttachListeners()
@@ -417,17 +436,22 @@ Namespace System.Windows.Forms
 
         Public Sub VgsDetach()
             If _element IsNot Nothing Then
-                _element.removeEventListener("click", _onClick)
-                _element.removeEventListener("mousedown", _onMouseDown)
-                _element.removeEventListener("mouseup", _onMouseUp)
-                _element.removeEventListener("mousemove", _onMouseMove)
-                _element.removeEventListener("keydown", _onKeyDown)
-                _element.removeEventListener("keyup", _onKeyUp)
-                _element.removeEventListener("focusin", _onFocusIn)
+                Me.VgsRemoveListeners()
                 _element.remove()
             End If
             _element = Nothing
             _parent = Nothing
+        End Sub
+
+        Private Sub VgsRemoveListeners()
+            Me.VgsDetachExtraListeners()
+            _element.removeEventListener("click", _onClick)
+            _element.removeEventListener("mousedown", _onMouseDown)
+            _element.removeEventListener("mouseup", _onMouseUp)
+            _element.removeEventListener("mousemove", _onMouseMove)
+            _element.removeEventListener("keydown", _onKeyDown)
+            _element.removeEventListener("keyup", _onKeyUp)
+            _element.removeEventListener("focusin", _onFocusIn)
         End Sub
 
         Private Sub VgsAttachListeners()
@@ -445,6 +469,91 @@ Namespace System.Windows.Forms
             _element.addEventListener("keydown", _onKeyDown)
             _element.addEventListener("keyup", _onKeyUp)
             _element.addEventListener("focusin", _onFocusIn)
+            Me.VgsAttachExtraListeners()
+        End Sub
+
+        ' A TextBox swap retains the Control and all user event subscriptions, but never
+        ' leaves a library listener on the discarded element. Parent/collection stay intact.
+        Public Sub VgsReplaceElement(element As Element)
+            Dim old As Element = Me.VgsElementFor("Multiline")
+            Me.VgsRemoveListeners()
+            If old.parentElement IsNot Nothing Then old.parentElement.replaceChild(element, old)
+            _element = element
+            Me.VgsAttachListeners()
+        End Sub
+
+        Public Function VgsInputElement(Optional member As String = "Checked") As Element
+            Dim el As Element = Me.VgsElementFor(member)
+            If el.tagName = "INPUT" Then Return el
+            Dim input As Element = el.querySelector("input")
+            If input Is Nothing Then Throw New InvalidOperationException("Control '" & Me.Name & "' has no input element.")
+            Return input
+        End Function
+
+        ' Direct children only: a nested GroupBox's legend is not its parent's caption.
+        Public Function VgsCaptionElement(tag As String) As Element
+            Dim el As Element = Me.VgsElementFor("Text")
+            Dim part As Element = el.firstElementChild
+            While part IsNot Nothing
+                If part.tagName = tag Then Return part
+                part = part.nextElementSibling
+            End While
+            Dim doc As Document = ::document
+            part = doc.createElement(tag)
+            If tag = "LEGEND" Then
+                el.insertBefore(part, el.firstElementChild)
+            Else
+                el.appendChild(part)
+            End If
+            Return part
+        End Function
+
+        Public Function VgsCaptionText(tag As String) As String
+            Dim text As String = Me.VgsCaptionElement(tag).textContent
+            If text Is Nothing Then text = ""
+            Return text
+        End Function
+
+        Public Sub VgsSetCaptionText(tag As String, value As String)
+            If value Is Nothing Then value = ""
+            Dim part As Element = Me.VgsCaptionElement(tag)
+            Dim old As String = part.textContent
+            If old Is Nothing Then old = ""
+            If old = value Then Return
+            part.textContent = value
+            Me.OnTextChanged(EventArgs.Empty)
+        End Sub
+
+        Public Function VgsContentAlignment(defaultValue As ContentAlignment) As ContentAlignment
+            Dim el As Element = Me.VgsElementFor("TextAlign")
+            Dim raw As String = el.getAttribute("data-vgs-textalign")
+            If raw IsNot Nothing AndAlso raw <> "" Then Return CType(Integer.Parse(raw), ContentAlignment)
+            Dim w As Window = ::window
+            Dim horizontal As String = w.getComputedStyle(el).textAlign
+            Dim row As Integer = 0
+            If CInt(defaultValue) >= 256 Then
+                row = 256
+            ElseIf CInt(defaultValue) >= 16 Then
+                row = 16
+            Else
+                row = 1
+            End If
+            If horizontal = "center" Then Return CType(row * 2, ContentAlignment)
+            If horizontal = "right" Then Return CType(row * 4, ContentAlignment)
+            If horizontal = "left" Then Return CType(row, ContentAlignment)
+            Return defaultValue
+        End Function
+
+        Public Sub VgsSetContentAlignment(value As ContentAlignment)
+            Dim el As Element = Me.VgsElementFor("TextAlign")
+            el.setAttribute("data-vgs-textalign", CStr(CInt(value)))
+            Dim align As String = "left"
+            If value = ContentAlignment.TopCenter OrElse value = ContentAlignment.MiddleCenter OrElse value = ContentAlignment.BottomCenter Then
+                align = "center"
+            ElseIf value = ContentAlignment.TopRight OrElse value = ContentAlignment.MiddleRight OrElse value = ContentAlignment.BottomRight Then
+                align = "right"
+            End If
+            Me.VgsSetStyle("text-align", align)
         End Sub
     End Class
 

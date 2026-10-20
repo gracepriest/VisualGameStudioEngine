@@ -1243,7 +1243,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Property, "Expected 'Property'");
             var node = new PropertyNode(token.Line, token.Column);
 
-            node.Name = ConsumeIdentifierLike("Expected property name").Lexeme;
+            node.Name = ConsumeMemberName("Expected property name").Lexeme;
 
             // Property type
             if (Match(TokenType.As))
@@ -1548,7 +1548,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Function, "Expected 'Function'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = ConsumeIdentifierLike("Expected function name").Lexeme;
+            node.Name = ConsumeMemberName("Expected function name").Lexeme;
 
             Consume(TokenType.LeftParen, "Expected '(' after function name");
             if (!Check(TokenType.RightParen))
@@ -1575,7 +1575,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Sub, "Expected 'Sub'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = ConsumeIdentifierLike("Expected sub name").Lexeme;
+            node.Name = ConsumeMemberName("Expected sub name").Lexeme;
 
             Consume(TokenType.LeftParen, "Expected '(' after sub name");
             if (!Check(TokenType.RightParen))
@@ -2242,7 +2242,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Function, "Expected 'Function'");
             var node = new FunctionNode(token.Line, token.Column);
 
-            node.Name = ConsumeIdentifierLike("Expected function name").Lexeme;
+            node.Name = ConsumeMemberName("Expected function name").Lexeme;
             _context.Push($"Function '{node.Name}'");
 
             try
@@ -2311,7 +2311,7 @@ namespace BasicLang.Compiler
             var token = Consume(TokenType.Sub, "Expected 'Sub'");
             var node = new SubroutineNode(token.Line, token.Column);
 
-            node.Name = ConsumeIdentifierLike("Expected subroutine name").Lexeme;
+            node.Name = ConsumeMemberName("Expected subroutine name").Lexeme;
             _context.Push($"Sub '{node.Name}'");
 
             try
@@ -5460,6 +5460,8 @@ namespace BasicLang.Compiler
             // Only include tokens that actually exist in TokenType
             return type == TokenType.Property ||
                    type == TokenType.Type ||
+                   type == TokenType.ReadOnly ||
+                   type == TokenType.Select ||
                    type == TokenType.New ||
                    type == TokenType.Get ||
                    type == TokenType.Set ||
@@ -5503,6 +5505,14 @@ namespace BasicLang.Compiler
         {
             if (CheckIdentifierLike()) return Advance();
             return Consume(TokenType.Identifier, message);
+        }
+
+        // These sites follow Property/Function/Sub, so statement keywords are unambiguous.
+        // Use the same names a caller can use after a dot (DOM type/readOnly/select).
+        private Token ConsumeMemberName(string message)
+        {
+            if (!IsAtEnd() && IsKeywordUsableAsMemberName(Peek().Type)) return Advance();
+            return ConsumeIdentifierLike(message);
         }
 
         /// <summary>

@@ -478,6 +478,8 @@ public class JsExecutionTierRosterTests
         // Portable-controls Task 29 - Control/Form/MessageBox, compiled through the project
         // route (so the library hook runs) and run under Node against a recording stub DOM.
         typeof(PortableControlNodeTests),
+        // Portable-controls Task 31: first-kind properties, native gestures and owned methods.
+        typeof(PortableFirstKindsNodeTests),
     };
 
     /// <summary>
@@ -529,7 +531,7 @@ public class JsExecutionTierRosterTests
 
     [Test]
     public void RosterIsPinned()
-        => Assert.That(ExecutionTier, Has.Length.EqualTo(109), // + PortableControlNodeTests (portable-controls Task 29); + JavaScriptDecimalTests (portable-controls Task 19, O14); + JavaScriptLibraryIdiomTests (portable-controls Task 16); + JavaScriptProgramNamespaceTests (portable-controls Task 15, M8); + JavaScriptCharTests (portable-controls Task 14, O13); + MyBasePropertyExecutionTests (portable-controls Task 13, M4); + JavaScriptDelegateIdentityTests (portable-controls Task 12, M2); + JavaScriptMeUnderUsingTests (portable-controls Task 11, M7); + MixedNumericCompareFoldExecutionTests (task #123, the compare fold); + UntypedConstAndConditionalExecutionTests (task #123, D1/D2); + TempMintingFacilityTests + NameReservationExecutionTests (task #121, ADR-0018); + CompilerTempExecutionTests + CompilerTempCollisionFenceTests (task #163, ADR-0017); + BaseConstructorCallLoweringExecutionTests + BaseConstructorCallCppRefusalTests (task #170, ADR-0016), MsilValueToStringExecutionTests (task #183), InterfaceMethodTypingExecutionTests, IsIsNotOperatorExecutionTests (task #185), MeReceiverTypingExecutionTests (task #176), UserDelegateConversionExecutionTests (task #187), DelegateMemberInvocationExecutionTests (task #188), NothingStringTextExecutionTests (task #189), MsilObjectBoxingExecutionTests (task #177), NotPrecedenceExecutionTests (#195), PropertyAccessExecutionTests (task #178), NameBindingExecutionTests (task #169/#199), PerIterationLoopBodyDimExecutionTests + PerIterationLoopBodyDimOptimizerExecutionTests (task #172, ADR-0014), LambdaBoundaryDiagnosticsExecutionTests (task #174); + WhenGuardCallRunTests, TypeOfExecutionTests (#197), ForwardDeclaredTypeExecutionTests; + NameBindingResolutionExecutionTests (task #124, ADR-0013 D3)
+        => Assert.That(ExecutionTier, Has.Length.EqualTo(110), // + PortableFirstKindsNodeTests (portable-controls Task 31)
             "The execution-tier roster changed. That is fine — update the number — but it must " +
             "be a deliberate edit, not a silent shrink.");
 

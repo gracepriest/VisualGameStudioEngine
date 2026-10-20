@@ -20,43 +20,84 @@ public class PortableControlNodeTests
             els: Object.create(null),
             alerts: [],
             confirms: [],
+            all: [],
             confirmAnswer: true,
             title: "base title"
         };
 
         class StubClassList {
-            constructor(el) { this.el = el; this.names = new Set(); }
-            add(...names) { for (const name of names) this.names.add(name); this.sync(); }
-            remove(...names) { for (const name of names) this.names.delete(name); this.sync(); }
+            constructor(el) { this.el = el; }
+            get names() { return new Set(this.el.className.split(/\s+/).filter(Boolean)); }
+            add(...names) { const set = this.names; for (const name of names) set.add(name); this.sync(set); }
+            remove(...names) { const set = this.names; for (const name of names) set.delete(name); this.sync(set); }
             contains(name) { return this.names.has(name); }
             toggle(name, force) {
-                const on = force === undefined ? !this.names.has(name) : Boolean(force);
-                if (on) this.names.add(name); else this.names.delete(name);
-                this.sync();
+                const set = this.names;
+                const on = force === undefined ? !set.has(name) : Boolean(force);
+                if (on) set.add(name); else set.delete(name);
+                this.sync(set);
                 return on;
             }
-            sync() { this.el.className = Array.from(this.names).join(" "); }
+            sync(names) { this.el.className = Array.from(names).join(" "); }
         }
 
         class StubElement {
             constructor(id, tagName) {
                 this.id = id || "";
-                this.tagName = tagName || "DIV";
-                this.textContent = "";
+                this.tagName = (tagName || "DIV").toUpperCase();
+                this._text = "";
                 this.innerHTML = "";
                 this.innerText = "";
                 this.value = "";
-                this.checked = false;
-                this.disabled = false;
-                this.hidden = false;
+                this._checked = false;
                 this.parentElement = null;
                 this.children = [];
-                this.style = {};
                 this.attributes = Object.create(null);
+                this.style = new Proxy({}, {
+                    get(target, name) {
+                        if (name === "borderStyle") return target.borderStyle ||
+                            (/\b(solid|inset|groove|none)\b/.exec(target.border || "") || ["", ""])[1];
+                        return target[name] || "";
+                    },
+                    set: (target, name, value) => {
+                        target[name] = String(value);
+                        this.attributes.style = Object.entries(target)
+                            .map(([k, v]) => k.replace(/[A-Z]/g, c => "-" + c.toLowerCase()) + ": " + v).join("; ");
+                        return true;
+                    }
+                });
                 this.listeners = Object.create(null);
                 this.classList = new StubClassList(this);
                 this.className = "";
                 this.focused = false;
+                this.selectCalls = 0;
+                globalThis.__state.all.push(this);
+            }
+            get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
+            set textContent(value) {
+                this._text = String(value);
+                for (const child of this.children) child.parentElement = null;
+                this.children = [];
+            }
+            get type() { return this.getAttribute("type") || "text"; }
+            set type(value) { this.setAttribute("type", value); }
+            get disabled() { return this.getAttribute("disabled") !== null; }
+            set disabled(value) { if (value) this.setAttribute("disabled", ""); else this.removeAttribute("disabled"); }
+            get hidden() { return this.getAttribute("hidden") !== null; }
+            set hidden(value) { if (value) this.setAttribute("hidden", ""); else this.removeAttribute("hidden"); }
+            get readOnly() { return this.getAttribute("readonly") !== null; }
+            set readOnly(value) { if (value) this.setAttribute("readonly", ""); else this.removeAttribute("readonly"); }
+            get maxLength() { const v = this.getAttribute("maxlength"); return v === null ? -1 : Number(v); }
+            set maxLength(value) { this.setAttribute("maxlength", value); }
+            get checked() { return this._checked; }
+            set checked(value) {
+                this._checked = Boolean(value);
+                if (!value || this.type !== "radio" || !this.getAttribute("name")) return;
+                const root = el => { while (el.parentElement) el = el.parentElement; return el; };
+                for (const peer of globalThis.__state.all) {
+                    if (peer !== this && peer.type === "radio" && root(peer) === root(this) &&
+                        peer.getAttribute("name") === this.getAttribute("name")) peer._checked = false;
+                }
             }
             get firstElementChild() { return this.children.length === 0 ? null : this.children[0]; }
             get nextElementSibling() {
@@ -92,10 +133,26 @@ public class PortableControlNodeTests
                     defaultPrevented: false,
                     preventDefault() { this.defaultPrevented = true; }
                 }, props || {});
-                for (const listener of (this.listeners[type] || []).slice()) listener(event);
+                let at = this;
+                do {
+                    event.currentTarget = at;
+                    for (const listener of (at.listeners[type] || []).slice()) listener(event);
+                    at = props && props.bubbles === false ? null : at.parentElement;
+                } while (at);
                 return event;
             }
-            click() { return this.dispatch("click", { detail: 1 }); }
+            click() {
+                if (this.disabled) return;
+                const check = this.tagName === "INPUT" && (this.type === "checkbox" || this.type === "radio");
+                const old = this.checked;
+                if (check) this.checked = this.type === "radio" || !old;
+                const event = this.dispatch("click", { detail: 1 });
+                if (check && old !== this.checked) this.dispatch("change");
+                const label = this.closest("label");
+                const input = label && label.querySelector("input");
+                if (input && this.tagName !== "INPUT") input.click();
+                return event;
+            }
             fire(type, button, x, y, key, code, shift, control, alt, relatedId) {
                 return this.dispatch(type, {
                     button: button || 0,
@@ -113,12 +170,29 @@ public class PortableControlNodeTests
                 this.focused = true;
                 this.dispatch("focusin", { relatedTarget: null });
             }
+            select() { this.selectCalls++; this.selectionStart = 0; this.selectionEnd = this.value.length; }
             getAttribute(name) {
+                if (name === "id") return this.id || null;
+                if (name === "class") return this.className || null;
                 return Object.prototype.hasOwnProperty.call(this.attributes, name)
                     ? this.attributes[name]
                     : null;
             }
-            setAttribute(name, value) { this.attributes[name] = String(value); }
+            getAttributeNames() {
+                return [...new Set([...Object.keys(this.attributes), ...(this.id ? ["id"] : []),
+                    ...(this.className ? ["class"] : [])])];
+            }
+            setAttribute(name, value) {
+                if (name === "id") this.id = String(value);
+                if (name === "class") this.className = String(value);
+                if (name === "style") {
+                    for (const declaration of String(value).split(";")) {
+                        const [key, text] = declaration.split(":");
+                        if (text !== undefined) this.style[key.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = text.trim();
+                    }
+                }
+                this.attributes[name] = String(value);
+            }
             removeAttribute(name) { delete this.attributes[name]; }
             appendChild(child) {
                 if (child.parentElement !== null) child.parentElement.removeChild(child);
@@ -131,6 +205,40 @@ public class PortableControlNodeTests
                 if (index >= 0) this.children.splice(index, 1);
                 child.parentElement = null;
                 return child;
+            }
+            replaceChild(child, old) {
+                const index = this.children.indexOf(old);
+                if (index < 0) throw new Error("replaceChild: missing child");
+                if (child.parentElement) child.parentElement.removeChild(child);
+                this.children[index] = child;
+                child.parentElement = this;
+                old.parentElement = null;
+                return old;
+            }
+            insertBefore(child, reference) {
+                if (reference === null) return this.appendChild(child);
+                const index = this.children.indexOf(reference);
+                if (index < 0) throw new Error("insertBefore: missing reference");
+                this.children.splice(index, 0, child);
+                child.parentElement = this;
+                return child;
+            }
+            matches(selector) {
+                return selector[0] === "." ? this.className.split(" ").includes(selector.slice(1)) :
+                    selector[0] === "#" ? this.id === selector.slice(1) : this.tagName === selector.toUpperCase();
+            }
+            querySelector(selector) {
+                for (const child of this.children) {
+                    if (child.matches(selector)) return child;
+                    const found = child.querySelector(selector);
+                    if (found) return found;
+                }
+                return null;
+            }
+            closest(selector) {
+                let el = this;
+                while (el) { if (el.matches(selector)) return el; el = el.parentElement; }
+                return null;
             }
             remove() {
                 if (this.parentElement !== null) this.parentElement.removeChild(this);
@@ -148,7 +256,9 @@ public class PortableControlNodeTests
             return element;
         }
 
+        const __body = __make("body", "BODY");
         const __form = __make("formArea", "DIV");
+        __body.appendChild(__form);
         __form.className = "vgs-form";
         const __panel = __make("panel", "DIV");
         __form.appendChild(__panel);
@@ -159,12 +269,13 @@ public class PortableControlNodeTests
         const __other = __make("other", "BUTTON");
         __form.appendChild(__other);
         const __outside = __make("outside", "DIV");
+        __body.appendChild(__outside);
         const __inner = __make("inner", "SPAN");
         __btn.appendChild(__inner);
 
         globalThis.document = {
-            body: __form,
-            getElementById(id) { return globalThis.__state.els[id] || null; },
+            body: __body,
+            getElementById(id) { return __body.querySelector("#" + id); },
             querySelector(selector) { return selector === ".vgs-form" ? __form : null; },
             createElement(tagName) { return new StubElement("", tagName); },
             createTextNode(data) { const element = new StubElement("", "TEXT"); element.textContent = data; return element; }
@@ -186,7 +297,7 @@ public class PortableControlNodeTests
         };
         """;
 
-    private static (bool Ok, string Output, string Errors) Run(string source)
+    internal static (bool Ok, string Output, string Errors) Run(string source, string setup = "")
     {
         var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "bl-portable-" + Path.GetRandomFileName())).FullName;
         try
@@ -196,10 +307,15 @@ public class PortableControlNodeTests
             var result = new BasicCompiler(new CompilerOptions { TargetBackend = "javascript" }).CompileProjectFiles(new[] { file });
             if (result.HasErrors) return (false, "", string.Join(" | ", result.AllErrors.Select(e => e.Message)));
             var js = new JavaScriptCodeGenerator().Generate(result.CombinedIR!);
-            var (exitCode, stdout, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(StubDom + js);
-            return (exitCode == 0, FourBackends.Norm(stdout), FourBackends.Norm(stderr));
+            return RunEmitted(js, setup);
         }
         finally { Directory.Delete(dir, true); }
+    }
+
+    internal static (bool Ok, string Output, string Errors) RunEmitted(string javaScript, string setup)
+    {
+        var (exitCode, stdout, stderr) = JavaScriptExecutionTests.RunNodeScriptForOutcome(StubDom + setup + javaScript);
+        return (exitCode == 0, FourBackends.Norm(stdout), FourBackends.Norm(stderr));
     }
 
     [Test]
@@ -463,11 +579,11 @@ public class PortableControlNodeTests
                     Console.WriteLine("count=" & f.Controls.Count)
                     Console.WriteLine("item=" & f.Controls.Item(0).Name)
                     AddHandler b.Click, AddressOf HandleClick
+                    Dim el As Element = b.Element
                     f.Controls.Remove(b)
-                    Dim doc As Document = ::document
-                    doc.getElementById("btn").click()
+                    el.click()
                     Console.WriteLine("after=" & f.Controls.Count & ",hits=" & hits)
-                    If doc.getElementById("btn").parentElement Is Nothing Then
+                    If el.parentElement Is Nothing Then
                         Console.WriteLine("detached")
                     Else
                         Console.WriteLine("still")

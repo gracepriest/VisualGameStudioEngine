@@ -38,6 +38,9 @@ Public Extern Class Element
     Public Property innerHTML As String
     Public Property innerText As String
     Public Property value As String
+    Public Property type As String
+    Public Property readOnly As Boolean
+    Public Property maxLength As Integer
     Public Property checked As Boolean
     Public Property disabled As Boolean
     Public Property hidden As Boolean
@@ -55,12 +58,16 @@ Public Extern Class Element
     Public Function closest(selectors As String) As Element
     Public Function contains(other As Element) As Boolean
     Public Function getAttribute(name As String) As String
+    Public Function getAttributeNames() As String()
     Public Sub setAttribute(name As String, attributeValue As String)
     Public Sub removeAttribute(name As String)
     Public Function appendChild(child As Element) As Element
     Public Function removeChild(child As Element) As Element
+    Public Function replaceChild(child As Element, oldChild As Element) As Element
+    Public Function insertBefore(child As Element, reference As Element) As Element
     Public Sub remove()
     Public Sub focus()
+    Public Sub select()
     Public Sub click()
     Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
     Public Sub removeEventListener(eventType As String, listener As Action(Of DomEvent))
@@ -81,6 +88,9 @@ Public Extern Class CSSStyleDeclaration
     Public Property margin As String
     Public Property padding As String
     Public Property border As String
+    Public Property borderStyle As String
+    Public Property overflow As String
+    Public Property textAlign As String
     Public Property opacity As String
     Public Property position As String
     Public Property left As String

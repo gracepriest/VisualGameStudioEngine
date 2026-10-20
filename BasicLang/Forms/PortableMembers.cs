@@ -54,6 +54,15 @@ public static class PortableMembers
             new[] { "\"hello\"", "\"\"", "MessageBoxButtons.OK" }),
 
         new("Form", "Close", PortableMemberKind.Method,
-            "Sub Close()", Array.Empty<string>())
+            "Sub Close()", Array.Empty<string>()),
+
+        new("TextBox", "Clear", PortableMemberKind.Method,
+            "Sub Clear()", Array.Empty<string>()),
+        new("TextBox", "AppendText", PortableMemberKind.Method,
+            "Sub AppendText(s As String)", new[] { "\"x\"" }),
+        new("TextBox", "SelectAll", PortableMemberKind.Method,
+            "Sub SelectAll()", Array.Empty<string>()),
+        new("Button", "PerformClick", PortableMemberKind.Method,
+            "Sub PerformClick()", Array.Empty<string>())
     };
 }
