@@ -70,6 +70,14 @@
                   <TextBlock Text="F" FontSize="12" FontWeight="Bold" Foreground="#CE93D8"/>
                 </MenuItem.Icon>
               </MenuItem>
+              <!-- The Task 30 opt-in: a web pair generated in the portable Forms style, rather than
+                   today's DOM shape. It is a separate command so the ordinary New Form keeps its
+                   project-target and byte-stable DOM scaffold. -->
+              <MenuItem Header="New Web Form (portable)..." Command="{Binding #SolutionTreeView.DataContext.AddWebFormPortableCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="P" FontSize="12" FontWeight="Bold" Foreground="#CE93D8"/>
+                </MenuItem.Icon>
+              </MenuItem>
               <Separator/>
               <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
                 <MenuItem.Icon>

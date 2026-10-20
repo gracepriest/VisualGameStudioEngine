@@ -1298,7 +1298,21 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// the next load.</para>
     /// </summary>
     [RelayCommand]
-    private async Task AddNewFormAsync()
+    private async Task AddNewFormAsync() => await AddFormAsync(portable: false);
+
+    /// <summary>
+    /// "Add ▸ New Web Form (portable)…" — the Task 30 opt-in command. It is deliberately a separate
+    /// command in the same Add submenu: the ordinary command keeps each project's target, while this
+    /// one always writes a <c>.blwebform</c> whose markers say <c>style="portable"</c>.
+    ///
+    /// <para>⛔ Keep the attribute adjacent to this method. The same toolkit trap that made
+    /// <see cref="AddNewFormAsync"/> unreachable applies here: a doc comment between the attribute
+    /// and the declaration makes the generated command bind to the wrong method.</para>
+    /// </summary>
+    [RelayCommand]
+    private async Task AddWebFormPortableAsync() => await AddFormAsync(portable: true);
+
+    private async Task AddFormAsync(bool portable)
     {
         var project = _projectService.CurrentProject;
         if (project == null) return;
@@ -1328,11 +1342,13 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         // UseWindowsForms is what the template writes and what the build reads; the JavaScript
         // backend is the web case, and everything else has no designer target of its own, so Web
         // (the format that needs no desktop runtime) is the safe fallback.
-        var target = project.UseWindowsForms == true
-            ? BasicLang.Forms.FormTarget.WinForms
-            : BasicLang.Forms.FormTarget.Web;
+        var target = portable
+            ? BasicLang.Forms.FormTarget.Web
+            : project.UseWindowsForms == true
+                ? BasicLang.Forms.FormTarget.WinForms
+                : BasicLang.Forms.FormTarget.Web;
 
-        var scaffold = BasicLang.Forms.FormScaffolder.Create(name, target);
+        var scaffold = BasicLang.Forms.FormScaffolder.Create(name, target, portable: portable);
         var documentPath = Path.Combine(targetDir, scaffold.DocumentFileName);
         var codePath = Path.Combine(targetDir, scaffold.CodeFileName);
 

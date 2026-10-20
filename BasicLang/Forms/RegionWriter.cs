@@ -17,6 +17,24 @@ public sealed record RegionWriteResult(
 }
 
 /// <summary>
+/// What sort of generated init line this is. Portable is the WinForms walk with four kinds removed;
+/// keeping the kind with the text is what makes that subset relation explicit instead of a guess
+/// about line shapes (and is the seam piece 3 uses for wrapped regions).
+/// </summary>
+internal enum InitLineKind
+{
+    Other,
+    Geometry,
+    Property,
+    ComponentProperty,
+    RootProperty,
+    Reference
+}
+
+/// <summary>One generated init line before the style chooses whether to emit it.</summary>
+internal sealed record InitLine(string Text, InitLineKind Kind);
+
+/// <summary>
 /// Generates the two designer-owned regions and writes them into the user's own file (D1).
 ///
 /// <para><b>This is the most dangerous code in the feature</b> — it edits a file the user owns and
@@ -38,8 +56,14 @@ public static class RegionWriter
     public static RegionWriteResult Write(string filePath, string source, FormDocument form, string formFileName)
     {
         var diagnostics = new List<DesignDiagnostic>();
-        var regions = RegionMarkers.Scan(source);
+        var style = FormCodeStyle.Of(source, formFileName);
+        var regions = style.Regions;
         var index = new SourceIndex(source);
+
+        if (style.Problem != null)
+        {
+            diagnostics.Add(Error(DesignCodes.RegionMalformed, style.Problem, filePath, style.Line));
+        }
 
         foreach (var region in regions)
         {
@@ -109,18 +133,18 @@ public static class RegionWriter
         // would have gone unnoticed by every hash check.
         var newline = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 
-        var controlsBody = GenerateControls(form, IndentOf(index, controls), newline);
-        var initBody = GenerateInit(form, IndentOf(index, init), newline, filePath, diagnostics);
+        var controlsBody = GenerateControls(form, style.Style, IndentOf(index, controls), newline);
+        var initBody = GenerateInit(form, style.Style, IndentOf(index, init), newline, filePath, diagnostics);
 
         CheckAnchors(filePath, form, diagnostics);
         CheckDocks(filePath, form, diagnostics);
-        CheckTargetProperties(filePath, form, diagnostics);
-        CheckWebRefusedValues(filePath, form, diagnostics);
-        CheckComponentTargets(filePath, form, diagnostics);
-        CheckComponentBinds(filePath, form, diagnostics);
-        CheckControlBinds(filePath, form, diagnostics);
+        CheckTargetProperties(filePath, form, style.Style, diagnostics);
+        CheckWebRefusedValues(filePath, form, style.Style, diagnostics);
+        CheckComponentTargets(filePath, form, style.Style, diagnostics);
+        CheckComponentBinds(filePath, form, style.Style, diagnostics);
+        CheckControlBinds(filePath, form, style.Style, diagnostics);
         CheckRootBinds(filePath, form, diagnostics);
-        CheckHandlerOrdering(filePath, index, form, init, diagnostics);
+        CheckHandlerOrdering(filePath, index, form, init, style.Style, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
             return new RegionWriteResult(Changed: false, source, diagnostics);
@@ -271,8 +295,13 @@ public static class RegionWriter
     /// here. Reporting it is what stops the skip from being silent.
     /// </summary>
     private static void CheckTargetProperties(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
+        // A portable file generates the WinForms shape (component property lines included), so its
+        // effective vocabulary is WinForms even though the document target is Web. Judging it as Web
+        // would say a retained Timer.Enabled line "is not written" while it is.
+        var target = style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+
         // Components too (Task 25): a Timer's Enabled is WinForms-only and is skipped on the web.
         foreach (var control in form.AllControls().Concat(form.AllComponents()))
         {
@@ -285,12 +314,12 @@ public static class RegionWriter
             foreach (var name in control.Properties.Keys)
             {
                 var property = definition.Property(name);
-                if (property != null && !property.AppliesTo(form.Target))
+                if (property != null && !property.AppliesTo(target))
                 {
                     diagnostics.Add(new DesignDiagnostic(
                         DesignCodes.PropertyNotOnTarget,
                         $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' does not exist " +
-                        $"on {form.Target}, so it is not written into the generated code. The " +
+                        $"on {target}, so it is not written into the generated code. The " +
                         "value is preserved in the document.",
                         filePath, 0, 0, IsWarning: true));
                 }
@@ -310,9 +339,12 @@ public static class RegionWriter
     /// (<see cref="FormPropertyDef.DescribeRefusal"/>), reached only for a value truly refused — it throws otherwise.</para>
     /// </summary>
     private static void CheckWebRefusedValues(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // This warning is about values the PAGE/stylesheet emitter refuses. Portable code has no DOM
+        // page: its control property lines are deliberately absent, so a web refusal would be a
+        // second, misleading complaint about a line this style never intended to write.
+        if (style != FormStyle.Dom || form.Target != FormTarget.Web)
         {
             return;
         }
@@ -349,12 +381,16 @@ public static class RegionWriter
     /// nothing (review, 2026-09-19). The field stays declared so code naming it still builds.
     /// </summary>
     private static void CheckComponentTargets(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
+        // Portable constructs the WinForms component type, so WinForms is the effective target for
+        // this warning too. (The portable library's own support is a later task's question.)
+        var target = style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+
         foreach (var component in form.AllComponents())
         {
             var definition = component.Definition;
-            if (definition == null || definition.SupportsTarget(form.Target))
+            if (definition == null || definition.SupportsTarget(target))
             {
                 continue;
             }
@@ -362,7 +398,7 @@ public static class RegionWriter
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.KindNotOnTarget,
                 $"{DesignCodes.KindNotOnTarget}: '{component.Id}' is a {definition.Kind}, which has no " +
-                $"{form.Target} form. Its field is declared so code naming it still builds, but " +
+                $"{target} form. Its field is declared so code naming it still builds, but " +
                 "nothing constructs or wires it here. Retarget the form to see what crosses, or " +
                 "remove it.",
                 filePath, 0, 0, IsWarning: true));
@@ -376,9 +412,11 @@ public static class RegionWriter
     /// 2026-09-19); now it is named, and <see cref="CheckHandlerOrdering"/> ignores it.
     /// </summary>
     private static void CheckComponentBinds(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // Portable components are constructed and wired through the WinForms shape, not the web
+        // template, so the DOM-only "one default event" warning does not apply.
+        if (style != FormStyle.Dom)
         {
             return;
         }
@@ -395,7 +433,7 @@ public static class RegionWriter
             foreach (var bind in component.Binds)
             {
                 if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
-                    IsEmittedBind(form, component, bind))
+                    IsEmittedBind(form, style, component, bind))
                 {
                     continue;
                 }
@@ -461,9 +499,11 @@ public static class RegionWriter
     /// today. This is only for the target where the failure is silent.</para>
     /// </summary>
     private static void CheckControlBinds(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // The DOM's string event vocabulary is not the portable library's. Portable emits
+        // AddHandler with the WinForms spelling, where csc catches a wrong member loudly.
+        if (style != FormStyle.Dom)
         {
             return;
         }
@@ -534,14 +574,17 @@ public static class RegionWriter
     /// <c>AddHandler</c>; a component's do on WinForms; on the web a component is wired only through
     /// its template, on its default event.
     /// </summary>
-    private static bool IsEmittedBind(FormDocument form, FormControl control, FormBind bind)
+    private static bool IsEmittedBind(
+        FormDocument form, FormStyle style, FormControl control, FormBind bind)
     {
         if (string.IsNullOrEmpty(bind.Handler))
         {
             return false;
         }
 
-        if (form.Target != FormTarget.Web || control.Definition is not { IsComponent: true } definition)
+        // WinForms and portable emit every handler-bearing bind; only the DOM's script-backed
+        // components are restricted to the single event their construct template accepts.
+        if (style != FormStyle.Dom || control.Definition is not { IsComponent: true } definition)
         {
             return true;
         }
@@ -577,9 +620,11 @@ public static class RegionWriter
     /// </summary>
     private static void CheckHandlerOrdering(
         string filePath, SourceIndex index, FormDocument form,
-        FormRegion init, List<DesignDiagnostic> diagnostics)
+        FormRegion init, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // Portable uses AddHandler with the WinForms signature, where a later declaration is legal
+        // (measured and documented above). BL8013 is a DOM-only refusal.
+        if (style != FormStyle.Dom)
         {
             return;
         }
@@ -589,7 +634,7 @@ public static class RegionWriter
         // ⛔ Only binds the region EMITS: refusing over a wiring that is never written told the user
         // to move a handler above a region that did not reference it (review, 2026-09-19).
         var handlers = form.AllControls().Concat(form.AllComponents())
-            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, c, b)))
+            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, style, c, b)))
             .Select(b => b.Handler)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -650,7 +695,7 @@ public static class RegionWriter
         var hash = RegionMarkers.HashContent(body);
 
         var replacement = new StringBuilder()
-            .Append(RegionMarkers.FormatOpen(region.Name, formFileName, hash, indent)).Append(newline)
+            .Append(RegionMarkers.FormatOpen(region.Name, formFileName, hash, indent, region.Style)).Append(newline)
             .Append(body)
             .Append(RegionMarkers.FormatClose(indent))
             .ToString();
@@ -676,40 +721,63 @@ public static class RegionWriter
     /// <c>Protected</c>; either compiles here, and the plan's note that Private is right is the more
     /// considered statement. Recorded because the two documents differ.)</para>
     /// </summary>
-    private static string GenerateControls(FormDocument form, string indent, string newline)
+    private static string GenerateControls(
+        FormDocument form, FormStyle style, string indent, string newline)
     {
         var body = new StringBuilder();
         var inner = indent;
 
         // Components first, as VS declares them (Task 25). A component's field is declared even
         // when nothing constructs it — a web Timer with no handler yet — so the user's own
-        // clearInterval compiles before the handler is wired.
+        // clearInterval compiles before the handler is wired. Portable declares the same WinForms
+        // types as the desktop; only the DOM style uses Element/web-script types.
         foreach (var component in form.Components)
         {
-            body.Append($"{inner}Private {component.Id} As {DeclaredType(form, component)}").Append(newline);
+            body.Append($"{inner}Private {component.Id} As {DeclaredType(component, style)}").Append(newline);
         }
 
         foreach (var control in form.AllControls())
         {
-            body.Append($"{inner}Private {control.Id} As {DeclaredType(form, control)}").Append(newline);
+            body.Append($"{inner}Private {control.Id} As {DeclaredType(control, style)}").Append(newline);
         }
 
         return body.ToString();
     }
 
     private static string GenerateInit(
-        FormDocument form, string indent, string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        FormDocument form, FormStyle style, string indent, string newline, string filePath,
+        List<DesignDiagnostic> diagnostics)
     {
+        var lines = GenerateInitLines(form, style, indent, filePath, diagnostics);
         var body = new StringBuilder();
+
+        foreach (var line in lines.Where(l => EmitLine(l.Kind, style)))
+        {
+            body.Append(line.Text).Append(newline);
+        }
+
+        return body.ToString();
+    }
+
+    /// <summary>
+    /// The init region as tagged lines. The style filters this list; nothing downstream classifies
+    /// line TEXT to decide what is portable.
+    /// </summary>
+    internal static IReadOnlyList<InitLine> GenerateInitLines(
+        FormDocument form, FormStyle style, string indent, string filePath,
+        List<DesignDiagnostic> diagnostics)
+    {
+        var body = new List<InitLine>();
         var inner = indent + "    ";
+        var dom = style == FormStyle.Dom;
 
-        body.Append($"{indent}Private Sub InitializeComponent()").Append(newline);
+        Add(body, $"{indent}Private Sub InitializeComponent()", InitLineKind.Other);
 
-        if (form.Target == FormTarget.Web)
+        if (dom)
         {
             // Declared locally so the region is self-contained — it must not depend on a field the
             // user could rename or remove.
-            body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
+            Add(body, $"{inner}Dim doc As Document = ::document", InitLineKind.Other);
 
             // ⛔ The TYPED Window, and only when a script component exists (Task 25). Typed rather
             // than the ::window hatch so that the compiler — not a runtime TypeError — rejects a
@@ -718,7 +786,7 @@ public static class RegionWriter
             // component EXISTING, not on one being wired — an unused local is the cheaper wrong.
             if (form.Components.Any(c => c.Definition?.WebScript != null))
             {
-                body.Append($"{inner}Dim w As Window = ::window").Append(newline);
+                Add(body, $"{inner}Dim w As Window = ::window", InitLineKind.Other);
             }
         }
         else
@@ -729,25 +797,29 @@ public static class RegionWriter
             // the same CS1612 reason.
             // ⚠ A REFERENCE row (AcceptButton) is NOT emitted here: its control is constructed below, and until then the
             // field is Nothing (pre-flight B4) — it follows the add run, beside the FormProperty line.
+            // Portable generates these tagged lines and filters them, so the remove-list stays explicit.
             foreach (var row in RootRows(form).Where(r => r.Type != FormPropertyType.Reference))
             {
-                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
+                AppendRootRow(body, form, row, inner, filePath, diagnostics, InitLineKind.RootProperty);
             }
         }
 
         // Components before controls, as VS constructs them (Task 25).
         foreach (var component in form.Components)
         {
-            AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
+            AppendComponentInit(body, form, component, style, inner, filePath, diagnostics);
         }
 
         // Resolved ONCE per write: a docked control's Size is the size it docks at (AppendPixelGeometry).
-        var docks = form.Target == FormTarget.WinForms ? FormDockLayout.Resolve(form, FormDockMode.Designer) : null;
+        // Portable generates the WinForms geometry (and filters it), so it resolves the same way.
+        var docks = style is FormStyle.WinForms or FormStyle.Dual
+            ? FormDockLayout.Resolve(form, FormDockMode.Designer)
+            : null;
 
         AppendSiblings(
-            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics, docks);
+            body, form, form.Controls, parent: "Me", parentControl: null, style, inner, filePath, diagnostics, docks);
 
-        if (form.Target == FormTarget.WinForms)
+        if (!dom)
         {
             // The form property a row claims — MainMenuStrip for a MenuStrip — for the FIRST control
             // in document order whose row declares one, AFTER the whole add run (the strip must be
@@ -756,19 +828,31 @@ public static class RegionWriter
             var main = form.Controls.FirstOrDefault(c => c.Definition?.FormProperty != null);
             if (main != null)
             {
-                body.Append($"{inner}Me.{main.Definition!.FormProperty} = {main.Id}").Append(newline);
+                Add(body, $"{inner}Me.{main.Definition!.FormProperty} = {main.Id}", InitLineKind.Reference);
             }
 
             // The form's REFERENCE rows (AcceptButton, CancelButton), after every control exists — VS's own place for them.
             foreach (var row in RootRows(form).Where(r => r.Type == FormPropertyType.Reference))
             {
-                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
+                AppendRootRow(body, form, row, inner, filePath, diagnostics, InitLineKind.Reference);
             }
         }
 
-        body.Append($"{indent}End Sub").Append(newline);
-        return body.ToString();
+        Add(body, $"{indent}End Sub", InitLineKind.Other);
+        return body;
     }
+
+    private static void Add(List<InitLine> body, string text, InitLineKind kind) =>
+        body.Add(new InitLine(text, kind));
+
+    /// <summary>
+    /// The portable subset: everything the WinForms walk generated except geometry, control
+    /// properties, form-root rows and references. <see cref="InitLineKind.ComponentProperty"/> is
+    /// deliberately retained — a tray component has no other way to carry its settings.
+    /// </summary>
+    private static bool EmitLine(InitLineKind kind, FormStyle style) =>
+        style != FormStyle.Portable ||
+        kind is InitLineKind.Other or InitLineKind.ComponentProperty;
 
     /// <summary>The FormRoot rows that exist on a WinForms form — the ones its InitializeComponent sets on <c>Me</c>.</summary>
     private static IEnumerable<FormPropertyDef> RootRows(FormDocument form) =>
@@ -779,8 +863,8 @@ public static class RegionWriter
     /// are one statement each), or a warning and nothing.
     /// </summary>
     private static void AppendRootRow(
-        StringBuilder body, FormDocument form, FormPropertyDef row, string inner, string newline,
-        string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormDocument form, FormPropertyDef row, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics, InitLineKind kind)
     {
         var value = FormRootValues.Get(form, row);
         if (value == null)
@@ -818,7 +902,7 @@ public static class RegionWriter
             return;
         }
 
-        body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
+        Add(body, $"{inner}Me.{row.Name} = {Literal(row, value)}", kind);
     }
 
     /// <summary>Whether a reference names a control (or component) of this form whose kind its row allows.</summary>
@@ -858,16 +942,16 @@ public static class RegionWriter
     /// <c>ToolStripMenuItem</c> is not a <c>Control</c>: csc CS1503).</para>
     /// </summary>
     private static void AppendSiblings(
-        StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
-        FormControl? parentControl, string inner, string newline, string filePath,
+        List<InitLine> body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
+        FormControl? parentControl, FormStyle style, string inner, string filePath,
         List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         foreach (var control in controls)
         {
-            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics, docks);
+            AppendControlInit(body, form, control, parent, style, inner, filePath, diagnostics, docks);
         }
 
-        if (form.Target != FormTarget.WinForms)
+        if (style == FormStyle.Dom)
         {
             return;
         }
@@ -881,9 +965,9 @@ public static class RegionWriter
             // Items.Added under a strip and DropDownItems.Added under a menu item.
             foreach (var child in controls)
             {
-                body.Append(inner)
-                    .Append(rule.Add.Replace("{parent}", parent).Replace("{child}", child.Id))
-                    .Append(newline);
+                Add(body,
+                    inner + rule.Add.Replace("{parent}", parent).Replace("{child}", child.Id),
+                    InitLineKind.Other);
             }
 
             return;
@@ -891,7 +975,7 @@ public static class RegionWriter
 
         for (var i = controls.Count - 1; i >= 0; i--)
         {
-            body.Append($"{inner}{parent}.Controls.Add({controls[i].Id})").Append(newline);
+            Add(body, $"{inner}{parent}.Controls.Add({controls[i].Id})", InitLineKind.Other);
         }
     }
 
@@ -906,27 +990,31 @@ public static class RegionWriter
     /// reachable from ordinary use.</para>
     /// </summary>
     private static void AppendControlInit(
-        StringBuilder body, FormDocument form, FormControl control, string parent, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
+        List<InitLine> body, FormDocument form, FormControl control, string parent, FormStyle style,
+        string inner, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
-        if (form.Target == FormTarget.Web)
+        if (style == FormStyle.Dom)
         {
-            body.Append($"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")").Append(newline);
+            Add(body, $"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")", InitLineKind.Other);
         }
         else
         {
-            body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
+            Add(body, $"{inner}{control.Id} = New {DeclaredType(control, style)}()", InitLineKind.Other);
 
-            AppendPixelGeometry(body, control, inner, newline, docks);
-            AppendProperties(body, control, inner, newline, filePath, diagnostics);
+            // `Name` is what the portable Forms library keys by, and what VS writes on the desktop.
+            // It is intentionally NOT emitted for a DOM element: that handle already IS the element.
+            Add(body, $"{inner}{control.Id}.Name = \"{control.Id}\"", InitLineKind.Other);
+
+            AppendPixelGeometry(body, control, inner, docks);
+            AppendProperties(body, control, inner, filePath, diagnostics, InitLineKind.Property);
         }
 
-        AppendBinds(body, form, control, inner, newline);
+        AppendBinds(body, form, control, style, inner);
 
         // ⚠ The container's own children, parented to IT — and their adds happen here, so a
         // container is fully populated before the caller adds it to its own parent, which is the
         // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics, docks);
+        AppendSiblings(body, form, control.Children, control.Id, control, style, inner, filePath, diagnostics, docks);
     }
 
     /// <summary>
@@ -941,17 +1029,17 @@ public static class RegionWriter
     /// it does not support the target, so the toolbox never offered it.</para>
     /// </summary>
     private static void AppendComponentInit(
-        StringBuilder body, FormDocument form, FormControl component, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormDocument form, FormControl component, FormStyle style, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics)
     {
         var definition = component.Definition;
 
-        if (form.Target == FormTarget.Web)
+        if (style == FormStyle.Dom)
         {
             // The same predicate the ordering check and the bind warning use — one definition of
             // "this bind is wired", so the three cannot disagree about a document.
             var script = definition?.WebScript;
-            var bind = component.Binds.FirstOrDefault(b => IsEmittedBind(form, component, b));
+            var bind = component.Binds.FirstOrDefault(b => IsEmittedBind(form, style, component, b));
 
             if (script == null || bind == null)
             {
@@ -959,13 +1047,13 @@ public static class RegionWriter
             }
 
             var construct = ExpandWebScript(script.Construct, definition!, component, bind.Handler, filePath, diagnostics);
-            body.Append($"{inner}{component.Id} = {construct}").Append(newline);
+            Add(body, $"{inner}{component.Id} = {construct}", InitLineKind.Other);
             return;
         }
 
-        body.Append($"{inner}{component.Id} = New {DeclaredType(form, component)}()").Append(newline);
-        AppendProperties(body, component, inner, newline, filePath, diagnostics);
-        AppendBinds(body, form, component, inner, newline);
+        Add(body, $"{inner}{component.Id} = New {DeclaredType(component, style)}()", InitLineKind.Other);
+        AppendProperties(body, component, inner, filePath, diagnostics, InitLineKind.ComponentProperty);
+        AppendBinds(body, form, component, style, inner);
     }
 
     /// <summary>
@@ -1031,8 +1119,8 @@ public static class RegionWriter
     /// once; a second copy for the tray would drift on the first fix applied to one of them.</para>
     /// </summary>
     private static void AppendProperties(
-        StringBuilder body, FormControl control, string inner, string newline,
-        string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormControl control, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics, InitLineKind kind)
     {
         // ⛔ One statement per property. There is no object-initializer syntax, and `With` must
         // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
@@ -1082,20 +1170,21 @@ public static class RegionWriter
             {
                 foreach (var item in FormPropertyDef.SplitItems(value))
                 {
-                    body.Append($"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})")
-                        .Append(newline);
+                    Add(body,
+                        $"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})",
+                        kind);
                 }
 
                 continue;
             }
 
-            body.Append($"{inner}{control.Id}.{name} = {Literal(property, value)}").Append(newline);
+            Add(body, $"{inner}{control.Id}.{name} = {Literal(property, value)}", kind);
         }
     }
 
     /// <summary>The wiring, shared by controls and components: <c>AddHandler</c> or <c>addEventListener</c> per bind.</summary>
     private static void AppendBinds(
-        StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
+        List<InitLine> body, FormDocument form, FormControl control, FormStyle style, string inner)
     {
         foreach (var bind in control.Binds)
         {
@@ -1104,7 +1193,7 @@ public static class RegionWriter
                 continue;
             }
 
-            if (form.Target == FormTarget.Web)
+            if (style == FormStyle.Dom)
             {
                 // ⛔ NEVER `AddHandler el.click, AddressOf H` on the web: the event-call rewrite
                 // emits `{recv}.add(handler)` unconditionally, so that becomes `el.click.add(H)` →
@@ -1127,16 +1216,46 @@ public static class RegionWriter
                     ? CanonicalWebEvent(definition, bind) ?? bind.Event
                     : bind.Event;
 
-                body.Append($"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})")
-                    .Append(newline);
+                Add(body,
+                    $"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})",
+                    InitLineKind.Other);
             }
             else
             {
+                // Portable code is WinForms-shaped, so it must use the WinForms EVENT spelling. A
+                // web document stores `click`; AddHandler btn.click would not compile. Map through
+                // the catalog, and only fall back to the document when it already is the WinForms
+                // name (the ordinary desktop case).
+                var eventName = style == FormStyle.Portable && control.Definition is { } definition
+                    ? CanonicalPortableEvent(definition, bind) ?? bind.Event
+                    : bind.Event;
+
                 // ⛔ NEVER `Handles` — it is lexed but never parsed, so the file would not build.
-                body.Append($"{inner}AddHandler {control.Id}.{bind.Event}, AddressOf {bind.Handler}")
-                    .Append(newline);
+                Add(body,
+                    $"{inner}AddHandler {control.Id}.{eventName}, AddressOf {bind.Handler}",
+                    InitLineKind.Other);
             }
         }
+    }
+
+    /// <summary>
+    /// The WinForms spelling of a bind that a web document may have written in the DOM's vocabulary.
+    /// Matches either spelling so <c>click</c> and <c>Click</c> reach <c>AddHandler btn.Click</c>.
+    /// </summary>
+    private static string? CanonicalPortableEvent(FormControlDef definition, FormBind bind)
+    {
+        foreach (var evt in FormEvents.WiredOn(definition, FormTarget.WinForms))
+        {
+            var winForms = FormEvents.NameOn(evt, FormTarget.WinForms);
+            var web = FormEvents.NameOn(evt, FormTarget.Web);
+            if (string.Equals(winForms, bind.Event, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(web, bind.Event, StringComparison.OrdinalIgnoreCase))
+            {
+                return winForms;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1162,7 +1281,7 @@ public static class RegionWriter
     /// </summary>
     /// <param name="docks">The form resolved ONCE in Designer mode for this write (null on the web).</param>
     private static void AppendPixelGeometry(
-        StringBuilder body, FormControl control, string inner, string newline, FormDockLayoutResult? docks)
+        List<InitLine> body, FormControl control, string inner, FormDockLayoutResult? docks)
     {
         if (control.Geometry is not PixelGeometry stored)
         {
@@ -1189,14 +1308,14 @@ public static class RegionWriter
         // `New Point(−5, −3)` is CS1056 at csc — from a control dragged past the form's left edge.
         if (pixel.X != 0 || pixel.Y != 0)
         {
-            body.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})")).Append(newline);
+            Add(body, string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})"), InitLineKind.Geometry);
         }
 
         if (writeSize)
         {
-            body.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);
+            Add(body, string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})"), InitLineKind.Geometry);
         }
 
         // ⛔ The enum's OWN spelling (FormDock.Canonical): `DockStyle.fill` is CS0117 at csc and BasicLang says
@@ -1205,12 +1324,12 @@ public static class RegionWriter
         if (!FormDock.IsBlank(pixel.Dock))
         {
             var member = FormDock.Canonical(pixel.Dock) ?? pixel.Dock!.Trim();
-            body.Append($"{inner}{control.Id}.Dock = DockStyle.{member}").Append(newline);
+            Add(body, $"{inner}{control.Id}.Dock = DockStyle.{member}", InitLineKind.Geometry);
         }
 
         if (!string.IsNullOrWhiteSpace(pixel.Anchor))
         {
-            body.Append($"{inner}{control.Id}.Anchor = {AnchorExpression(pixel.Anchor)}").Append(newline);
+            Add(body, $"{inner}{control.Id}.Anchor = {AnchorExpression(pixel.Anchor)}", InitLineKind.Geometry);
         }
     }
 
@@ -1329,9 +1448,11 @@ public static class RegionWriter
     /// A script-backed component (Task 25) declares its <see cref="FormWebScript.FieldType"/>
     /// instead: a Timer is an <c>Integer</c> handle, not an element.
     /// </summary>
-    private static string DeclaredType(FormDocument form, FormControl control)
+    private static string DeclaredType(FormControl control, FormStyle style)
     {
-        if (form.Target == FormTarget.Web)
+        // The DOM handle is an Element; a portable field is the WinForms type the portable library
+        // supplies, exactly as on the desktop.
+        if (style == FormStyle.Dom)
         {
             return control.Definition?.WebScript?.FieldType ?? "Element";
         }

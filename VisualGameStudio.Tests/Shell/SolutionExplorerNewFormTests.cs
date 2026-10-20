@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using BasicLang.Forms;
 using Moq;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
@@ -118,6 +119,37 @@ public class SolutionExplorerNewFormTests
     }
 
     [Test]
+    public async Task AddWebFormPortableCommand_WritesAPortableWebPairThroughTheGeneratedCommand()
+    {
+        _project.UseWindowsForms = null;
+        AnswerThePrompt("PortableLogin");
+
+        var opened = new List<string>();
+        _vm.FileOpenRequested += (_, path) => opened.Add(path);
+
+        await _vm.AddWebFormPortableCommand.ExecuteAsync(null);
+
+        var codePath = Path.Combine(_dir, "PortableLogin.bas");
+        Assert.Multiple(() =>
+        {
+            Assert.That(File.Exists(Path.Combine(_dir, "PortableLogin.blwebform")), Is.True);
+            Assert.That(File.Exists(Path.Combine(_dir, "PortableLogin.blform")), Is.False);
+            Assert.That(File.Exists(codePath), Is.True);
+
+            var code = File.ReadAllText(codePath);
+            Assert.That(code, Does.Contain("Using System.Windows.Forms"));
+            Assert.That(code, Does.Contain("Inherits Form"));
+            Assert.That(code, Does.Not.Contain("e As DomEvent"));
+            Assert.That(RegionMarkers.Scan(code), Has.All.Property(nameof(FormRegion.Style))
+                .EqualTo("portable"), "the opt-in command must record portable in both markers");
+
+            Assert.That(opened, Is.EqualTo(new[] { Path.Combine(_dir, "PortableLogin.blwebform") }));
+            Assert.That(_project.Items.Any(i => i.Include == "PortableLogin.blwebform"), Is.True);
+            Assert.That(_project.Items.Any(i => i.Include == "PortableLogin.bas"), Is.True);
+        });
+    }
+
+    [Test]
     public async Task AddNewFormCommand_MaterialisesTheGlobBeforeListingItsFirstCompileItem()
     {
         // ⛔⛔ The compiler globs **/*.bas ONLY while a project has no explicit <Compile> item. The
@@ -189,6 +221,13 @@ public class SolutionExplorerNewFormTests
             "entry point in the IDE at all.");
         Assert.That(Regex.IsMatch(text, "Header=\"New Form"), Is.True,
             "the menu item must be labelled so a user can find it.");
+
+        // Task 30's opt-in is also a reachability gate: a generated command with no binding is
+        // exactly as dead as the unattributed method once was.
+        Assert.That(text, Does.Contain("AddWebFormPortableCommand"),
+            "the Add submenu must bind AddWebFormPortableCommand.");
+        Assert.That(Regex.IsMatch(text, "Header=\"New Web Form \\(portable\\)"), Is.True,
+            "the portable opt-in must be labelled distinctly from the ordinary New Form.");
     }
 
     private static string? FindRepoFile(params string[] relativeParts)

@@ -99,20 +99,34 @@ public static class FormHandlers
     /// </summary>
     public static FormHandlerPlan PlanDefault(FormDocument form, FormControl control, string codeText)
     {
+        var style = ReadStyle(form, codeText);
+        if (style.Problem != null)
+        {
+            return Refuse(codeText, style.Problem);
+        }
+
         var definition = control.Definition;
-        var evt = definition?.DefaultEventDefOn(form.Target);
-        var eventName = evt == null ? null : FormEvents.NameOn(evt, form.Target);
+
+        // Portable code is WinForms-shaped, so its event vocabulary and argument type are the
+        // desktop ones even though the document target is Web.
+        var eventTarget = style.Style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+        var evt = definition?.DefaultEventDefOn(eventTarget);
+        var eventName = evt == null ? null : FormEvents.NameOn(evt, eventTarget);
         if (evt == null || string.IsNullOrEmpty(eventName))
         {
             return Refuse(codeText,
-                $"'{control.Kind}' has no default event for {Describe(form.Target)}, so there is " +
+                $"'{control.Kind}' has no default event for {Describe(eventTarget)}, so there is " +
                 "nothing for a double-click to open. Add one to the control catalog.");
         }
 
         // An existing wiring names the handler — never renamed, whichever rule named it; otherwise the convention
-        // does, from the WinForms event name on BOTH targets (owner decision 2026-09-29).
+        // does, from the WinForms event name on BOTH targets (owner decision 2026-09-29). A portable
+        // web document may still spell the event `click` while the code writes `Click`, so match the
+        // event's web spelling too.
+        var webName = FormEvents.NameOn(evt, FormTarget.Web);
         var bind = control.Binds.FirstOrDefault(
-            b => string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) &&
+            b => (string.Equals(b.Event, eventName, StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(b.Event, webName, StringComparison.OrdinalIgnoreCase)) &&
                  !string.IsNullOrEmpty(b.Handler));
         var handler = bind?.Handler ?? NameFor(control.Id, evt.Name);
 
@@ -123,7 +137,7 @@ public static class FormHandlers
         // for a Paint handler a page can never raise.
         var notice = definition?.DefaultEventDef is { } preferred && !ReferenceEquals(preferred, evt)
             ? $"{DesignCodes.DefaultEventNotOnTarget}: a {control.Kind}'s default event, {preferred.Name}, has no " +
-              $"{Describe(form.Target)} equivalent, so the double-click opened {evt.Name} ('{eventName}') instead."
+              $"{Describe(eventTarget)} equivalent, so the double-click opened {evt.Name} ('{eventName}') instead."
             : null;
 
         return plan.Outcome == HandlerOutcome.Refused || notice == null ? plan : plan with { Notice = notice };
@@ -139,13 +153,26 @@ public static class FormHandlers
     /// <returns>A plan, or a refusal when the bind names no handler or no event of the kind.</returns>
     public static FormHandlerPlan PlanBind(FormDocument form, FormControl control, FormBind bind, string codeText)
     {
+        var style = ReadStyle(form, codeText);
+        if (style.Problem != null)
+        {
+            return Refuse(codeText, style.Problem);
+        }
+
         var definition = control.Definition;
-        var evt = definition == null ? null : EventOn(definition, bind.Event, form.Target);
+        var eventTarget = style.Style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+        var evt = definition == null ? null : EventOn(definition, bind.Event, eventTarget);
+        if (evt == null && style.Style == FormStyle.Portable && definition != null)
+        {
+            // Existing web documents spell events 'click'; portable code still needs Click.
+            evt = EventOn(definition, bind.Event, FormTarget.Web);
+        }
+
         if (evt == null || string.IsNullOrEmpty(bind.Handler))
         {
             return Refuse(codeText,
                 $"'{control.Id}' has a bind on '{bind.Event}', which is not an event '{control.Kind}' has on " +
-                $"{Describe(form.Target)}, so no handler was written for it.");
+                $"{Describe(eventTarget)}, so no handler was written for it.");
         }
 
         return Plan(form, codeText, bind.Event, bind.Handler, evt.WinFormsArgs, definition);
@@ -160,6 +187,12 @@ public static class FormHandlers
         FormDocument form, string codeText, string eventName, string handler, string? winFormsArgs,
         FormControlDef? definition)
     {
+        var style = ReadStyle(form, codeText);
+        if (style.Problem != null)
+        {
+            return Refuse(codeText, style.Problem);
+        }
+
         var index = new Recognizer.SourceIndex(codeText);
 
         var existing = FindDeclarationLine(index, handler);
@@ -171,7 +204,7 @@ public static class FormHandlers
                 Math.Min(existing + 1, Math.Max(1, index.LineCount)), null);
         }
 
-        var init = RegionMarkers.Find(RegionMarkers.Scan(codeText), RegionMarkers.Init);
+        var init = RegionMarkers.Find(style.Regions, RegionMarkers.Init);
         if (init == null)
         {
             return Refuse(codeText,
@@ -187,8 +220,18 @@ public static class FormHandlers
                 "not written. Fix the '<vgs:designer>' markers and try again.");
         }
 
-        return Insert(form, codeText, index, init, eventName, handler, winFormsArgs, definition);
+        return Insert(
+            form, style.Style, codeText, index, init, eventName, handler, winFormsArgs, definition);
     }
+
+    private static FormStyleRead ReadStyle(FormDocument form, string codeText) =>
+        // The handler planner has no file name, but its document target names the extension whose
+        // style rules apply. This keeps the same strictness as the writer: dual is not legal on a
+        // web form, and portable is not legal on a desktop form, even from the handler route.
+        FormCodeStyle.Of(
+            codeText,
+            form.Target == FormTarget.Web ? "Form.blwebform" : "Form.blform",
+            form.Target);
 
     /// <param name="winFormsArgs">
     /// The EVENT's <c>e</c> type on WinForms (Task 25; null means <c>EventArgs</c>): <c>DoWorkEventArgs</c> for a
@@ -201,6 +244,7 @@ public static class FormHandlers
     /// </param>
     private static FormHandlerPlan Insert(
         FormDocument form,
+        FormStyle style,
         string codeText,
         Recognizer.SourceIndex index,
         FormRegion init,
@@ -214,11 +258,13 @@ public static class FormHandlers
         var newline = codeText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
         var indent = IndentOf(index, init.Line);
 
-        var signature = form.Target == FormTarget.Web
+        var signature = style == FormStyle.Dom
             ? definition?.WebHandlerTakesEvent == false
                 ? $"{indent}Private Sub {handler}()"
                 // ⛔ addEventListener will not accept anything but Action(Of DomEvent).
                 : $"{indent}Private Sub {handler}(e As DomEvent)"
+            // Portable is AddHandler with the WinForms signature, even for a Timer: the portable
+            // library's events are the desktop ones, not Window.setInterval's Action callback.
             : $"{indent}Private Sub {handler}(sender As Object, e As {winFormsArgs ?? "EventArgs"})";
 
         var stub = new StringBuilder()
@@ -236,7 +282,7 @@ public static class FormHandlers
         //   .NET member typed Object, so there is no declared delegate to mismatch) and because the
         //   scaffold's own "your event handlers go here" comment sits below the region. A stub above
         //   it would land somewhere the file itself says handlers do not go.
-        var at = form.Target == FormTarget.Web
+        var at = style == FormStyle.Dom
             ? StartOfLineAt(codeText, init.StartOffset)
             : AfterLine(codeText, init.EndOffset);
 

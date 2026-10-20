@@ -102,13 +102,26 @@ public static class FormScaffolder
     /// <param name="webLayout">A new web form's layout: Canvas (spec 2026-09-27 D1, the default — designed like a
     /// WinForms form) or Grid (the pre-piece-1 scaffold, which tests that build their page from a Grid scaffold
     /// pin). There is no Flow scaffold. Ignored for WinForms.</param>
+    /// <param name="portable">
+    /// The Task 30 opt-in: write a portable web code-behind (WinForms-shaped, three Using lines, init below
+    /// <c>New</c>) and record <c>style="portable"</c> in both empty region markers before the writer runs.
+    /// The marker, not the absence of controls, is what keeps a new form portable.
+    /// </param>
     public static FormScaffold Create(
-        string formName, FormTarget target = FormTarget.Web, FormLayoutKind webLayout = FormLayoutKind.Canvas)
+        string formName, FormTarget target = FormTarget.Web, FormLayoutKind webLayout = FormLayoutKind.Canvas,
+        bool portable = false)
     {
         var illegal = DescribeIllegalName(formName);
         if (illegal != null)
         {
             throw new ArgumentException(illegal, nameof(formName));
+        }
+
+        if (portable && target != FormTarget.Web)
+        {
+            throw new ArgumentException(
+                "the portable code style is a web code-behind style; a WinForms form is already the desktop shape.",
+                nameof(portable));
         }
 
         var document = new FormDocument { Target = target, Name = formName };
@@ -154,7 +167,9 @@ public static class FormScaffolder
             documentFileName,
             Serialization.FormDocumentWriter.Create(document),
             codeFileName,
-            WithGeneratedRegions(CodeBehind(formName, documentFileName, target), codeFileName, document, documentFileName));
+            WithGeneratedRegions(
+                CodeBehind(formName, documentFileName, target, portable ? FormCodeStyle.PortableValue : null),
+                codeFileName, document, documentFileName));
     }
 
     /// <summary>
@@ -185,20 +200,23 @@ public static class FormScaffolder
     }
 
     private static void AppendInitRegion(
-        StringBuilder sb, string documentFileName, string emptyHash, string indent)
+        StringBuilder sb, string documentFileName, string emptyHash, string indent, string? style)
     {
-        sb.Append(RegionMarkers.FormatOpen(RegionMarkers.Init, documentFileName, emptyHash, indent)).Append('\n');
+        sb.Append(RegionMarkers.FormatOpen(
+            RegionMarkers.Init, documentFileName, emptyHash, indent, style)).Append('\n');
         sb.Append(RegionMarkers.FormatClose(indent)).Append('\n');
         sb.Append('\n');
     }
 
-    private static string CodeBehind(string formName, string documentFileName, FormTarget target)
+    private static string CodeBehind(
+        string formName, string documentFileName, FormTarget target, string? style)
     {
         const string indent = "    ";
         var emptyHash = RegionMarkers.HashContent("");
         var sb = new StringBuilder();
+        var winFormsShape = target == FormTarget.WinForms || style == FormCodeStyle.PortableValue;
 
-        if (target == FormTarget.WinForms)
+        if (winFormsShape)
         {
             sb.Append("Using System\n");
             sb.Append("Using System.Drawing\n");
@@ -206,7 +224,7 @@ public static class FormScaffolder
         }
 
         sb.Append($"Public Class {formName}\n");
-        if (target == FormTarget.WinForms)
+        if (winFormsShape)
         {
             sb.Append($"{indent}Inherits Form\n");
         }
@@ -214,7 +232,8 @@ public static class FormScaffolder
         sb.Append('\n');
 
         // Region 1: the field declarations.
-        sb.Append(RegionMarkers.FormatOpen(RegionMarkers.Controls, documentFileName, emptyHash, indent)).Append('\n');
+        sb.Append(RegionMarkers.FormatOpen(
+            RegionMarkers.Controls, documentFileName, emptyHash, indent, style)).Append('\n');
         sb.Append(RegionMarkers.FormatClose(indent)).Append('\n');
         sb.Append('\n');
 
@@ -231,10 +250,12 @@ public static class FormScaffolder
         sb.Append($"{indent}End Sub\n");
         sb.Append('\n');
 
-        if (target == FormTarget.WinForms)
+        if (winFormsShape)
         {
-            // Canonical VSIX order: InitializeComponent right after New(), handlers below it.
-            AppendInitRegion(sb, documentFileName, emptyHash, indent);
+            // Canonical VSIX order: InitializeComponent right after New(), handlers below it. This is
+            // also the portable order: AddHandler has the WinForms signature and tolerates a later
+            // declaration, so BL8013 does not apply.
+            AppendInitRegion(sb, documentFileName, emptyHash, indent, style);
             sb.Append($"{indent}' Your event handlers go here.\n");
             sb.Append('\n');
         }
@@ -246,7 +267,7 @@ public static class FormScaffolder
             sb.Append($"{indent}' on the web an AddressOf naming a Sub declared later loses its\n");
             sb.Append($"{indent}' parameter types and addEventListener will not accept it.\n");
             sb.Append('\n');
-            AppendInitRegion(sb, documentFileName, emptyHash, indent);
+            AppendInitRegion(sb, documentFileName, emptyHash, indent, style);
         }
 
         sb.Append("End Class\n");
