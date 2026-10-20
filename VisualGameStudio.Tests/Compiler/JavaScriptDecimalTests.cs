@@ -376,6 +376,15 @@ public class JavaScriptDecimalTests
         " Try1(\"abc\")\n Try1(\"1e5\")\n Try1(\"\")\n Try1(\"0.12345678901234567890123456789\")\n" +
         " Try1(\"79228162514264337593543950336\")\n Try1(\"-79228162514264337593543950336\")\nEnd Sub\n");
 
+    // ------------------------------------------------------------ D17, D22
+
+    [Test]
+    public void ListsArraysAndOptional() => Both(Id +
+        "Function Fee(Optional rate As Decimal = 0.05D) As Decimal\n Return rate\nEnd Function\n" +
+        "Sub Main()\n Dim list As New List(Of Decimal)\n list.Add(Id(1.10D))\n list.Add(Id(2.205D))\n Dim sum As Decimal = 0D\n" +
+        " For Each x As Decimal In list\n  sum = sum + x\n Next\n Console.WriteLine(sum)\n Console.WriteLine(list(1))\n Console.WriteLine(list.Count)\n" +
+        " Dim arr() As Decimal = {1.1D, 2.2D}\n Console.WriteLine(arr(0) + arr(1))\n Console.WriteLine(Fee())\n Console.WriteLine(Fee(Id(0.1D)))\nEnd Sub\n");
+
     // ------------------------------------------------------------ D9: Long stays refused
 
     [Test]

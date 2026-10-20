@@ -2603,6 +2603,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             var name = call.FunctionName;
             if (string.IsNullOrEmpty(name)) return false;
 
+            // BL7014 — Array.IndexOf over a Decimal array compares VgsDecimal objects by
+            // identity (JS Array.indexOf), so an equal value already in the array answers -1.
+            // The ELEMENT type is known only here; the static call has no generic receiver.
+            if (string.Equals(name, "Array.IndexOf", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "System.Array.IndexOf", StringComparison.OrdinalIgnoreCase))
+            {
+                if (call.Arguments.Count > 0 && IsDecimalArray(call.Arguments[0].Type))
+                    throw DecimalCollectionRefusal("Array.IndexOf");
+                return false;
+            }
+
             if (string.Equals(name, "Decimal.Parse", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, "System.Decimal.Parse", StringComparison.OrdinalIgnoreCase))
             {
@@ -2689,6 +2700,34 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         /// <summary>BL7014 — a Decimal construct JavaScript refuses BY NAME, never lowers wrong.</summary>
         private static NotSupportedException DecimalRefusal(string construct, string detail) =>
             new NotSupportedException($"BL7014: '{construct}' cannot be lowered to JavaScript for a Decimal argument ({detail}) - DecimalNotSupportedOnWeb.");
+
+        /// <summary>BL7014 — a collection operation whose JavaScript lowering would compare
+        /// VgsDecimal objects by identity instead of by value.</summary>
+        private static NotSupportedException DecimalCollectionRefusal(string construct) =>
+            new NotSupportedException(
+                $"BL7014: '{construct}' cannot be lowered to JavaScript — a Decimal compares by " +
+                "object identity there, not by value, so an equal value would be missed. Compare " +
+                "the Decimal's text explicitly instead (DecimalNotSupportedOnWeb).");
+
+        /// <summary>True for a Decimal array (<c>Decimal[]</c>, <c>Decimal(,)</c>).</summary>
+        private static bool IsDecimalArray(TypeInfo type)
+        {
+            if (type == null) return false;
+            if (IsDecimalTypeName(type.ElementType)) return true;
+
+            // An array TypeInfo can carry the brackets in its NAME instead of an ElementType
+            // (the same shape JsCapabilityChecker.BaseName documents). Strip them and any
+            // namespace, but require the base name to be exactly Decimal: a user type named
+            // MyDecimal must not be mistaken for it.
+            var name = type.Name;
+            if (string.IsNullOrEmpty(name)) return false;
+            var bracket = name.IndexOf('[');
+            if (bracket < 0) return false;
+            name = name.Substring(0, bracket);
+            var dot = name.LastIndexOf('.');
+            if (dot >= 0) name = name.Substring(dot + 1);
+            return string.Equals(name, "Decimal", StringComparison.OrdinalIgnoreCase);
+        }
 
         private string CallTarget(string functionName, bool mayBeMember = true)
         {
@@ -4604,6 +4643,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 return $"VgsDecimal.objEquals({receiver}, {args[0]})";
 
             var kind = ReceiverKind(mc.Object);
+
+            // BL7014 — List(Of Decimal).Contains/IndexOf/Remove would lower to includes/indexOf/
+            // Remove on a native array, which compare VgsDecimal objects by identity: an equal
+            // Decimal already in the list answers false/-1/not-removed. Add, indexing, Count and
+            // For Each are value-independent and stay. The ELEMENT type is known here; the static
+            // rename table cannot see it.
+            if (kind == CollectionKind.List
+                && IsDecimalTypeName(mc.Object?.Type?.GenericArguments?.FirstOrDefault())
+                && (string.Equals(mc.MethodName, "Contains", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mc.MethodName, "IndexOf", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mc.MethodName, "Remove", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw DecimalCollectionRefusal($"List(Of Decimal).{mc.MethodName}");
+            }
 
             // Sort needs the ELEMENT TYPE, which the static rename table cannot see.
             if (kind == CollectionKind.List && string.Equals(mc.MethodName, "Sort", StringComparison.OrdinalIgnoreCase))

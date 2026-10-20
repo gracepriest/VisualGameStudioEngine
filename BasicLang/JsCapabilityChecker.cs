@@ -557,6 +557,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     $"{banned.Code}: '{type.Name}' cannot be lowered to JavaScript — {banned.Why} " +
                     $"(found as {where}.)");
 
+            // BL7014 — a Decimal KEY (Dictionary) or ELEMENT (HashSet). JavaScript's Map/Set
+            // compare objects by identity, so two equal Decimals — the same value held in two
+            // VgsDecimal objects — are different keys; a lookup silently misses. The value side
+            // of a Dictionary is fine (it is stored and read, never hashed).
+            if ((string.Equals(name, "Dictionary", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(name, "HashSet", StringComparison.OrdinalIgnoreCase))
+                && type.GenericArguments is { Count: > 0 }
+                && string.Equals(BaseName(type.GenericArguments[0].Name), "Decimal", StringComparison.OrdinalIgnoreCase))
+            {
+                var role = string.Equals(name, "Dictionary", StringComparison.OrdinalIgnoreCase) ? "keyed by" : "of";
+                throw new ForeignFeatureException(
+                    $"BL7014: '{name}' {role} Decimal cannot be lowered to JavaScript — a Decimal " +
+                    "key/element compares by object identity there, not by value; key by the " +
+                    $"Decimal's text instead (DecimalNotSupportedOnWeb). (Found as {where}.)");
+            }
+
             // Value aggregates reached through a USE rather than a declaration. This is the
             // only channel for Type…End Type and Union, which produce no IR declaration at
             // all, so CheckValueAggregates cannot see them.
