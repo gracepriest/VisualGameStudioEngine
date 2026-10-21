@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Forms;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
 {
@@ -597,6 +598,17 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // with a message that says how to declare it.
                 if (JsExceptionTypes.LooksLikeException(name))
                     throw UnknownExceptionRejection(name);
+
+                // Task 34: a WinForms/Drawing type the web library does not declare is not a
+                // generic BCL miss. Name it and point at the desktop escape hatch.
+                if (PortableLibraryTypes.IsKnownWinFormsKind(name)
+                    || PortableLibraryTypes.IsUnavailableDrawingType(name))
+                {
+                    throw new ForeignFeatureException(
+                        $"WebUnavailableMember: '{name}' is a WinForms type that is not available on the web. " +
+                        "Put desktop-only code inside #If DESKTOP Then ... #End If. " +
+                        $"(Found as {where}.)");
+                }
 
                 throw new ForeignFeatureException(
                     $"BL7007: '{type.Name}' is not available on the JavaScript backend — there " +

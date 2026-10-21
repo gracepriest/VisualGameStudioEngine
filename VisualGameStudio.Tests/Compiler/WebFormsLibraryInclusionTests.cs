@@ -78,7 +78,7 @@ public class WebFormsLibraryInclusionTests
     public void UsingSystemWindowsForms_IncludesTheLibrary()
     {
         var result = Compile(Js(), ("Main.bas",
-            "Using System.Windows.Forms\nModule Program\n Sub Main()\n  Dim b As New Button()\n" +
+            "Using System.Windows.Forms\nModule Program\n Sub Main()\n  Dim b As Button\n" +
             "  Console.WriteLine(\"ok\")\n End Sub\nEnd Module\n"));
 
         Assert.That(result.Success, Is.True, string.Join(" | ", result.AllErrors.Select(e => e.Message)));

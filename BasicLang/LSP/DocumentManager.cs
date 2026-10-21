@@ -617,6 +617,13 @@ namespace BasicLang.Compiler.LSP
                     analyzer.ConfigureTypeRegistry(TypeRegistry);
                 }
 
+                // The build's target decides web-only semantics (`.Element`, library receiver
+                // wording) in the editor exactly as it does in the compiler (Task 34).
+                if (!string.IsNullOrEmpty(ProjectContext?.TargetBackend))
+                {
+                    analyzer.ConfigureTarget(ProjectContext.TargetBackend);
+                }
+
                 // Cross-file symbols: analyze against the project-wide symbol
                 // table so Import directives and sibling-file references resolve.
                 if (ProjectContext?.Symbols != null && !string.IsNullOrEmpty(ModuleName))

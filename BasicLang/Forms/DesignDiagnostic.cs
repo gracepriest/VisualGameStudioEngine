@@ -175,6 +175,13 @@ public static class DesignCodes
     public const string UnknownDock = "BL8033";
 
     /// <summary>
+    /// A web code-behind whose DOM-style designer markers sit over WinForms-shaped code. The
+    /// designer refuses to regenerate it and offers Convert (§8.4); the web build stops with the
+    /// same name.
+    /// </summary>
+    public const string MixedCodeStyle = "MixedCodeStyle";
+
+    /// <summary>
     /// A property the document carries that does not exist on the target being generated — a
     /// <c>GroupName</c> in a <c>.blform</c>, say. A WARNING: the value round-trips untouched and
     /// the other target still uses it, but it is skipped here rather than emitted into code that

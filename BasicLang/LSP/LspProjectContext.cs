@@ -260,7 +260,7 @@ namespace BasicLang.Compiler.LSP
                 var editorSymbols = LspProjectContext.EditorSymbolsFor(targetBackend, blproj?.DebugDefineConstants);
 
                 // A web project sees what its build compiles with: the shipped DOM declarations.
-                sourceFiles = WithWebDeclarations(sourceFiles, targetBackend);
+                sourceFiles = WithWebDeclarations(sourceFiles, targetBackend, filePath, currentContent);
 
                 // Gather the effective content of every project file:
                 // current document > open editor buffer > disk.
@@ -454,13 +454,15 @@ namespace BasicLang.Compiler.LSP
         /// type. The portable control library joins here (plan Tasks 28/34) — add its files to
         /// <see cref="WebDeclarationFiles"/>, never a second list.
         /// </summary>
-        private static List<string> WithWebDeclarations(List<string> sourceFiles, string targetBackend)
+        private static List<string> WithWebDeclarations(
+            List<string> sourceFiles, string targetBackend,
+            string? currentFilePath = null, string? currentContent = null)
         {
             if (!BuildSymbols.IsWebBackend(targetBackend))
                 return sourceFiles;
 
             var files = new List<string>(sourceFiles);
-            foreach (var declarations in WebDeclarationFiles())
+            foreach (var declarations in WebDeclarationFiles(sourceFiles, currentFilePath, currentContent))
             {
                 if (File.Exists(declarations)
                     && !files.Any(f => string.Equals(f, declarations, StringComparison.OrdinalIgnoreCase)))
@@ -470,9 +472,34 @@ namespace BasicLang.Compiler.LSP
         }
 
         /// <summary>The declaration files every web build is given, in the build's order.</summary>
-        private static IEnumerable<string> WebDeclarationFiles()
+        private static IEnumerable<string> WebDeclarationFiles(
+            IReadOnlyList<string> sourceFiles,
+            string? currentFilePath = null,
+            string? currentContent = null)
         {
             yield return BasicCompiler.DomDeclarationsPath;
+
+            // Task 34: the portable library joins the editor under the BUILD's own token
+            // trigger (BasicCompiler.HasPortableNamespaceReference), so a web project that
+            // never mentions the namespaces does not pay for 30 library files. The current
+            // buffer is scanned as text, not read from disk, so an unsaved Using works.
+            var mentionsPortable = sourceFiles.Any(file =>
+                string.Equals(file, currentFilePath, StringComparison.OrdinalIgnoreCase)
+                    ? BasicCompiler.HasPortableNamespaceReferenceText(currentContent ?? string.Empty)
+                    : BasicCompiler.HasPortableNamespaceReference(file));
+            if (!mentionsPortable) yield break;
+
+            var directory = BasicCompiler.WebFormsLibraryDirectory;
+            if (!Directory.Exists(directory)) yield break;
+
+            foreach (var file in Directory
+                         .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                         .Where(f => string.Equals(Path.GetExtension(f), ".bas", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(Path.GetExtension(f), ".bli", StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                yield return file;
+            }
         }
 
         private BlprojSnapshot GetBlprojSnapshot(string blprojPath)

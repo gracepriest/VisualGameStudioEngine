@@ -65,6 +65,15 @@ public static class RegionWriter
             diagnostics.Add(Error(DesignCodes.RegionMalformed, style.Problem, filePath, style.Line));
         }
 
+        if (PortableWebSourceChecks.HasMixedCodeStyle(source, style))
+        {
+            diagnostics.Add(Error(DesignCodes.MixedCodeStyle,
+                "MixedCodeStyle: this web form's designer regions are DOM-style, but its code uses " +
+                "System.Windows.Forms/Inherits Form. Convert the form to the portable style or remove " +
+                "the WinForms lines before building it for the web.",
+                filePath, style.Regions.Count > 0 ? style.Regions[0].Line : 1));
+        }
+
         foreach (var region in regions)
         {
             switch (region.State)

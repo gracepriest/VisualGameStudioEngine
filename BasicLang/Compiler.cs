@@ -6,6 +6,7 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Forms;
 
 namespace BasicLang.Compiler
 {
@@ -467,6 +468,21 @@ namespace BasicLang.Compiler
                 }
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
+                // Task 34: the source-level web errors run before analysis so the user sees the
+                // named error, not a follow-on missing-member/conversion error. They only apply
+                // to a JavaScript build that actually carries the portable library, and never to
+                // the library's own units.
+                if (IsJavaScriptTarget && projectUnits.Any(IsPortableLibraryUnit))
+                {
+                    var userUnits = projectUnits.Where(u => !IsPortableLibraryUnit(u)).ToList();
+                    foreach (var error in PortableWebSourceChecks.Check(
+                                 userUnits, (source, path) => _preprocessor.Process(source, path)))
+                    {
+                        result.AllErrors.Add(error);
+                    }
+                    if (result.HasErrors) return FinalizeResult(result, startTime);
+                }
+
                 // The library and a program class must never both claim the same simple name:
                 // the first-wins class merge below would silently keep one and drop the other.
                 // Refuse before analysis, while the program's AST still carries its source line.
@@ -645,40 +661,49 @@ namespace BasicLang.Compiler
             return files;
         }
 
-        /// <summary>Token-level trigger for <see cref="WithWebFormsLibrary"/>.</summary>
-        private static bool HasPortableNamespaceReference(string filePath)
+        /// <summary>Token-level trigger for <see cref="WithWebFormsLibrary"/>; shared with the LSP.</summary>
+        internal static bool HasPortableNamespaceReference(string filePath)
         {
             try
             {
-                var tokens = new Lexer(File.ReadAllText(filePath)).Tokenize();
-                var visible = tokens
-                    .Where(t => t.Type != TokenType.Comment
-                             && t.Type != TokenType.StringLiteral
-                             && t.Type != TokenType.CharLiteral
-                             && t.Type != TokenType.InterpolatedStringLiteral)
-                    .ToList();
-
-                for (var i = 0; i < visible.Count; i++)
-                {
-                    if (MatchesNamespace(visible, i, "System", "Windows", "Forms"))
-                    {
-                        // `Using System.Windows.Forms` needs no trailing dot. A qualified
-                        // reference (`System.Windows.Forms.Button`) does.
-                        if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
-                        if (i + 5 < visible.Count && visible[i + 5].Type == TokenType.Dot) return true;
-                    }
-
-                    if (MatchesNamespace(visible, i, "System", "Drawing"))
-                    {
-                        if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
-                        if (i + 3 < visible.Count && visible[i + 3].Type == TokenType.Dot) return true;
-                    }
-                }
+                return HasPortableNamespaceReferenceText(File.ReadAllText(filePath));
             }
             catch (Exception)
             {
                 // The parser below reports malformed source; a token-scan failure must not
                 // turn a syntax error into a missing-library crash.
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The same trigger over an in-memory buffer, so the editor sees an unsaved
+        /// <c>Using</c> without waiting for a save.
+        /// </summary>
+        internal static bool HasPortableNamespaceReferenceText(string source)
+        {
+            var visible = new Lexer(source ?? string.Empty).Tokenize()
+                .Where(t => t.Type != TokenType.Comment
+                         && t.Type != TokenType.StringLiteral
+                         && t.Type != TokenType.CharLiteral
+                         && t.Type != TokenType.InterpolatedStringLiteral)
+                .ToList();
+
+            for (var i = 0; i < visible.Count; i++)
+            {
+                if (MatchesNamespace(visible, i, "System", "Windows", "Forms"))
+                {
+                    // `Using System.Windows.Forms` needs no trailing dot. A qualified
+                    // reference (`System.Windows.Forms.Button`) does.
+                    if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
+                    if (i + 5 < visible.Count && visible[i + 5].Type == TokenType.Dot) return true;
+                }
+
+                if (MatchesNamespace(visible, i, "System", "Drawing"))
+                {
+                    if (i > 0 && visible[i - 1].Type == TokenType.Using) return true;
+                    if (i + 3 < visible.Count && visible[i + 3].Type == TokenType.Dot) return true;
+                }
             }
 
             return false;
@@ -701,6 +726,14 @@ namespace BasicLang.Compiler
             }
 
             return true;
+        }
+
+        private static bool IsPortableLibraryUnit(CompilationUnit unit)
+        {
+            var directory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(unit.FilePath).StartsWith(directory, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

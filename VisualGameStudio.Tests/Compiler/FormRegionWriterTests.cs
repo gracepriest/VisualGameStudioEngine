@@ -250,6 +250,22 @@ public class FormRegionWriterTests
     }
 
     [Test]
+    public void Write_RefusesMixedCodeStyle()
+    {
+        var source = "Using System.Windows.Forms\n\n" + ScaffoldedFile();
+
+        var result = RegionWriter.Write("LoginForm.bas", source, WebLoginForm(), "LoginForm.blwebform");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Refused, Is.True);
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Text, Is.EqualTo(source), "not one byte may be written over a half-converted file");
+            Assert.That(result.Diagnostics.Select(d => d.Code), Does.Contain(DesignCodes.MixedCodeStyle));
+        });
+    }
+
+    [Test]
     public void Write_NeverEmitsWithOrHandles()
     {
         // ⛔ `.Prop = value` inside a With block is SILENTLY DISCARDED by the IR builder, so the

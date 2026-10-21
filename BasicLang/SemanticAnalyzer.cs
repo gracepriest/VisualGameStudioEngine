@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler;
+using BasicLang.Forms;
 using BasicLang.Net;
 
 namespace BasicLang.Compiler.SemanticAnalysis
@@ -3816,6 +3817,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void ReportMissingWinFormsMember(string fullName, string memberName, int line, int column) =>
             Error($"BL6017: '{fullName}' has no member named '{memberName}'.", line, column);
+
+        /// <summary>Task 34: the web library's missing-member wording (spec §5.11).</summary>
+        private void ReportWebUnavailableMember(string typeName, string memberName, int line, int column) =>
+            Error($"WebUnavailableMember: '{PortableLibraryTypes.SimpleName(typeName)}.{memberName}' is a " +
+                  "WinForms member that is not available on the web. Put desktop-only code inside " +
+                  "#If DESKTOP Then ... #End If.", line, column);
 
         /// <summary>
         /// Portable-controls Task 7d: the WinForms class at the end of <paramref name="classType"/>'s chain of
@@ -10651,7 +10658,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else
             {
-                Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
+                if (_isJavaScriptTarget && PortableLibraryTypes.LibraryTypeName(withType) is { } libraryType)
+                    ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
+                else
+                    Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
         }
@@ -12749,6 +12759,19 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Task 34: `.Element` is the web escape hatch. On a desktop build the receiver's
+            // DECLARED type name decides (WinForms members type as Object, K14); a receiver
+            // typed Object is left to csc.
+            if (!_isJavaScriptTarget
+                && string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
+                && PortableLibraryTypes.IsLibraryReceiver(objectType))
+            {
+                Error("ElementOnDesktop: '.Element' is web-only; wrap it in #If WEB Then ... #End If.",
+                    node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
             // `g.Length` on a rank-2 array is the row count natively and the FLATTENED count on
             // .NET — a silent wrong answer on one target or the other. Whole-array members are
             // refused for the same reason For Each is.
@@ -12858,9 +12881,14 @@ namespace BasicLang.Compiler.SemanticAnalysis
                       "into a Private Sub and call it from each constructor", node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
+            else if (_isJavaScriptTarget
+                     && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryType)
+            {
+                ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
             else
             {
-                // Build helpful error message with suggestions
                 var errorMsg = $"Type '{objectType.Name}' does not have a member '{node.MemberName}'";
 
                 // Find similar member names

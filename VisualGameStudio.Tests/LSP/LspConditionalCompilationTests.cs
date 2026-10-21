@@ -242,6 +242,76 @@ public class LspConditionalCompilationTests
         });
     }
 
+    /// <summary>
+    /// Task 34: a web project's completion sees the portable library through
+    /// <c>LspProjectContext.WebDeclarationFiles</c>, not just the DOM declarations.
+    /// </summary>
+    [Test]
+    public void AWebProject_CompletesAPortableControlMember()
+    {
+        const string source =
+            "Using System\n" +                          // 0-based 0
+            "Using System.Windows.Forms\n" +            // 1
+            "\n" +                                      // 2
+            "Public Class LoginForm\n" +                // 3
+            "    Inherits Form\n" +                     // 4
+            "    Private btn As Button\n" +             // 5
+            "\n" +                                      // 6
+            "    Public Sub Test()\n" +                 // 7
+            "        btn.\n" +                          // 8
+            "    End Sub\n" +
+            "End Class\n";
+        var manager = new DocumentManager();
+        var state = Open("JavaScript", source, manager);
+        var handler = new CompletionHandler(manager, new CompletionService());
+        var items = handler.Handle(new CompletionParams
+            {
+                TextDocument = new TextDocumentIdentifier(state.Uri),
+                Position = new Position(8, "        btn.".Length)
+            }, CancellationToken.None)
+            .GetAwaiter().GetResult().Items.Select(i => i.Label).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(items, Does.Contain("PerformClick"), Dump(state));
+            Assert.That(items, Does.Contain("TextAlign"), Dump(state));
+        });
+    }
+
+    /// <summary>Task 34: the editor reports the same desktop-only <c>.Element</c> refusal as the build.</summary>
+    [Test]
+    public void ADesktopProject_ReportsElementOnDesktop()
+    {
+        const string source =
+            "Using System.Windows.Forms\n" +
+            "\n" +
+            "Public Class LoginForm\n" +
+            "    Private btn As Button\n" +
+            "    Public Sub Test()\n" +
+            "        Dim e = btn.Element\n" +
+            "    End Sub\n" +
+            "End Class\n";
+        var state = Open("CSharp", source);
+        Assert.That(Errors(state).Select(e => e.Message), Has.Some.Contains("ElementOnDesktop"), Dump(state));
+    }
+
+    /// <summary>Task 34: <c>.Element</c> stays legal in the web editor.</summary>
+    [Test]
+    public void AWebProject_DoesNotReportElementOnDesktop()
+    {
+        const string source =
+            "Using System.Windows.Forms\n" +
+            "\n" +
+            "Public Class LoginForm\n" +
+            "    Private btn As Button\n" +
+            "    Public Sub Test()\n" +
+            "        Dim e = btn.Element\n" +
+            "    End Sub\n" +
+            "End Class\n";
+        var state = Open("JavaScript", source);
+        Assert.That(Errors(state).Select(e => e.Message), Has.None.Contains("ElementOnDesktop"), Dump(state));
+    }
+
     private static List<(int Line, int Col, int Length, int Type)> Decode(int[] data)
     {
         var list = new List<(int, int, int, int)>();
