@@ -11,10 +11,11 @@ Namespace System.Windows.Forms
                 Dim w As Window = ::window
                 Dim s As String = w.getComputedStyle(Me.VgsElementFor("BorderStyle")).borderStyle
                 If s Is Nothing Then s = ""
+                If s = "" Then s = Me.VgsStyleValue("border")
                 ' The property shadows the enum's name in member expressions; explicit
                 ' casts use the enum's declared None/FixedSingle/Fixed3D values (0/1/2).
-                If s = "solid" Then Return CType(1, BorderStyle)
-                If s = "inset" OrElse s = "groove" Then Return CType(2, BorderStyle)
+                If s = "solid" OrElse s = "1px solid" Then Return CType(1, BorderStyle)
+                If s = "inset" OrElse s = "groove" OrElse s = "2px inset" Then Return CType(2, BorderStyle)
                 Return CType(0, BorderStyle)
             End Get
             Set(value As BorderStyle)
@@ -33,6 +34,7 @@ Namespace System.Windows.Forms
                 Dim w As Window = ::window
                 Dim s As String = w.getComputedStyle(Me.VgsElementFor("AutoScroll")).overflow
                 If s Is Nothing Then s = ""
+                If s = "" Then s = Me.VgsStyleValue("overflow")
                 Return s = "auto" OrElse s = "scroll"
             End Get
             Set(value As Boolean)

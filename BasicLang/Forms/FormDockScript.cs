@@ -83,6 +83,50 @@ public static class FormDockScript
     public static readonly string Bootstrap = """
         function vgsDockStart(root, breakpoint) {
           var form = document.querySelector(".vgs-form");
+          if (!form) return;
+          var live = null, last = null, pending = false;
+          function hidden(node) {
+            var el = document.getElementById(node.i);
+            return el ? getComputedStyle(el).display === "none" : node.hd;
+          }
+          function compute() {
+            var out = [];
+            vgsDockWalk(root.k, root.w, root.h, hidden, out);
+            var rules = "";
+            for (var r = 0; r < out.length; r++) {
+              var decls = vgsDockCss(out[r]), text = "";
+              for (var d = 0; d < decls.length; d++) text += decls[d][0] + ":" + decls[d][1] + ";";
+              rules += "#" + out[r].n.i + "{" + text + "}";
+            }
+            var css = breakpoint > 0 ? "@media (width >= " + breakpoint + "px){" + rules + "}" : rules;
+            if (css === last) return;
+            last = css;
+            if (!live) {
+              live = document.createElement("style");
+              live.id = "vgs-dock-live";
+              document.head.appendChild(live);
+            }
+            live.textContent = css;
+          }
+          function reflow() { pending = false; compute(); }
+          function request() {
+            if (pending) return;
+            pending = true;
+            if (typeof queueMicrotask === "function") queueMicrotask(reflow);
+            else Promise.resolve().then(reflow);
+          }
+          window.vgsDock = { request: request, reflow: reflow };
+          if (typeof MutationObserver !== "undefined") {
+            new MutationObserver(request).observe(form, { attributes: true, subtree: true, attributeFilter: ["style", "class", "hidden"] });
+          }
+        }
+
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>Piece 1's glue, frozen for DOM-style pages (spec 7.7).</summary>
+    private static readonly string LegacyBootstrap = """
+        function vgsDockStart(root, breakpoint) {
+          var form = document.querySelector(".vgs-form");
           if (!form || typeof MutationObserver === "undefined") return;
           var live = null, last = null;
           function hidden(node) {
@@ -122,7 +166,7 @@ public static class FormDockScript
         ArgumentNullException.ThrowIfNull(form);
 
         var root = Root(form, clientAreas);
-        if (!Docks(root.Children))
+        if (!clientAreas && !Docks(root.Children))
         {
             return null;
         }
@@ -130,7 +174,7 @@ public static class FormDockScript
         var breakpoint = form.Layout?.EffectiveMobileBreakpoint ?? FormLayout.DefaultMobileBreakpoint;
         var sb = new StringBuilder();
         sb.Append("<script data-vgs=\"dock\">\n(function () {\n");
-        sb.Append(clientAreas ? Core : LegacyCore).Append(Bootstrap);
+        sb.Append(clientAreas ? Core : LegacyCore).Append(clientAreas ? Bootstrap : LegacyBootstrap);
         sb.Append("vgsDockStart(").Append(JsonSerializer.Serialize(root)).Append(", ")
           .Append(breakpoint.ToString(CultureInfo.InvariantCulture)).Append(");\n");
         sb.Append("})();\n</script>\n");

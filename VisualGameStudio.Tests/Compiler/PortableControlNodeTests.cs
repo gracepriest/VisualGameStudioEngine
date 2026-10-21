@@ -22,7 +22,8 @@ public class PortableControlNodeTests
             confirms: [],
             all: [],
             confirmAnswer: true,
-            title: "base title"
+            title: "base title",
+            reflows: 0
         };
 
         class StubClassList {
@@ -178,6 +179,16 @@ public class PortableControlNodeTests
                     ? this.attributes[name]
                     : null;
             }
+            getBoundingClientRect() {
+                return {
+                    left: this._rectLeft === undefined ? 0 : this._rectLeft,
+                    top: this._rectTop === undefined ? 0 : this._rectTop,
+                    width: this._rectWidth === undefined ? 0 : this._rectWidth,
+                    height: this._rectHeight === undefined ? 0 : this._rectHeight
+                };
+            }
+            get clientWidth() { return this._clientWidth === undefined ? this.getBoundingClientRect().width : this._clientWidth; }
+            get clientHeight() { return this._clientHeight === undefined ? this.getBoundingClientRect().height : this._clientHeight; }
             getAttributeNames() {
                 return [...new Set([...Object.keys(this.attributes), ...(this.id ? ["id"] : []),
                     ...(this.className ? ["class"] : [])])];
@@ -257,6 +268,7 @@ public class PortableControlNodeTests
         }
 
         const __body = __make("body", "BODY");
+        const __head = __make("head", "HEAD");
         const __form = __make("formArea", "DIV");
         __body.appendChild(__form);
         __form.className = "vgs-form";
@@ -274,8 +286,9 @@ public class PortableControlNodeTests
         __btn.appendChild(__inner);
 
         globalThis.document = {
+            head: __head,
             body: __body,
-            getElementById(id) { return __body.querySelector("#" + id); },
+            getElementById(id) { return __head.querySelector("#" + id) || __body.querySelector("#" + id); },
             querySelector(selector) { return selector === ".vgs-form" ? __form : null; },
             createElement(tagName) { return new StubElement("", tagName); },
             createTextNode(data) { const element = new StubElement("", "TEXT"); element.textContent = data; return element; }
@@ -286,6 +299,11 @@ public class PortableControlNodeTests
         });
         globalThis.getComputedStyle = element => element.style;
         globalThis.window = globalThis;
+        globalThis.innerWidth = 800;
+        globalThis.vgsDock = {
+            request() { globalThis.__state.reflows++; },
+            reflow() { globalThis.__state.reflows++; }
+        };
         globalThis.alert = message => {
             globalThis.__state.alerts.push(String(message));
             console.log("alert:" + String(message));
@@ -693,14 +711,10 @@ public class PortableControlNodeTests
                     pad.Left = 4
                     b.Padding = pad
                     Dim el As Element = ::document.getElementById("btn")
-                    Console.WriteLine("color=" & el.style.color)
-                    Console.WriteLine("background=" & el.style.backgroundColor)
-                    Console.WriteLine("family=" & el.style.fontFamily)
-                    Console.WriteLine("size=" & el.style.fontSize)
-                    Console.WriteLine("weight=" & el.style.fontWeight)
-                    Console.WriteLine("style=" & el.style.fontStyle)
-                    Console.WriteLine("cursor=" & el.style.cursor)
-                    Console.WriteLine("padding=" & el.style.padding)
+                    Console.WriteLine(b.VgsStyleRule())
+                    Dim live As Element = ::document.getElementById("vgs-live")
+                    Console.WriteLine(live.textContent)
+                    Console.WriteLine(::document.head.firstElementChild.id)
                     b.Hide()
                     Console.WriteLine("hidden=" & CStr(el.hidden))
                     b.Show()
@@ -712,8 +726,175 @@ public class PortableControlNodeTests
             """);
 
         Assert.That(result.Ok, Is.True, result.Errors);
+        var rule = "color: red;background-color: black;font-family: Arial;font-size: 12pt;" +
+            "font-weight: bold;font-style: normal;cursor: pointer;padding: 1px 2px 3px 4px;";
         Assert.That(result.Output, Is.EqualTo(
-            "color=red\nbackground=black\nfamily=Arial\nsize=12pt\nweight=bold\nstyle=normal\n" +
-            "cursor=pointer\npadding=1px 2px 3px 4px\nhidden=True\nfocused=True"));
+            rule + "\n" + "#btn{" + rule + "}\nvgs-live\nhidden=True\nfocused=True"));
+    }
+
+    [Test]
+    public void Geometry_ReadsLiveDesktopRects_AndMovesByTheAnchorRule()
+    {
+        var result = Run("""
+            Using System
+            Using System.Windows.Forms
+            Module Program
+                Sub Main()
+                    Dim f As New Form()
+                    Dim p As New Panel()
+                    p.Name = "panel"
+                    f.Controls.Add(p)
+                    Dim b As New Button()
+                    b.Name = "btn"
+                    p.Controls.Add(b)
+
+                    Dim host As Element = ::document.getElementById("panel")
+                    host.setAttribute("data-vgs-inset", "2")
+                    Dim rawHost As Object = host
+                    rawHost._rectLeft = 20
+                    rawHost._rectTop = 30
+                    rawHost._rectWidth = 300
+                    rawHost._rectHeight = 200
+                    rawHost._clientWidth = 300
+                    rawHost._clientHeight = 200
+
+                    Dim el As Element = ::document.getElementById("btn")
+                    Dim raw As Object = el
+                    raw._rectLeft = 40
+                    raw._rectTop = 50
+                    raw._rectWidth = 80
+                    raw._rectHeight = 25
+
+                    Console.WriteLine(b.Left & ":" & b.Top & ":" & b.Width & ":" & b.Height & ":" & b.Right & ":" & b.Bottom)
+                    b.Anchor = CType(13, AnchorStyles)
+                    Console.WriteLine(b.VgsStyleRule())
+                    b.Anchor = CType(0, AnchorStyles)
+                    Console.WriteLine(b.VgsStyleRule())
+                    b.Anchor = CType(15, AnchorStyles)
+                    Console.WriteLine(b.VgsStyleRule())
+                    b.Left = 30
+                    Console.WriteLine(b.VgsStyleRule())
+                End Sub
+            End Module
+            """);
+        Assert.That(result.Ok, Is.True, result.Errors);
+        Assert.That(result.Output, Is.EqualTo(
+            "18:18:80:25:98:43\n" +
+            "left: 18px;right: 202px;width: calc(100% - 220px);top: 18px;height: 25px;\n" +
+            "left: calc(50% - 132px);width: 80px;top: calc(50% - 82px);height: 25px;\n" +
+            "left: 18px;right: 202px;width: calc(100% - 220px);top: 18px;bottom: 157px;height: calc(100% - 175px);\n" +
+            "left: 30px;right: 190px;width: calc(100% - 220px);top: 18px;bottom: 157px;height: calc(100% - 175px);"));
+    }
+
+    [Test]
+    public void Geometry_BelowTheBreakpoint_ReadsAndWritesRequestedBounds_InTheMediaGuard()
+    {
+        var result = Run("""
+            Using System
+            Using System.Windows.Forms
+            Module Program
+                Sub Main()
+                    Dim f As New Form()
+                    Dim p As New Panel()
+                    p.Name = "panel"
+                    f.Controls.Add(p)
+                    Dim b As New Button()
+                    b.Name = "btn"
+                    p.Controls.Add(b)
+
+                    Dim host As Element = ::document.getElementById("panel")
+                    host.setAttribute("data-vgs-inset", "2")
+                    Dim rawHost As Object = host
+                    rawHost._rectLeft = 20
+                    rawHost._rectTop = 30
+                    rawHost._rectWidth = 300
+                    rawHost._rectHeight = 200
+                    rawHost._clientWidth = 300
+                    rawHost._clientHeight = 200
+
+                    Dim el As Element = ::document.getElementById("btn")
+                    Dim raw As Object = el
+                    raw._rectLeft = 40
+                    raw._rectTop = 50
+                    raw._rectWidth = 80
+                    raw._rectHeight = 25
+
+                    ::window.innerWidth = 500
+                    Dim formEl As Element = ::document.querySelector(".vgs-form")
+                    formEl.setAttribute("data-vgs-bp", "700")
+                    host.setAttribute("data-vgs-cw", "360")
+                    host.setAttribute("data-vgs-ch", "640")
+                    el.setAttribute("data-vgs-x", "12")
+                    el.setAttribute("data-vgs-y", "13")
+                    el.setAttribute("data-vgs-w", "120")
+                    el.setAttribute("data-vgs-h", "30")
+
+                    Console.WriteLine(b.Left & ":" & b.Top & ":" & b.Width & ":" & b.Height & ":" & b.Right & ":" & b.Bottom)
+                    b.Anchor = CType(15, AnchorStyles)
+                    b.Left = 20
+                    Console.WriteLine(b.VgsStyleRule())
+                    Dim live As Element = ::document.getElementById("vgs-live")
+                    Console.WriteLine(live.textContent)
+                    ::window.innerWidth = 800
+                    Console.WriteLine(b.Left)
+                End Sub
+            End Module
+            """);
+        Assert.That(result.Ok, Is.True, result.Errors);
+        var rule = "left: 20px;right: 220px;width: calc(100% - 240px);" +
+            "top: 13px;bottom: 597px;height: calc(100% - 610px);";
+        Assert.That(result.Output, Is.EqualTo(
+            "12:13:120:30:132:43\n" + rule + "\n" +
+            "@media (width >= 700px){#btn{" + rule + "}}\n18"));
+    }
+
+    [Test]
+    public void Dock_R2_LeavesGeometryToTheScript_AndNoneRestoresRequestedSize()
+    {
+        var result = Run("""
+            Using System
+            Using System.Windows.Forms
+            Module Program
+                Sub Main()
+                    Dim f As New Form()
+                    Dim p As New Panel()
+                    p.Name = "panel"
+                    f.Controls.Add(p)
+                    Dim b As New Button()
+                    b.Name = "btn"
+                    p.Controls.Add(b)
+
+                    Dim host As Element = ::document.getElementById("panel")
+                    host.setAttribute("data-vgs-inset", "2")
+                    Dim rawHost As Object = host
+                    rawHost._rectLeft = 20
+                    rawHost._rectTop = 30
+                    rawHost._rectWidth = 300
+                    rawHost._rectHeight = 200
+                    rawHost._clientWidth = 300
+                    rawHost._clientHeight = 200
+
+                    Dim el As Element = ::document.getElementById("btn")
+                    Dim raw As Object = el
+                    raw._rectLeft = 40
+                    raw._rectTop = 50
+                    raw._rectWidth = 80
+                    raw._rectHeight = 25
+
+                    b.Dock = DockStyle.Top
+                    Console.WriteLine(CInt(b.Dock) & ":" & b.VgsStyleRule())
+                    b.Width = 150
+                    Console.WriteLine(raw.getAttribute("data-vgs-w") & ":" & b.VgsStyleRule())
+                    b.Dock = DockStyle.None
+                    Console.WriteLine(CInt(b.Dock) & ":" & b.VgsStyleRule())
+                    b.Hide()
+                    Dim state As Object = ::__state
+                    Console.WriteLine(CStr(state.reflows))
+                End Sub
+            End Module
+            """);
+        Assert.That(result.Ok, Is.True, result.Errors);
+        Assert.That(result.Output, Is.EqualTo(
+            "1:\n150:\n0:left: 18px;width: 150px;top: 18px;height: 25px;\n4"));
     }
 }

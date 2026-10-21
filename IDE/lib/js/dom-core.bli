@@ -19,6 +19,7 @@
 
 Public Extern Class Document
     Public Property title As String
+    Public Property head As Element
     Public Property body As Element
     Public Property documentElement As Element
     Public Function getElementById(id As String) As Element

@@ -122,7 +122,7 @@ public class PortableFirstKindsNodeTests
         c.PasswordChar = "*"c
         Dim raw As Object = c.Element
         Console.WriteLine(raw.maxLength & ":" & CStr(raw.readOnly) & ":" & raw.getAttribute("placeholder"))
-        Console.WriteLine(raw.type & ":" & CStr(c.PasswordChar) & ":" & raw.style.textAlign)
+        Console.WriteLine(raw.type & ":" & CStr(c.PasswordChar) & ":" & c.VgsStyleRule())
         Console.WriteLine(c.MaxLength & ":" & CStr(c.ReadOnly) & ":" & c.PlaceholderText & ":" & CInt(c.TextAlign))
         AddHandler c.TextChanged, AddressOf Changed
         c.Text = "abc"
@@ -136,7 +136,7 @@ public class PortableFirstKindsNodeTests
         Console.WriteLine("empty=" & c.Text & ":changes=" & hits)
         c.PasswordChar = ChrW(0)
         Console.WriteLine(raw.type & ":" & CStr(AscW(c.PasswordChar) = 0))
-        """, "32767:False:0\n17:True:hint\npassword:*:right\n17:True:hint:1\nabc!:1:4:2\nempty=:changes=3\ntext:True");
+        """, "32767:False:0\n17:True:hint\npassword:*:text-align: right;\n17:True:hint:1\nabc!:1:4:2\nempty=:changes=3\ntext:True");
 
     [Test]
     public void TextBox_NegativeMaxLength_IsRefusedWithoutChangingTheInput() => Expect("TextBox", """
@@ -170,8 +170,7 @@ public class PortableFirstKindsNodeTests
         font.Name = "Arial"
         font.Size = 12
         c.Font = font
-        Console.WriteLine(c.Element.style.color & ":" & c.Element.style.backgroundColor & ":" & c.Element.style.cursor)
-        Console.WriteLine(c.Element.style.fontFamily & ":" & c.Element.style.fontSize)
+        Console.WriteLine(c.VgsStyleRule())
         c.Enabled = False
         Console.WriteLine(CStr(c.Enabled))
         c.Enabled = True
@@ -186,7 +185,7 @@ public class PortableFirstKindsNodeTests
         Console.WriteLine(CStr(c.Visible))
         f.Show()
         Console.WriteLine(CStr(c.Visible))
-        """, "red:black:pointer\nArial:12pt\nFalse\nFalse\nTrue\nTrue\nFalse\nTrue");
+        """, "color: red;background-color: black;cursor: pointer;font-family: Arial;font-size: 12pt;font-weight: normal;font-style: normal;\nFalse\nFalse\nTrue\nTrue\nFalse\nTrue");
 
     [Test]
     public void GroupBox_CreatesOnlyItsOwnLegendAndKeepsExistingChildren() => Expect("GroupBox", """
@@ -325,26 +324,26 @@ public class PortableFirstKindsNodeTests
     public void ContentAlignment_MapsHorizontalStyleAndRetainsTheFullValue(string kind, int initial) => Expect(kind, """
         Console.WriteLine(CInt(c.TextAlign))
         c.TextAlign = ContentAlignment.BottomRight
-        Console.WriteLine(c.Element.style.textAlign & ":" & CInt(c.TextAlign))
+        Console.WriteLine(c.VgsStyleRule() & ":" & CInt(c.TextAlign))
         c.TextAlign = ContentAlignment.TopCenter
-        Console.WriteLine(c.Element.style.textAlign & ":" & CInt(c.TextAlign))
+        Console.WriteLine(c.VgsStyleRule() & ":" & CInt(c.TextAlign))
         c.TextAlign = ContentAlignment.MiddleLeft
-        Console.WriteLine(c.Element.style.textAlign & ":" & CInt(c.TextAlign))
-        """, $"{initial}\nright:1024\ncenter:2\nleft:16");
+        Console.WriteLine(c.VgsStyleRule() & ":" & CInt(c.TextAlign))
+        """, $"{initial}\ntext-align: right;:1024\ntext-align: center;:2\ntext-align: left;:16");
 
     [Test]
     public void Panel_BorderAndAutoScroll_WriteThroughTheStyleSeam() => Expect("Panel", """
         Console.WriteLine(CInt(c.BorderStyle) & ":" & CStr(c.AutoScroll))
         c.BorderStyle = BorderStyle.FixedSingle
-        Console.WriteLine(c.Element.style.border & ":" & CInt(c.BorderStyle))
+        Console.WriteLine(c.VgsStyleRule() & ":" & CInt(c.BorderStyle))
         c.BorderStyle = BorderStyle.Fixed3D
-        Console.WriteLine(c.Element.style.border & ":" & CInt(c.BorderStyle))
+        Console.WriteLine(c.VgsStyleRule() & ":" & CInt(c.BorderStyle))
         c.BorderStyle = BorderStyle.None
         c.AutoScroll = True
-        Console.WriteLine(c.Element.style.border & ":" & CStr(c.AutoScroll) & ":" & c.Element.style.overflow)
+        Console.WriteLine(c.VgsStyleRule() & ":" & CStr(c.AutoScroll))
         c.AutoScroll = False
-        Console.WriteLine(CStr(c.AutoScroll) & ":" & c.Element.style.overflow)
-        """, "0:False\n1px solid:1\n2px inset:2\nnone:True:auto\nFalse:");
+        Console.WriteLine(CStr(c.AutoScroll) & ":" & c.VgsStyleRule())
+        """, "0:False\nborder: 1px solid;:1\nborder: 2px inset;:2\nborder: none;overflow: auto;:True\nFalse:border: none;");
 
     [Test]
     public void PortableMetadata_FeedsTheLibraryClientAndEnableSeams() => Expect("CheckBox", """

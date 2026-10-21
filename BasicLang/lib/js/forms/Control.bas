@@ -19,6 +19,13 @@ Namespace System.Windows.Forms
         Private _onKeyUp As Action(Of DomEvent)
         Private _onFocusIn As Action(Of DomEvent)
 
+        ' Task 33: ONE page stylesheet, one #id rule per touched control (spec 5.8).
+        ' Entries are "id|name: value;" so a re-set property replaces in place and
+        ' keeps its declaration order; values never contain "|".
+        Private Shared _vgsDecls As List(Of String)
+        Private Shared _vgsIds As List(Of String)
+        Private Shared _vgsStyleElement As Element
+
         Public Sub New()
             _name = ""
             _controls = New ControlCollection(Me)
@@ -101,6 +108,125 @@ Namespace System.Windows.Forms
                 Dim newHidden As Boolean = Not value
                 If el.hidden = newHidden Then Return
                 el.hidden = newHidden
+                Me.VgsRequestReflow()
+            End Set
+        End Property
+
+        Public Property Left As Integer
+            Get
+                Return Me.VgsReadLeft()
+            End Get
+            Set(value As Integer)
+                Me.VgsWriteGeometry(value, Me.VgsReadTop(), Me.VgsReadWidth(), Me.VgsReadHeight())
+            End Set
+        End Property
+
+        Public Property Top As Integer
+            Get
+                Return Me.VgsReadTop()
+            End Get
+            Set(value As Integer)
+                Me.VgsWriteGeometry(Me.VgsReadLeft(), value, Me.VgsReadWidth(), Me.VgsReadHeight())
+            End Set
+        End Property
+
+        Public Property Width As Integer
+            Get
+                Return Me.VgsReadWidth()
+            End Get
+            Set(value As Integer)
+                Me.VgsWriteGeometry(Me.VgsReadLeft(), Me.VgsReadTop(), value, Me.VgsReadHeight())
+            End Set
+        End Property
+
+        Public Property Height As Integer
+            Get
+                Return Me.VgsReadHeight()
+            End Get
+            Set(value As Integer)
+                Me.VgsWriteGeometry(Me.VgsReadLeft(), Me.VgsReadTop(), Me.VgsReadWidth(), value)
+            End Set
+        End Property
+
+        Public Property Right As Integer
+            Get
+                Return Me.VgsReadLeft() + Me.VgsReadWidth()
+            End Get
+        End Property
+
+        Public Property Bottom As Integer
+            Get
+                Return Me.VgsReadTop() + Me.VgsReadHeight()
+            End Get
+        End Property
+
+        Public Property Location As Point
+            Get
+                Return New Point(Me.VgsReadLeft(), Me.VgsReadTop())
+            End Get
+            Set(value As Point)
+                Me.VgsWriteGeometry(value.X, value.Y, Me.VgsReadWidth(), Me.VgsReadHeight())
+            End Set
+        End Property
+
+        Public Property Size As Size
+            Get
+                Return New Size(Me.VgsReadWidth(), Me.VgsReadHeight())
+            End Get
+            Set(value As Size)
+                Me.VgsWriteGeometry(Me.VgsReadLeft(), Me.VgsReadTop(), value.Width, value.Height)
+            End Set
+        End Property
+
+        Public Property Anchor As AnchorStyles
+            Get
+                Dim raw As String = Me.VgsElementFor("Anchor").getAttribute("data-vgs-anchor")
+                If raw Is Nothing OrElse raw = "" Then Return CType(5, AnchorStyles)
+                Return CType(Integer.Parse(raw), AnchorStyles)
+            End Get
+            Set(value As AnchorStyles)
+                Dim x As Integer = Me.VgsReadLeft()
+                Dim y As Integer = Me.VgsReadTop()
+                Dim w As Integer = Me.VgsReadWidth()
+                Dim h As Integer = Me.VgsReadHeight()
+                Me.VgsElementFor("Anchor").setAttribute("data-vgs-anchor", CStr(CInt(value)))
+                Me.VgsWriteGeometry(x, y, w, h)
+            End Set
+        End Property
+
+        Public Property Dock As DockStyle
+            Get
+                Dim raw As String = Me.VgsElementFor("Dock").getAttribute("data-vgs-dock")
+                If raw = "Top" Then Return DockStyle.Top
+                If raw = "Bottom" Then Return DockStyle.Bottom
+                If raw = "Left" Then Return DockStyle.Left
+                If raw = "Right" Then Return DockStyle.Right
+                If raw = "Fill" Then Return DockStyle.Fill
+                Return DockStyle.None
+            End Get
+            Set(value As DockStyle)
+                Dim el As Element = Me.VgsElementFor("Dock")
+                Dim x As Integer = Me.VgsReadLeft()
+                Dim y As Integer = Me.VgsReadTop()
+                Dim w As Integer = Me.VgsReadWidth()
+                Dim h As Integer = Me.VgsReadHeight()
+                Dim name As String = "None"
+                If value = DockStyle.Top Then name = "Top"
+                If value = DockStyle.Bottom Then name = "Bottom"
+                If value = DockStyle.Left Then name = "Left"
+                If value = DockStyle.Right Then name = "Right"
+                If value = DockStyle.Fill Then name = "Fill"
+                el.setAttribute("data-vgs-dock", name)
+                If value = DockStyle.None Then
+                    ' Restore the requested bounds, not the dock's last live rectangle.
+                    Me.VgsWriteGeometry(Me.VgsRequested("data-vgs-x", x), Me.VgsRequested("data-vgs-y", y), Me.VgsRequested("data-vgs-w", w), Me.VgsRequested("data-vgs-h", h))
+                Else
+                    ' R2: the script owns every geometry property of a docked control.
+                    Me.VgsClearGeometry(el.id)
+                    Me.VgsStoreRequested(x, y, w, h)
+                    Me.VgsFlushStyles()
+                    Me.VgsRequestReflow()
+                End If
             End Set
         End Property
 
@@ -183,6 +309,7 @@ Namespace System.Windows.Forms
                 Throw New InvalidOperationException("Control '" & Me.Name & "' has no parent element to bring forward.")
             End If
             el.parentElement.appendChild(el)
+            Me.VgsRequestReflow()
         End Sub
 
         Public Event Click(sender As Object, e As EventArgs)
@@ -319,21 +446,21 @@ Namespace System.Windows.Forms
             If code = "ControlLeft" OrElse code = "ControlRight" Then Return Keys.ControlKey
             If code = "AltLeft" OrElse code = "AltRight" Then Return Keys.Menu
 
-            If code.Length = 4 AndAlso Left(code, 3) = "Key" Then
+            If code.Length = 4 AndAlso Strings.Left(code, 3) = "Key" Then
                 Dim letter As Integer = AscW(Mid(code, 4, 1))
                 If letter >= 97 AndAlso letter <= 122 Then letter = letter - 32
                 Return CType(letter, Keys)
             End If
 
-            If code.Length = 5 AndAlso Left(code, 5) = "Digit" Then
+            If code.Length = 5 AndAlso Strings.Left(code, 5) = "Digit" Then
                 Return CType(Integer.Parse(Mid(code, 6, 1)) + 48, Keys)
             End If
 
-            If code.Length = 7 AndAlso Left(code, 6) = "Numpad" Then
+            If code.Length = 7 AndAlso Strings.Left(code, 6) = "Numpad" Then
                 Return CType(Integer.Parse(Mid(code, 7, 1)) + 96, Keys)
             End If
 
-            If code.Length >= 2 AndAlso Left(code, 1) = "F" Then
+            If code.Length >= 2 AndAlso Strings.Left(code, 1) = "F" Then
                 Dim n As Integer = Integer.Parse(Mid(code, 2, code.Length - 1))
                 If n >= 1 AndAlso n <= 12 Then Return CType(111 + n, Keys)
             End If
@@ -390,29 +517,302 @@ Namespace System.Windows.Forms
 
         Public Sub VgsSetStyle(name As String, value As String)
             Dim el As Element = Me.VgsElementFor("style")
-            If name = "color" Then
-                el.style.color = value
-            ElseIf name = "background-color" Then
-                el.style.backgroundColor = value
-            ElseIf name = "font-family" Then
-                el.style.fontFamily = value
-            ElseIf name = "font-size" Then
-                el.style.fontSize = value
-            ElseIf name = "font-weight" Then
-                el.style.fontWeight = value
-            ElseIf name = "font-style" Then
-                el.style.fontStyle = value
-            ElseIf name = "cursor" Then
-                el.style.cursor = value
-            ElseIf name = "padding" Then
-                el.style.padding = value
-            ElseIf name = "text-align" Then
-                el.style.textAlign = value
-            ElseIf name = "border" Then
-                el.style.border = value
-            ElseIf name = "overflow" Then
-                el.style.overflow = value
+            Dim id As String = el.id
+            If id = "" Then
+                Throw New InvalidOperationException("Control '" & Me.Name & "' has no id for its style rule.")
             End If
+            If value = "" Then
+                Me.VgsRemoveDeclaration(id, name)
+            Else
+                Me.VgsSetDeclaration(id, name, value)
+            End If
+            Me.VgsFlushStyles()
+        End Sub
+
+        ' The rule for this control, without the page's media wrapper. Also the
+        ' node tier's reader: the seam is a rule, never an inline style.
+        Public Function VgsStyleRule() As String
+            If _vgsDecls Is Nothing Then Return ""
+            Dim id As String = Me.VgsElementFor("style").id
+            Dim prefix As String = id & "|"
+            Dim rule As String = ""
+            For Each entry As String In _vgsDecls
+                If Strings.Left(entry, prefix.Length) = prefix Then
+                    rule = rule & Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
+                End If
+            Next
+            Return rule
+        End Function
+
+        ' The last value this library wrote, independent of a browser's cascade.
+        Public Function VgsStyleValue(name As String) As String
+            If _vgsDecls Is Nothing Then Return ""
+            Dim id As String = Me.VgsElementFor("style").id
+            Dim prefix As String = id & "|" & name & ":"
+            For Each entry As String In _vgsDecls
+                If Strings.Left(entry, prefix.Length) = prefix Then
+                    Dim value As String = Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
+                    If Mid(value, value.Length, 1) = ";" Then value = Strings.Left(value, value.Length - 1)
+                    If Strings.Left(value, 1) = " " Then value = Mid(value, 2, value.Length - 1)
+                    Return value
+                End If
+            Next
+            Return ""
+        End Function
+
+        Private Sub VgsSetDeclaration(id As String, name As String, value As String)
+            If _vgsDecls Is Nothing Then _vgsDecls = New List(Of String)()
+            If _vgsIds Is Nothing Then _vgsIds = New List(Of String)()
+            Dim prefix As String = id & "|" & name & ":"
+            For i As Integer = 0 To _vgsDecls.Count - 1
+                If Strings.Left(_vgsDecls(i), prefix.Length) = prefix Then
+                    _vgsDecls(i) = prefix & " " & value & ";"
+                    Return
+                End If
+            Next
+            _vgsDecls.Add(prefix & " " & value & ";")
+            If Not Me.VgsHasId(id) Then _vgsIds.Add(id)
+        End Sub
+
+        Private Sub VgsRemoveDeclaration(id As String, name As String)
+            If _vgsDecls Is Nothing Then Return
+            Dim prefix As String = id & "|" & name & ":"
+            Dim kept As New List(Of String)()
+            For Each entry As String In _vgsDecls
+                If Strings.Left(entry, prefix.Length) <> prefix Then kept.Add(entry)
+            Next
+            _vgsDecls = kept
+        End Sub
+
+        Public Function VgsHasId(id As String) As Boolean
+            If _vgsIds Is Nothing Then Return False
+            For Each existing As String In _vgsIds
+                If existing = id Then Return True
+            Next
+            Return False
+        End Function
+
+        Private Sub VgsClearGeometry(id As String)
+            If _vgsDecls Is Nothing Then Return
+            Dim kept As New List(Of String)()
+            For Each entry As String In _vgsDecls
+                Dim prefix As String = id & "|"
+                Dim owned As Boolean = Strings.Left(entry, prefix.Length) = prefix
+                Dim keep As Boolean = True
+                If owned Then
+                    Dim decl As String = Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
+                    If Strings.Left(decl, 5) = "left:" OrElse Strings.Left(decl, 6) = "right:" OrElse Strings.Left(decl, 4) = "top:" OrElse Strings.Left(decl, 7) = "bottom:" OrElse Strings.Left(decl, 6) = "width:" OrElse Strings.Left(decl, 7) = "height:" Then
+                        keep = False
+                    End If
+                End If
+                If keep Then kept.Add(entry)
+            Next
+            _vgsDecls = kept
+        End Sub
+
+        Private Sub VgsRemoveControlDeclarations(id As String)
+            If _vgsDecls Is Nothing Then Return
+            Dim prefix As String = id & "|"
+            Dim kept As New List(Of String)()
+            For Each entry As String In _vgsDecls
+                If Strings.Left(entry, prefix.Length) <> prefix Then kept.Add(entry)
+            Next
+            _vgsDecls = kept
+        End Sub
+
+        Private Sub VgsFlushStyles()
+            If _vgsDecls Is Nothing Then Return
+            If _vgsStyleElement Is Nothing Then
+                _vgsStyleElement = ::document.createElement("style")
+                _vgsStyleElement.id = "vgs-live"
+                ::document.head.appendChild(_vgsStyleElement)
+            End If
+            Dim bp As Integer = Me.VgsBreakpoint()
+            Dim text As String = ""
+            If bp > 0 Then text = "@media (width >= " & CStr(bp) & "px){"
+            For Each id As String In _vgsIds
+                Dim rule As String = ""
+                Dim prefix As String = id & "|"
+                For Each entry As String In _vgsDecls
+                    If Strings.Left(entry, prefix.Length) = prefix Then
+                        rule = rule & Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
+                    End If
+                Next
+                If rule <> "" Then text = text & "#" & id & "{" & rule & "}"
+            Next
+            If bp > 0 Then text = text & "}"
+            _vgsStyleElement.textContent = text
+        End Sub
+
+        Public Function VgsRequested(name As String, fallback As Integer) As Integer
+            Dim raw As String = Me.VgsElement().getAttribute(name)
+            If raw Is Nothing OrElse raw = "" Then Return fallback
+            Return Integer.Parse(raw)
+        End Function
+
+        Public Function VgsBreakpoint() As Integer
+            Dim form As Element = ::document.querySelector(".vgs-form")
+            If form Is Nothing Then Return 0
+            Dim raw As String = form.getAttribute("data-vgs-bp")
+            If raw Is Nothing OrElse raw = "" Then Return 0
+            Return Integer.Parse(raw)
+        End Function
+
+        Public Function VgsDesktop() As Boolean
+            Dim bp As Integer = Me.VgsBreakpoint()
+            If bp <= 0 Then Return True
+            Dim w As Window = ::window
+            Return w.innerWidth >= bp
+        End Function
+
+        ' Live rectangle in the container's client coordinates at desktop width;
+        ' the requested bounds below the breakpoint (spec 5.9).
+        Public Function VgsReadLeft() As Integer
+            If Not Me.VgsDesktop() Then Return Me.VgsMetric("data-vgs-x")
+            Dim el As Element = Me.VgsElement()
+            Dim container As Element = el.parentElement
+            If container Is Nothing Then Return 0
+            Dim inset As Integer = 0
+            Dim raw As String = container.getAttribute("data-vgs-inset")
+            If raw IsNot Nothing AndAlso raw <> "" Then inset = Integer.Parse(raw)
+            Return CInt(el.getBoundingClientRect().left - container.getBoundingClientRect().left) - inset
+        End Function
+
+        Public Function VgsReadTop() As Integer
+            If Not Me.VgsDesktop() Then Return Me.VgsMetric("data-vgs-y")
+            Dim el As Element = Me.VgsElement()
+            Dim container As Element = el.parentElement
+            If container Is Nothing Then Return 0
+            Dim inset As Integer = 0
+            Dim raw As String = container.getAttribute("data-vgs-inset")
+            If raw IsNot Nothing AndAlso raw <> "" Then inset = Integer.Parse(raw)
+            Return CInt(el.getBoundingClientRect().top - container.getBoundingClientRect().top) - inset
+        End Function
+
+        Public Function VgsReadWidth() As Integer
+            If Not Me.VgsDesktop() Then Return Me.VgsMetric("data-vgs-w")
+            Return CInt(Me.VgsElement().getBoundingClientRect().width)
+        End Function
+
+        Public Function VgsReadHeight() As Integer
+            If Not Me.VgsDesktop() Then Return Me.VgsMetric("data-vgs-h")
+            Return CInt(Me.VgsElement().getBoundingClientRect().height)
+        End Function
+
+        Public Function VgsContainerClientWidth() As Integer
+            If Not Me.VgsDesktop() Then
+                Dim parentEl As Element = Me.VgsElement().parentElement
+                If parentEl Is Nothing Then Return 0
+                Dim raw As String = parentEl.getAttribute("data-vgs-cw")
+                If raw Is Nothing OrElse raw = "" Then Return 0
+                Return Integer.Parse(raw)
+            End If
+            Dim container As Element = Me.VgsElement().parentElement
+            If container Is Nothing Then Return 0
+            Return container.clientWidth
+        End Function
+
+        Public Function VgsContainerClientHeight() As Integer
+            If Not Me.VgsDesktop() Then
+                Dim parentEl As Element = Me.VgsElement().parentElement
+                If parentEl Is Nothing Then Return 0
+                Dim raw As String = parentEl.getAttribute("data-vgs-ch")
+                If raw Is Nothing OrElse raw = "" Then Return 0
+                Return Integer.Parse(raw)
+            End If
+            Dim container As Element = Me.VgsElement().parentElement
+            If container Is Nothing Then Return 0
+            Return container.clientHeight
+        End Function
+
+        Private Sub VgsStoreRequested(x As Integer, y As Integer, w As Integer, h As Integer)
+            Dim el As Element = Me.VgsElement()
+            el.setAttribute("data-vgs-x", CStr(x))
+            el.setAttribute("data-vgs-y", CStr(y))
+            el.setAttribute("data-vgs-w", CStr(w))
+            el.setAttribute("data-vgs-h", CStr(h))
+        End Sub
+
+        Public Function VgsStretched(insets As Integer) As String
+            If insets < 0 Then Return "calc(100% + " & CStr(-insets) & "px)"
+            Return "calc(100% - " & CStr(insets) & "px)"
+        End Function
+
+        Public Function VgsCentred(offset As Integer, container As Integer) As String
+            Dim shift As Double = offset - container / 2.0
+            If shift < 0 Then Return "calc(50% - " & CStr(-shift) & "px)"
+            Return "calc(50% + " & CStr(shift) & "px)"
+        End Function
+
+        ' MIRROR of FormAnchorCss.Axis (spec 5.9); PortableAnchorLockStepTests gates the pair.
+        Private Sub VgsWriteGeometry(x As Integer, y As Integer, w As Integer, h As Integer)
+            Dim el As Element = Me.VgsElementFor("Geometry")
+            Dim id As String = el.id
+            Me.VgsStoreRequested(x, y, w, h)
+            Dim dockName As String = el.getAttribute("data-vgs-dock")
+            If dockName IsNot Nothing AndAlso dockName <> "" AndAlso dockName <> "None" Then
+                Me.VgsClearGeometry(id)
+                Me.VgsFlushStyles()
+                Me.VgsRequestReflow()
+                Return
+            End If
+
+            Me.VgsClearGeometry(id)
+            Dim cw As Integer = Me.VgsContainerClientWidth()
+            Dim ch As Integer = Me.VgsContainerClientHeight()
+            Dim a As Integer = CInt(Me.Anchor)
+            Dim toLeft As Boolean = (a >= 4 AndAlso a < 8) OrElse a >= 12
+            Dim toRight As Boolean = a >= 8
+            Dim toTop As Boolean = (a Mod 2) = 1
+            Dim toBottom As Boolean = (a Mod 4) >= 2
+
+            Dim usedW As Integer = w
+            If usedW < 0 Then usedW = 0
+            Dim farW As Integer = cw - x - usedW
+            If toLeft AndAlso toRight Then
+                Me.VgsSetDeclaration(id, "left", CStr(x) & "px")
+                Me.VgsSetDeclaration(id, "right", CStr(farW) & "px")
+                Me.VgsSetDeclaration(id, "width", Me.VgsStretched(x + farW))
+            ElseIf toRight Then
+                Me.VgsSetDeclaration(id, "right", CStr(farW) & "px")
+                If w > 0 Then Me.VgsSetDeclaration(id, "width", CStr(w) & "px")
+            ElseIf toLeft Then
+                Me.VgsSetDeclaration(id, "left", CStr(x) & "px")
+                If w > 0 Then Me.VgsSetDeclaration(id, "width", CStr(w) & "px")
+            Else
+                Me.VgsSetDeclaration(id, "left", Me.VgsCentred(x, cw))
+                If w > 0 Then Me.VgsSetDeclaration(id, "width", CStr(w) & "px")
+            End If
+
+            Dim usedH As Integer = h
+            If usedH < 0 Then usedH = 0
+            Dim farH As Integer = ch - y - usedH
+            If toTop AndAlso toBottom Then
+                Me.VgsSetDeclaration(id, "top", CStr(y) & "px")
+                Me.VgsSetDeclaration(id, "bottom", CStr(farH) & "px")
+                Me.VgsSetDeclaration(id, "height", Me.VgsStretched(y + farH))
+            ElseIf toBottom Then
+                Me.VgsSetDeclaration(id, "bottom", CStr(farH) & "px")
+                If h > 0 Then Me.VgsSetDeclaration(id, "height", CStr(h) & "px")
+            ElseIf toTop Then
+                Me.VgsSetDeclaration(id, "top", CStr(y) & "px")
+                If h > 0 Then Me.VgsSetDeclaration(id, "height", CStr(h) & "px")
+            Else
+                Me.VgsSetDeclaration(id, "top", Me.VgsCentred(y, ch))
+                If h > 0 Then Me.VgsSetDeclaration(id, "height", CStr(h) & "px")
+            End If
+
+            Me.VgsFlushStyles()
+            Me.VgsRequestReflow()
+        End Sub
+
+        Public Sub VgsRequestReflow()
+            Dim w As Object = ::window
+            Dim hook As VgsDockHook = CType(w.vgsDock, VgsDockHook)
+            If hook Is Nothing Then
+                Throw New InvalidOperationException("This portable page has no 'vgsDock' hook; a portable page must carry the dock script.")
+            End If
+            hook.request()
         End Sub
 
         Public Function VgsElement() As Element
@@ -450,6 +850,8 @@ Namespace System.Windows.Forms
         Public Sub VgsDetach()
             If _element IsNot Nothing Then
                 Me.VgsRemoveListeners()
+                Me.VgsRemoveControlDeclarations(_element.id)
+                Me.VgsFlushStyles()
                 _element.remove()
             End If
             _element = Nothing

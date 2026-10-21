@@ -228,6 +228,13 @@ public static class FormAssetEmitter
         {
             AppendControl(sb, bottom[i], indent: "", portable, FormAreaId(form));
         }
+
+        // Portable pages always carry the hook, even when nothing docks at design time:
+        // the library asks it to reflow after Dock/Visible/size writes (spec 5.10).
+        if (portable && FormDockScript.PageScript(form, clientAreas: true) is { } dock)
+        {
+            sb.Append(dock);
+        }
     }
 
     /// <summary>
@@ -289,7 +296,8 @@ public static class FormAssetEmitter
     {
         if (!portable) { sb.Append("<div class=\"vgs-form\">\n"); return; }
         var (width, height) = form.DesignSize;
-        sb.Append($"<div class=\"vgs-form\" id=\"{Attr(FormAreaId(form))}\" data-vgs-enabled=\"true\" data-vgs-cw=\"{Number(width)}\" data-vgs-ch=\"{Number(height)}\">\n");
+        var breakpoint = form.Layout?.EffectiveMobileBreakpoint ?? FormLayout.DefaultMobileBreakpoint;
+        sb.Append($"<div class=\"vgs-form\" id=\"{Attr(FormAreaId(form))}\" data-vgs-enabled=\"true\" data-vgs-bp=\"{Number(breakpoint)}\" data-vgs-cw=\"{Number(width)}\" data-vgs-ch=\"{Number(height)}\">\n");
     }
 
     private static void AppendControl(StringBuilder sb, FormControl control, string indent,

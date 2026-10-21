@@ -89,6 +89,13 @@ Namespace System.Drawing
     End Class
 
     Public Class Size
+        Public Property Width As Integer
+        Public Property Height As Integer
+
+        Public Sub New(width As Integer, height As Integer)
+            Me.Width = width
+            Me.Height = height
+        End Sub
     End Class
 
     Public Class Image
