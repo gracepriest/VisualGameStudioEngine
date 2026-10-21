@@ -93,8 +93,20 @@ public class FormDockScriptTests
             Box("f", 7, 7, "Fill", Strip("MenuStrip", "im"), Box("ib", 60, 20, "Bottom"), Box("il", 40, 5, "Left")))),
         ("docked inside an undocked panel", () => Page(Box("p", 200, 100, null, Box("c", 10, 30, "Top"), Box("d", 10, 10, "Fill")))),
         ("zero and negative sizes", () => Page(Box("z", 0, -5, "Top"), Box("n", -10, 20, "Left"), Box("f", 1, 1, "Fill"))),
-        ("a hidden container", () => Page(Hidden(Box("p", 200, 100, "Top", Box("c", 10, 30, "Top"))), Box("f", 1, 1, "Fill")))
+        ("a hidden container", () => Page(Hidden(Box("p", 200, 100, "Top", Box("c", 10, 30, "Top"))), Box("f", 1, 1, "Fill"))),
+        ("bordered panel client", () => BorderedClient("Panel", "FixedSingle")),
+        ("3D panel client", () => BorderedClient("Panel", "Fixed3D")),
+        ("group caption is not a docked sibling", () => BorderedClient("GroupBox", "None"))
     };
+
+    private static FormDocument BorderedClient(string kind, string border)
+    {
+        var parent = Box("parent", 200, 100, "Fill", Box("top", 10, 20, "Top"), Box("fill", 1, 1, "Fill"));
+        parent.Kind = kind;
+        if (kind == "Panel") parent.Properties["BorderStyle"] = border;
+        else parent.Properties["Text"] = "Caption";
+        return Page(parent);
+    }
 
     /// <summary>Every fixture as designed, then once per docked control (at any depth) with THAT control hidden.</summary>
     private static List<(string Name, FormDocument Document)> Cases()

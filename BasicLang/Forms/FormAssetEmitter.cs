@@ -112,15 +112,26 @@ public static class FormAssetEmitter
             }
 
             var htmlPath = Path.Combine(outputDirectory, form.Name + ".html");
-            File.WriteAllText(htmlPath, Html(form, scriptFileName), new UTF8Encoding(false));
+            var style = PageStyle(form);
+            File.WriteAllText(htmlPath, Html(form, scriptFileName, style), new UTF8Encoding(false));
             written.Add(htmlPath);
 
             var cssPath = Path.Combine(outputDirectory, form.Name + ".css");
-            File.WriteAllText(cssPath, Css(form), new UTF8Encoding(false));
+            File.WriteAllText(cssPath, Css(form, style), new UTF8Encoding(false));
             written.Add(cssPath);
         }
 
         return written;
+    }
+
+    private static FormStyle PageStyle(FormDocument form)
+    {
+        if (string.IsNullOrEmpty(form.SourcePath)) return FormStyle.Dom;
+        var code = FormCodeBehind.PathFor(form.SourcePath);
+        if (!File.Exists(code)) return FormStyle.Dom;
+        var read = FormCodeStyle.Of(File.ReadAllText(code), form.SourcePath, form.Target);
+        if (read.Problem != null) throw new InvalidOperationException($"{DesignCodes.RegionMalformed}: {read.Problem}");
+        return read.Style;
     }
 
     // ==================================================================
@@ -131,7 +142,7 @@ public static class FormAssetEmitter
     /// The page. Ids are stable — they are the control ids from the document, which is what lets the
     /// generated <c>InitializeComponent</c> find each element with <c>getElementById</c>.
     /// </summary>
-    public static string Html(FormDocument form, string scriptFileName)
+    public static string Html(FormDocument form, string scriptFileName, FormStyle style = FormStyle.Dom)
     {
         var sb = new StringBuilder();
         sb.Append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
@@ -149,11 +160,11 @@ public static class FormAssetEmitter
         // ⛔ ONE vocabulary test (spec 2026-09-27 §2.1): a Canvas page speaks pixels, Grid/Flow speak cells.
         if (FormVocabulary.IsPixel(form))
         {
-            AppendCanvasBody(sb, form);
+            AppendCanvasBody(sb, form, style == FormStyle.Portable);
         }
         else
         {
-            AppendGridOrFlowBody(sb, form);
+            AppendGridOrFlowBody(sb, form, style == FormStyle.Portable);
         }
 
         sb.Append($"<script type=\"module\" src=\"{Attr(scriptFileName)}\"></script>\n");
@@ -168,7 +179,7 @@ public static class FormAssetEmitter
     /// a cell nobody declared and push every control one place along, from a green build. (A Canvas page puts strips
     /// INSIDE: <see cref="AppendCanvasBody"/>.)
     /// </summary>
-    private static void AppendGridOrFlowBody(StringBuilder sb, FormDocument form)
+    private static void AppendGridOrFlowBody(StringBuilder sb, FormDocument form, bool portable)
     {
         var top = new List<FormControl>();
         var bottom = new List<FormControl>();
@@ -194,14 +205,14 @@ public static class FormAssetEmitter
         // the page means first.
         foreach (var control in top)
         {
-            AppendControl(sb, control, indent: "");
+            AppendControl(sb, control, indent: "", portable, FormAreaId(form));
         }
 
-        sb.Append("<div class=\"vgs-form\">\n");
+        AppendFormArea(sb, form, portable);
 
         foreach (var control in rest)
         {
-            AppendControl(sb, control, indent: "  ");
+            AppendControl(sb, control, indent: "  ", portable, FormAreaId(form));
         }
 
         AppendLiteral(sb, form);
@@ -215,7 +226,7 @@ public static class FormAssetEmitter
         // rendering two ways.
         for (var i = bottom.Count - 1; i >= 0; i--)
         {
-            AppendControl(sb, bottom[i], indent: "");
+            AppendControl(sb, bottom[i], indent: "", portable, FormAreaId(form));
         }
     }
 
@@ -226,13 +237,14 @@ public static class FormAssetEmitter
     /// below a 24px menu exactly as in WinForms. Everything — strips too — in DOCUMENT order: absolutely positioned
     /// siblings paint later-on-top, which is WinForms' "last in the list is in front" (scope call S12).
     /// </summary>
-    private static void AppendCanvasBody(StringBuilder sb, FormDocument form)
+    private static void AppendCanvasBody(StringBuilder sb, FormDocument form, bool portable)
     {
-        sb.Append("<div class=\"vgs-form\">\n");
+        AppendFormArea(sb, form, portable);
+        var designer = portable ? FormDockLayout.Resolve(form) : null;
 
         foreach (var control in form.Controls)
         {
-            AppendControl(sb, control, indent: "  ");
+            AppendControl(sb, control, indent: "  ", portable, FormAreaId(form), designer: designer);
         }
 
         // <Literal> flows at the form area's top-left, under the positioned controls (spec §3). ⛔ Wrapped (Task 10
@@ -250,7 +262,7 @@ public static class FormAssetEmitter
 
         // ⛔ Owner decision 2026-09-27: the page re-docks when user code shows or hides a docked control. A CLASSIC
         // script after the form area (the elements exist) and before the module (it observes InitializeComponent).
-        if (FormDockScript.PageScript(form) is { } dock)
+        if (FormDockScript.PageScript(form, clientAreas: portable) is { } dock)
         {
             sb.Append(dock);
         }
@@ -271,8 +283,23 @@ public static class FormAssetEmitter
         }
     }
 
-    private static void AppendControl(StringBuilder sb, FormControl control, string indent)
+    private static string FormAreaId(FormDocument form) => "vgs-form-" + form.Name;
+
+    private static void AppendFormArea(StringBuilder sb, FormDocument form, bool portable)
     {
+        if (!portable) { sb.Append("<div class=\"vgs-form\">\n"); return; }
+        var (width, height) = form.DesignSize;
+        sb.Append($"<div class=\"vgs-form\" id=\"{Attr(FormAreaId(form))}\" data-vgs-enabled=\"true\" data-vgs-cw=\"{Number(width)}\" data-vgs-ch=\"{Number(height)}\">\n");
+    }
+
+    private static void AppendControl(StringBuilder sb, FormControl control, string indent,
+        bool portable = false, string parentId = "", bool ancestorDisabled = false, FormDockLayoutResult? designer = null)
+    {
+        if (portable && control.Definition?.HtmlTag != null)
+        {
+            AppendPortableControl(sb, control, indent, parentId, ancestorDisabled, designer);
+            return;
+        }
         var definition = control.Definition;
         var tag = definition?.HtmlTag;
         if (tag == null)
@@ -474,6 +501,121 @@ public static class FormAssetEmitter
         sb.Append($"</{tag}>\n");
     }
 
+    private static void AppendPortableControl(
+        StringBuilder sb, FormControl control, string indent, string parentId, bool ancestorDisabled,
+        FormDockLayoutResult? designer)
+    {
+        var row = control.Definition!;
+        var multiline = row.MultilineTag != null && Flag(control, "Multiline") == true;
+        var tag = row.CaptionWrapper ?? (multiline ? row.MultilineTag! : row.HtmlTag!);
+        var ownEnabled = Flag(control, "Enabled") != false;
+        var disabled = ancestorDisabled || !ownEnabled;
+        var enableTarget = row.EnableTarget ?? FormEnableTarget.Aria;
+        var ariaDisabled = disabled && enableTarget == FormEnableTarget.Aria;
+        var disabledClass = disabled && enableTarget != FormEnableTarget.Native;
+        var text = control.Properties.GetValueOrDefault("Text");
+        if (text != null && row.Place == FormPlace.Item) text = FormAccelerator.Display(text).Display;
+        var password = row.PasswordProperty is { } pw && control.Properties.TryGetValue(pw, out var pc) && pc.Length == 1
+            ? pc : null;
+
+        sb.Append($"{indent}<{tag} id=\"{Attr(control.Id)}\" class=\"vgs-{Attr(control.Kind)}{Attr(ExtraClasses(control))}{(disabledClass ? " vgs-disabled" : "")}\"");
+        if (row.HtmlRole != null) sb.Append($" role=\"{Attr(row.HtmlRole)}\"");
+        if (row.Place == FormPlace.Positioned && row.CaptionWrapper == null) sb.Append($" tabindex=\"{Number(control.TabIndex)}\"");
+        sb.Append($" data-vgs-control=\"{row.Place}\" data-vgs-enabled=\"{(ownEnabled ? "true" : "false")}\" data-vgs-enable-target=\"{(enableTarget == FormEnableTarget.InnerInput ? "input" : enableTarget == FormEnableTarget.Native ? "native" : "aria")}\"");
+        if (Flag(control, "Visible") == false) sb.Append(" hidden");
+        if (ariaDisabled) sb.Append(" aria-disabled=\"true\"");
+        if (disabled && enableTarget == FormEnableTarget.Native) sb.Append(" disabled");
+        if (password != null) sb.Append($" data-vgs-passwordchar=\"{Attr(password)}\"");
+        AppendPortableMetrics(sb, control, designer);
+
+        foreach (var property in row.Properties)
+        {
+            if (property.HtmlAttributeName is not { } attribute || !property.AppliesTo(FormTarget.Web) ||
+                !control.Properties.TryGetValue(property.Name, out var raw) || string.IsNullOrEmpty(raw)) continue;
+            if (property.Type == FormPropertyType.Int)
+            {
+                if (!FormPropertyDef.TryParseInt(raw, out var number)) continue;
+                raw = Number(number);
+            }
+            sb.Append($" {attribute}=\"{Attr(raw)}\"");
+        }
+
+        if (row.CaptionWrapper != null)
+        {
+            sb.Append($"><input type=\"{Attr(row.HtmlInputType!)}\" tabindex=\"{Number(control.TabIndex)}\"");
+            if (disabled) sb.Append(" disabled");
+            if (Flag(control, "Checked") == true) sb.Append(" checked");
+            AppendGroupName(sb, control, row, parentId);
+            sb.Append($"><{row.CaptionTag}>{Text(text ?? "")}</{row.CaptionTag}></{tag}>\n");
+            return;
+        }
+
+        if (tag == "input")
+        {
+            if (row.HtmlInputType != null) sb.Append($" type=\"{Attr(password != null ? "password" : row.HtmlInputType)}\"");
+            if (text != null) sb.Append($" value=\"{Attr(text)}\"");
+            if (Flag(control, "Checked") == true) sb.Append(" checked");
+            AppendGroupName(sb, control, row, parentId);
+        }
+        if (Flag(control, "ReadOnly") == true) sb.Append(" readonly");
+        if (Flag(control, "MultiSelect") == true) sb.Append(" multiple");
+        if (tag == "img" && control.Properties.TryGetValue("Image", out var image))
+            sb.Append($" src=\"{Attr(image)}\" alt=\"{Attr(control.Id)}\"");
+        if (tag == "select" && text != null) sb.Append($" title=\"{Attr(text)}\""); // Task 37 changes ComboBox.Text.
+        sb.Append('>');
+        if (tag is "input" or "img") { sb.Append('\n'); return; }
+
+        if (row.CaptionTag is { } caption) sb.Append($"<{caption}>{Text(text ?? "")}</{caption}>");
+        else if (tag == "select" && control.Properties.TryGetValue("Items", out var items))
+        {
+            var index = control.Properties.TryGetValue("SelectedIndex", out var selected) && FormPropertyDef.TryParseInt(selected, out var parsed) ? parsed : -1;
+            var at = 0;
+            foreach (var item in FormPropertyDef.SplitItems(items))
+                sb.Append($"<option{(at++ == index ? " selected" : "")}>{Text(item)}</option>");
+        }
+        else if (text != null && tag != "select") sb.Append(Text(text));
+
+        if (control.Children.Count > 0)
+        {
+            sb.Append('\n');
+            var childIndent = indent + "  ";
+            if (row.HtmlChildrenWrapper is { } wrapper)
+            {
+                sb.Append($"{childIndent}<{wrapper}>\n");
+                childIndent += "  ";
+            }
+            foreach (var child in control.Children)
+                AppendControl(sb, child, childIndent, true, control.Id, disabled, designer);
+            if (row.HtmlChildrenWrapper != null) sb.Append($"{indent}  </{row.HtmlChildrenWrapper}>\n");
+            sb.Append(indent);
+        }
+        sb.Append($"</{tag}>\n");
+    }
+
+    private static void AppendGroupName(StringBuilder sb, FormControl control, FormControlDef row, string parentId)
+    {
+        // The GroupName row, not the control kind, declares radio grouping.
+        if (row.Property("GroupName") is not { } group || !group.AppliesTo(FormTarget.Web)) return;
+        var name = control.Properties.GetValueOrDefault("GroupName");
+        sb.Append($" name=\"{Attr(string.IsNullOrEmpty(name) ? parentId : name)}\"");
+    }
+
+    private static void AppendPortableMetrics(StringBuilder sb, FormControl control, FormDockLayoutResult? designer)
+    {
+        var area = FormClientArea.Of(control);
+        var pad = area.DockPadding;
+        sb.Append($" data-vgs-inset=\"{Number(area.OriginInset)}\" data-vgs-pad=\"{Number(pad.Left)},{Number(pad.Top)},{Number(pad.Right)},{Number(pad.Bottom)}\"");
+        sb.Append($" data-vgs-pl=\"{Number(pad.Left)}\" data-vgs-pt=\"{Number(pad.Top)}\" data-vgs-pr=\"{Number(pad.Right)}\" data-vgs-pb=\"{Number(pad.Bottom)}\"");
+        sb.Append($" data-vgs-dock=\"{FormDockLayout.EdgeOf(control)?.ToString() ?? "None"}\"");
+        if (control.Geometry is PixelGeometry pixel)
+        {
+            var anchor = FormAnchor.Parse(pixel.Anchor, out _);
+            sb.Append($" data-vgs-anchor=\"{Number((int)anchor)}\" data-vgs-x=\"{Number(pixel.X)}\" data-vgs-y=\"{Number(pixel.Y)}\" data-vgs-w=\"{Number(pixel.Width)}\" data-vgs-h=\"{Number(pixel.Height)}\"");
+        }
+        if (designer != null && designer.TryGetClientSize(control, out var client))
+            sb.Append($" data-vgs-cw=\"{Number(client.Width)}\" data-vgs-ch=\"{Number(client.Height)}\"");
+    }
+
     // ==================================================================
     // Stylesheet
     // ==================================================================
@@ -483,11 +625,12 @@ public static class FormAssetEmitter
     /// 2026-09-27) and takes <see cref="CanvasCss"/>. ⛔ The one vocabulary test is
     /// <see cref="FormVocabulary.IsPixel(FormDocument)"/>, asked first — never the target, never the switch below.
     /// </summary>
-    public static string Css(FormDocument form)
+    public static string Css(FormDocument form, FormStyle style = FormStyle.Dom)
     {
+        var portable = style == FormStyle.Portable;
         if (FormVocabulary.IsPixel(form))
         {
-            return CanvasCss(form);
+            return CanvasCss(form, portable);
         }
 
         var sb = new StringBuilder();
@@ -531,10 +674,11 @@ public static class FormAssetEmitter
 
         foreach (var control in form.AllControls())
         {
-            AppendControlCss(sb, control, layout);
+            AppendControlCss(sb, control, layout, portable);
         }
 
-        AppendKindCss(sb, form);
+        AppendKindCss(sb, form, portable);
+        if (portable) AppendPortableCss(sb);
 
         return sb.ToString();
     }
@@ -599,7 +743,7 @@ public static class FormAssetEmitter
     /// bulleted vertical list, not a menu bar, and its submenus are all open at once. Distinct() on the block itself,
     /// because the rule is "one block per kind present" and two ToolStrips are one kind.
     /// </summary>
-    private static void AppendKindCss(StringBuilder sb, FormDocument form)
+    private static void AppendKindCss(StringBuilder sb, FormDocument form, bool portable = false)
     {
         foreach (var css in form.AllControls()
                      .Select(c => c.Definition?.WebCss)
@@ -608,9 +752,19 @@ public static class FormAssetEmitter
         {
             sb.Append(css).Append('\n');
         }
+        if (portable)
+            foreach (var css in form.AllControls().Select(c => c.Definition?.PortableCss).OfType<string>().Distinct())
+                sb.Append(css).Append('\n');
     }
 
-    private static void AppendControlCss(StringBuilder sb, FormControl control, FormLayout layout)
+    private static void AppendPortableCss(StringBuilder sb)
+    {
+        sb.Append(".vgs-form [hidden] { display: none !important; }\n");
+        sb.Append(".vgs-form[hidden] { display: none !important; }\n");
+        sb.Append("[data-vgs-control] { box-sizing: border-box; }\n.vgs-disabled { opacity: 0.65; }\n");
+    }
+
+    private static void AppendControlCss(StringBuilder sb, FormControl control, FormLayout layout, bool portable = false)
     {
         var rules = new List<string>();
 
@@ -634,7 +788,7 @@ public static class FormAssetEmitter
         //
         // ⚠ Order is CATALOG order now (it was fore/back/align/display). No test depends on the order —
         // FormAssetEmitterTests asserts the exact text only for grid-only rules.
-        rules.AddRange(CatalogDeclarations(control));
+        rules.AddRange(CatalogDeclarations(control, portable));
 
         if (rules.Count == 0)
         {
@@ -648,7 +802,7 @@ public static class FormAssetEmitter
     /// The row-driven declarations for <paramref name="control"/> (spec §2.1), as <c>property: value</c>, in CATALOG
     /// order — the one walk both vocabularies use. <see cref="FormCss"/> converts each value.
     /// </summary>
-    private static List<string> CatalogDeclarations(FormControl control)
+    private static List<string> CatalogDeclarations(FormControl control, bool portable = false)
     {
         var declarations = new List<string>();
         if (control.Definition is not { } definition)
@@ -658,7 +812,8 @@ public static class FormAssetEmitter
 
         foreach (var property in definition.Properties)
         {
-            if (!property.AppliesTo(FormTarget.Web) ||
+            if ((!portable && property.PortableCssOnly) || (portable && property.Name == "Visible") ||
+                !property.AppliesTo(FormTarget.Web) ||
                 !control.Properties.TryGetValue(property.Name, out var raw))
             {
                 continue;
@@ -694,11 +849,11 @@ public static class FormAssetEmitter
     /// box, i.e. inside any CSS border (a GroupBox's fieldset), as WinForms positions them inside its
     /// DisplayRectangle; the amounts differ and the Task 12/13 harness measures them.</para>
     /// </summary>
-    private static string CanvasCss(FormDocument form)
+    private static string CanvasCss(FormDocument form, bool portable)
     {
         var sb = new StringBuilder();
-        var runtime = FormDockLayout.Resolve(form, FormDockMode.Runtime);
-        var designer = FormDockLayout.Resolve(form, FormDockMode.Designer);
+        var runtime = FormDockLayout.Resolve(form, FormDockMode.Runtime, clientAreas: portable);
+        var designer = FormDockLayout.Resolve(form, FormDockMode.Designer, clientAreas: portable);
         var (width, height) = runtime.RootClientSize;
 
         sb.Append($"/* Generated from {form.Name}{form.FileExtension}. Edits here are overwritten on build. */\n");
@@ -743,11 +898,12 @@ public static class FormAssetEmitter
 
         // ⛔ The UA's [hidden]{display:none} loses to the phone query's display:flex on a container, so a control
         // user code hid with `el.hidden = True` would reappear below the breakpoint.
-        sb.Append(".vgs-form [hidden] { display: none !important; }\n");
+        if (portable) AppendPortableCss(sb);
+        else sb.Append(".vgs-form [hidden] { display: none !important; }\n");
 
-        AppendCanvasControls(sb, form.Controls, parent: null, runtime, designer);
-        AppendKindCss(sb, form);
-        AppendStackedQuery(sb, form, designer);
+        AppendCanvasControls(sb, form.Controls, parent: null, runtime, designer, portable);
+        AppendKindCss(sb, form, portable);
+        AppendStackedQuery(sb, form, designer, portable);
         return sb.ToString();
     }
 
@@ -758,7 +914,7 @@ public static class FormAssetEmitter
     /// unchanged. ⛔ The breakpoint is <see cref="FormLayout.EffectiveMobileBreakpoint"/> — the one rule; 0 never
     /// stacks, a Degraded value gives the default.
     /// </summary>
-    private static void AppendStackedQuery(StringBuilder sb, FormDocument form, FormDockLayoutResult designer)
+    private static void AppendStackedQuery(StringBuilder sb, FormDocument form, FormDockLayoutResult designer, bool portable)
     {
         var breakpoint = form.Layout?.EffectiveMobileBreakpoint ?? FormLayout.DefaultMobileBreakpoint;
         if (breakpoint == 0)
@@ -770,7 +926,7 @@ public static class FormAssetEmitter
         // flex: none — the stacked form area is its content's height; it does not grow into the body column's free
         // space below the breakpoint.
         sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; flex: none; min-width: 0; min-height: 0; }\n");
-        var ordered = AppendStacked(sb, form.Controls, designer);
+        var ordered = AppendStacked(sb, form.Controls, designer, portable);
 
         // The <Literal>'s wrapper (AppendCanvasBody) comes after every top-level control, bottom strips included.
         if (!string.IsNullOrEmpty(form.Literal))
@@ -791,7 +947,7 @@ public static class FormAssetEmitter
     /// <para>Returns how many of <paramref name="siblings"/> were given an order (0..n−1).</para>
     /// </summary>
     private static int AppendStacked(
-        StringBuilder sb, IReadOnlyList<FormControl> siblings, FormDockLayoutResult designer)
+        StringBuilder sb, IReadOnlyList<FormControl> siblings, FormDockLayoutResult designer, bool portable)
     {
         FormRect? RectOf(FormControl control) =>
             designer.TryGet(control, out var docked) ? docked.Bounds
@@ -816,18 +972,18 @@ public static class FormAssetEmitter
 
         for (var i = 0; i < ordered.Count; i++)
         {
-            AppendStackedRule(sb, ordered[i], i, RectOf(ordered[i])!.Value);
+            AppendStackedRule(sb, ordered[i], i, RectOf(ordered[i])!.Value, portable);
         }
 
         foreach (var container in positioned.Where(c => c.Children.Count > 0))
         {
-            AppendStacked(sb, container.Children, designer);
+            AppendStacked(sb, container.Children, designer, portable);
         }
 
         return ordered.Count;
     }
 
-    private static void AppendStackedRule(StringBuilder sb, FormControl control, int order, FormRect rect)
+    private static void AppendStackedRule(StringBuilder sb, FormControl control, int order, FormRect rect, bool portable)
     {
         var definition = control.Definition;
         var isContainer = definition?.IsContainer == true;
@@ -872,7 +1028,7 @@ public static class FormAssetEmitter
 
             // ⛔ Never write display for a control whose own catalog CSS writes it (Visible=false → display:none):
             // this later declaration would un-hide it on phones.
-            if (!CatalogDeclarations(control).Any(d => d.StartsWith("display:", StringComparison.Ordinal)))
+            if (!CatalogDeclarations(control, portable).Any(d => d.StartsWith("display:", StringComparison.Ordinal)))
             {
                 rules.Add("display: flex");
                 rules.Add("flex-direction: column");
@@ -885,7 +1041,7 @@ public static class FormAssetEmitter
 
     private static void AppendCanvasControls(
         StringBuilder sb, IReadOnlyList<FormControl> siblings, FormControl? parent,
-        FormDockLayoutResult runtime, FormDockLayoutResult designer)
+        FormDockLayoutResult runtime, FormDockLayoutResult designer, bool portable)
     {
         foreach (var control in siblings)
         {
@@ -902,7 +1058,7 @@ public static class FormAssetEmitter
                 rules.AddRange(placement.Select(d => $"{d.Property}: {d.Value}"));
             }
 
-            rules.AddRange(CatalogDeclarations(control));
+            rules.AddRange(CatalogDeclarations(control, portable));
 
             if (rules.Count > 0)
             {
@@ -917,7 +1073,7 @@ public static class FormAssetEmitter
                 sb.Append($"#{control.Id} {wrapper} {{ z-index: 1; }}\n");
             }
 
-            AppendCanvasControls(sb, control.Children, control, runtime, designer);
+            AppendCanvasControls(sb, control.Children, control, runtime, designer, portable);
         }
     }
 

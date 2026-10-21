@@ -169,7 +169,12 @@ Namespace System.Windows.Forms
         End Sub
 
         Public Sub Focus()
-            Me.VgsElementFor("Focus").focus()
+            Dim el As Element = Me.VgsElementFor("Focus")
+            If el.getAttribute("data-vgs-enable-target") = "input" Then
+                Me.VgsInputElement().focus()
+            Else
+                el.focus()
+            End If
         End Sub
 
         Public Sub BringToFront()
@@ -356,7 +361,15 @@ Namespace System.Windows.Forms
             If el.getAttribute("data-vgs-enabled") = "false" Then ownDisabled = True
 
             Dim tag As String = el.tagName
-            If tag = "BUTTON" OrElse tag = "INPUT" OrElse tag = "SELECT" OrElse tag = "TEXTAREA" OrElse tag = "FIELDSET" Then
+            Dim target As String = el.getAttribute("data-vgs-enable-target")
+            If target = "input" Then
+                el.querySelector("input").disabled = ownDisabled
+                If ownDisabled Then
+                    el.classList.add("vgs-disabled")
+                Else
+                    el.classList.remove("vgs-disabled")
+                End If
+            ElseIf target = "native" OrElse (target Is Nothing AndAlso (tag = "BUTTON" OrElse tag = "INPUT" OrElse tag = "SELECT" OrElse tag = "TEXTAREA" OrElse tag = "FIELDSET")) Then
                 el.disabled = ownDisabled
             Else
                 If ownDisabled Then
@@ -488,6 +501,35 @@ Namespace System.Windows.Forms
             Dim input As Element = el.querySelector("input")
             If input Is Nothing Then Throw New InvalidOperationException("Control '" & Me.Name & "' has no input element.")
             Return input
+        End Function
+
+        ' Task 32 metadata is emitted from FormClientArea, never re-derived by kind here.
+        ' Task 33's runtime geometry uses these design-client and docking inputs.
+        Public Function VgsMetric(name As String) As Integer
+            Dim value As String = Me.VgsElement().getAttribute(name)
+            If value Is Nothing OrElse value = "" Then Return 0
+            Return Integer.Parse(value)
+        End Function
+
+        Public Function VgsClientInset() As Integer
+            Return Me.VgsMetric("data-vgs-inset")
+        End Function
+
+        Public Function VgsDesignClientWidth() As Integer
+            Return Me.VgsMetric("data-vgs-cw")
+        End Function
+
+        Public Function VgsDesignClientHeight() As Integer
+            Return Me.VgsMetric("data-vgs-ch")
+        End Function
+
+        Public Function VgsDockPadding() As Padding
+            Dim pad As New Padding()
+            pad.Left = Me.VgsMetric("data-vgs-pl")
+            pad.Top = Me.VgsMetric("data-vgs-pt")
+            pad.Right = Me.VgsMetric("data-vgs-pr")
+            pad.Bottom = Me.VgsMetric("data-vgs-pb")
+            Return pad
         End Function
 
         ' Direct children only: a nested GroupBox's legend is not its parent's caption.

@@ -99,7 +99,9 @@ public enum FormCssConverter
     Cursor,
 
     /// <summary><c>AutoScroll=true</c> → <c>overflow: auto</c>; <c>false</c> → no declaration.</summary>
-    AutoScrollToOverflow
+    AutoScrollToOverflow,
+    /// <summary>Portable Panel border: None/FixedSingle/Fixed3D.</summary>
+    BorderStyle
 }
 
 /// <summary>What the property grid does with a value an editor pushed — see <see cref="FormPropertyDef.Judge"/>.</summary>
@@ -217,8 +219,17 @@ public sealed record FormPropertyDef(
     IReadOnlyDictionary<string, string>? Aliases = null,
     string? OracleExemption = null,
     IReadOnlyList<FormLayoutKind>? WebLayouts = null,
-    IReadOnlyList<string>? ReferenceKinds = null)
+    IReadOnlyList<string>? ReferenceKinds = null,
+    string? DomMember = null,
+    bool PortableCssOnly = false)
 {
+    /// <summary>Live DOM location; used by conversion and the Node mapping gate, not a second property list.</summary>
+    public string? DomMember { get; init; } = DomMember ??
+        (CssProperty != null ? "style." + System.Text.RegularExpressions.Regex.Replace(CssProperty, "-([a-z])", m => m.Groups[1].Value.ToUpperInvariant())
+            : HtmlAttribute == "maxlength" ? "maxLength"
+            : HtmlAttribute is "value" or "min" or "max" or "step" or "placeholder" or "title" ? HtmlAttribute
+            : HtmlAttribute != null ? "getAttribute(\"" + HtmlAttribute + "\")" : IsItemCollection ? "options" : null);
+
     // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
     // used a different comparer would make `left` Degraded while `Left` is Canon. The init accessor
@@ -1277,7 +1288,14 @@ public sealed record FormControlDef(
     string? HtmlRole = null,
     string? WebCss = null,
     bool StretchesWhenStacked = false,
-    IReadOnlyDictionary<string, string>? DropValues = null)
+    IReadOnlyDictionary<string, string>? DropValues = null,
+    string? CaptionWrapper = null,
+    string? CaptionTag = null,
+    string? MultilineTag = null,
+    string? PasswordProperty = null,
+    FormEnableTarget? EnableTarget = null,
+    FormClientRule? ClientArea = null,
+    string? PortableCss = null)
 {
     /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
     public bool IsComponent => Place == FormPlace.Tray;
@@ -1370,21 +1388,22 @@ public static class FormControlCatalog
     // ⛔ Category and Description are WinForms' own (the parity test compares them with the
     // snapshot). A row whose Description differs on one kind gets its OWN definition — the parity
     // run is what finds those (Task 8), never a guess here.
-    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String,
+    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String, DomMember: "textContent",
         Category: FormPropertyCategory.Appearance, Description: "The text associated with the control.");
 
-    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true",
+    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true", DomMember: "disabled",
         Category: FormPropertyCategory.Behavior, Description: "Indicates whether the control is enabled.");
 
     // ⛔ Visible=false is CSS, not a missing element: the element must still exist for getElementById.
     private static readonly FormPropertyDef Visible = new("Visible", FormPropertyType.Bool, "true",
         Category: FormPropertyCategory.Behavior, Description: "Determines whether the control is visible or hidden.",
-        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay);
+        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay, DomMember: "hidden");
 
     // ⚠ A ToolStripItem's own Visible — its description differs from Control's (output.txt:1159), and
     // an UNPARENTED item reads Visible=False, which is the parent-dependent measurement the tool cannot
     // judge (spec claim 2 in the plan). The designer's absent-means-visible is WinForms' real default.
     private static readonly FormPropertyDef ItemVisible = new("Visible", FormPropertyType.Bool, "true",
+        DomMember: "hidden",
         Category: FormPropertyCategory.Behavior, Description: "Determines whether the item is visible or hidden.",
         CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay,
         OracleExemption: "an unparented ToolStripItem reports Visible=False; the item's own visibility " +
@@ -1421,7 +1440,7 @@ public static class FormControlCatalog
     // fails if one comes back. A document that still carries such an attribute keeps it as an unknown attribute
     // (preserved, round-tripped, no longer emitted).
 
-    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false",
+    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false", DomMember: "checked",
         Category: FormPropertyCategory.Appearance, Description: "Indicates whether the component is in the checked state.");
 
     // ⚠ RadioButton's own Checked: WinForms describes it differently from CheckBox's (the parity run).
@@ -1443,7 +1462,7 @@ public static class FormControlCatalog
         "the form can OPEN on a chosen item/tab, which VS users otherwise set in code after " +
         "InitializeComponent; csc gates the name";
 
-    private static FormPropertyDef SelectedIndex(string reason) => new("SelectedIndex", FormPropertyType.Int, "-1",
+    private static FormPropertyDef SelectedIndex(string reason) => new("SelectedIndex", FormPropertyType.Int, "-1", DomMember: "selectedIndex",
         Category: FormPropertyCategory.Behavior,
         Description: "The zero-based index of the item selected when the form opens; -1 selects nothing.",
         OracleExemption: reason);
@@ -1455,7 +1474,7 @@ public static class FormControlCatalog
     private static readonly FormPropertyDef StripEnabled = Enabled with { Targets = new[] { FormTarget.WinForms } };
 
     private static FormPropertyDef StripDock(string placementDefault) => new(
-        "Dock", FormPropertyType.Enum, placementDefault, new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle",
+        "Dock", FormPropertyType.Enum, placementDefault, new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle", DomMember: "getAttribute(\"data-vgs-dock\")",
         Category: FormPropertyCategory.Layout,
         Description: "Defines which borders of the control are bound to the container.");
 
@@ -1463,7 +1482,7 @@ public static class FormControlCatalog
         Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs",
             category: FormEventCategory.Action, description: ItemClickedDescription);
 
-    private static FormPropertyDef ItemText() => new("Text", FormPropertyType.String,
+    private static FormPropertyDef ItemText() => new("Text", FormPropertyType.String, DomMember: "textContent",
         Category: FormPropertyCategory.Appearance, Description: "The text to display on the item.");
 
     private static FormPropertyDef ItemToolTipText() => new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title",
@@ -1562,13 +1581,13 @@ public static class FormControlCatalog
     // D2's web-only extras (spec §1): on EVERY web element kind, added by rule (WithWebExtras) to each row of All that
     // has an HtmlTag — never to a tray component (no element) or a WinForms-only kind.
     // ==================================================================
-    private static readonly FormPropertyDef CssClassRow = new("CssClass", FormPropertyType.CssClasses,
+    private static readonly FormPropertyDef CssClassRow = new("CssClass", FormPropertyType.CssClasses, DomMember: "className",
         Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
         Description: "CSS class names added to the element on the page, separated by spaces.");
 
     // ⚠ The element's style ATTRIBUTE (raw CSS the user wrote), escaped by the emitter as every attribute is — an inline
     // style is exactly "raw CSS" and cannot leave its attribute. It outranks the stylesheet, as inline styles do.
-    private static readonly FormPropertyDef StyleRow = new("Style", FormPropertyType.String, HtmlAttribute: "style",
+    private static readonly FormPropertyDef StyleRow = new("Style", FormPropertyType.String, HtmlAttribute: "style", DomMember: "style.cssText",
         Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
         Description: "Extra CSS declarations for the element on the page (its style attribute).");
 
@@ -1607,8 +1626,20 @@ public static class FormControlCatalog
             ? definition
             : definition with
             {
+                EnableTarget = definition.EnableTarget ?? (definition.HtmlTag is "button" or "input" or "select" or "textarea" or "fieldset"
+                    ? FormEnableTarget.Native : FormEnableTarget.Aria),
                 Properties = definition.Properties
                     .Concat(new[] { CssClassRow, StyleRow }.Where(extra => definition.Property(extra.Name) == null))
+                    .Select(p => p.Name == "Text" && definition.CaptionTag != null
+                        ? p with { DomMember = "querySelector(\"" + definition.CaptionTag + "\").textContent" }
+                        : p.Name == "Text" && definition.HtmlTag == "input"
+                            ? p with { DomMember = "value" }
+                        : p.Name == "Checked" && definition.CaptionWrapper != null
+                            ? p with { DomMember = "querySelector(\"input\").checked" }
+                            : p.Name == "Enabled" && definition.EnableTarget == FormEnableTarget.InnerInput
+                                ? p with { DomMember = "querySelector(\"input\").disabled" }
+                                : p.Name == "Enabled" && definition.HtmlTag is "label" or "div" or "a" or "img" or "progress"
+                                    ? p with { DomMember = "getAttribute(\"aria-disabled\")" } : p)
                     .ToList()
             };
 
@@ -1694,20 +1725,24 @@ public static class FormControlCatalog
             Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
         new("TextBox",     "TextBox",     "input",    "text",     false, ControlRows(WindowTextForeColor, WindowBackColor,
             FontRow, IBeamCursorRow,
-            Text,
+            Text with { DomMember = "value" },
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false",
+                DomMember: "tagName",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls whether the text of the edit control can span more than one line."),
             new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false",
+                DomMember: "readOnly",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls whether the text in the edit control can be changed or not."),
             // ⚠ WinForms caps an absent MaxLength at 32767; an <input> with no maxlength is unlimited.
             new FormPropertyDef("MaxLength", FormPropertyType.Int, "32767", HtmlAttribute: "maxlength",
+                DomMember: "maxLength",
                 WebDefault: "",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Specifies the maximum number of characters that can be entered into the edit control."),
             // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
+                DomMember: "getAttribute(\"data-vgs-passwordchar\")",
                 WinFormsFactory: "Convert.ToChar",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates the character to display for password input for single-line edit controls."),
@@ -1731,7 +1766,7 @@ public static class FormControlCatalog
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: Ev("TextChanged", "input", category: FormEventCategory.PropertyChanged,
                 description: "Event raised when the value of the Text property is changed on Control."),
-            StretchesWhenStacked: true),
+            StretchesWhenStacked: true, MultilineTag: "textarea", PasswordProperty: "PasswordChar"),
         new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign, PaddingRow,
             new FormPropertyDef("DialogResult", FormPropertyType.Enum, "None",
                 new[] { "None", "OK", "Cancel", "Abort", "Retry", "Ignore", "Yes", "No", "TryAgain", "Continue" },
@@ -1761,13 +1796,16 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance, Description: "Controls the appearance of the check box.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
-                description: "Occurs whenever the Check property is changed.")),
+                description: "Occurs whenever the Check property is changed."),
+            CaptionWrapper: "label", CaptionTag: "span", EnableTarget: FormEnableTarget.InnerInput,
+            PortableCss: ".vgs-CheckBox { display: inline-flex; align-items: center; gap: 3px; }\n.vgs-CheckBox > input { margin: 0; flex: none; }"),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             RadioChecked,
             // ⛔ WEB ONLY. The DOM groups radios by name=; WinForms groups them by CONTAINER and
             // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
             new FormPropertyDef("GroupName", FormPropertyType.String,
+                DomMember: "querySelector(\"input\").name",
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
                 Description: "The radio group this button belongs to on the page: buttons sharing a name are mutually exclusive."),
@@ -1782,7 +1820,9 @@ public static class FormControlCatalog
                 Description: "Controls whether the RadioButton appears as normal or as a Windows PushButton.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
             Events: Ev("CheckedChanged", "change", category: FormEventCategory.Misc,
-                description: "Occurs whenever the 'checked' property changes value.")),
+                description: "Occurs whenever the 'checked' property changes value."),
+            CaptionWrapper: "label", CaptionTag: "span", EnableTarget: FormEnableTarget.InnerInput,
+            PortableCss: ".vgs-RadioButton { display: inline-flex; align-items: center; gap: 3px; }\n.vgs-RadioButton > input { margin: 0; flex: none; }"),
         new("ComboBox",    "ComboBox",    "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             Text,
             // Items is a get-only collection on WinForms — assigning it is CS0200.
@@ -1812,6 +1852,7 @@ public static class FormControlCatalog
             // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
             // web-only rather than being silently approximated.
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
+                DomMember: "multiple",
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
                 Description: "Allows more than one item to be selected at a time on the page."),
@@ -1833,6 +1874,7 @@ public static class FormControlCatalog
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
                 WinFormsEnumType: "BorderStyle",
+                CssProperty: "border", CssConverter: FormCssConverter.BorderStyle, PortableCssOnly: true,
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether the panel should have a border."),
             // ⛔ Both targets (D2): on the page the <div> scrolls its overflow, as the WinForms Panel does.
@@ -1844,9 +1886,11 @@ public static class FormControlCatalog
             // ⛔ Owner decision (2026-09-29): a double-click opens what VS opens — Paint, with its PaintEventArgs. A page
             // has no Paint, so on the web the gesture opens the row's DECLARED web default, Click, and says so
             // (BL8035); a Paint bind is dropped-and-named by a retarget like any event with no web name.
-            Events: PanelEvents(web: "click")),
+            Events: PanelEvents(web: "click"), ClientArea: new FormClientRule("BorderStyle")),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
+            CaptionTag: "legend", ClientArea: new FormClientRule(DockPadding: new FormInsets(3, 19, 3, 3)),
+            PortableCss: ".vgs-GroupBox { position: relative; border: 0; padding: 0; margin: 0; min-inline-size: 0; box-sizing: border-box; }\n.vgs-GroupBox::before { content: \"\"; position: absolute; inset: 7px 0 0; border: 1px solid #aaa; pointer-events: none; }\n.vgs-GroupBox > legend { position: absolute; left: 8px; top: 0; padding: 0 2px; background: Canvas; z-index: 1; }",
             // ⛔ Owner decision O3 (2026-09-29, checked in Visual Studio): a double-click creates an ENTER handler,
             // as VS does — the snapshot's DefaultEvent agrees, so Enter needs no exemption. On the page Enter is the
             // fieldset's `focusin`: focus moving INTO the box, which bubbles from its children exactly as WinForms
@@ -1868,12 +1912,13 @@ public static class FormControlCatalog
             null, BackColor, null, CursorRow,
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029).
             new FormPropertyDef("Image", FormPropertyType.String,
+                DomMember: "src",
                 WinFormsFactory: "Image.FromFile",
                 Category: FormPropertyCategory.Appearance,
                 Description: "The image displayed in the PictureBox."),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
-                WinFormsEnumType: "PictureBoxSizeMode",
+                WinFormsEnumType: "PictureBoxSizeMode", DomMember: "style.objectFit",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls how the PictureBox will handle image placement and control sizing."),
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None", new[] { "None", "FixedSingle", "Fixed3D" },
@@ -1936,7 +1981,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether the numeric up-down should display its value in hexadecimal."),
             // ⛔ Both targets (D2): the <input>'s readonly (the emitter's flag, through this row).
-            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false",
+            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false", DomMember: "readOnly",
                 Category: FormPropertyCategory.Behavior, Description: "Indicates whether the edit box is read-only."),
             HorizontalTextAlign("Indicates how the text should be aligned in the edit box.")),
             DefaultWidth: 120, DefaultHeight: 23, Schematic: FormSchematic.Spinner,

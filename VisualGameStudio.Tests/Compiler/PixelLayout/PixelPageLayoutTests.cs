@@ -592,7 +592,8 @@ public class PixelPageLayoutTests
         Record("Bordered Edge", edge);
         Record("Bordered WinForms", _winForms["Bordered"]["design"]);
 
-        var recorded = new Dictionary<string, LayoutBox>(PixelLayoutModel.Rects(PixelLayoutFixtures.Bordered()))
+        // Legacy DOM pages deliberately retain the old model/UA fieldset picture.
+        var recorded = new Dictionary<string, LayoutBox>(PixelLayoutModel.Rects(PixelLayoutFixtures.Bordered(), clientAreas: false))
         {
             ["grpTop"] = new(202, 132, 176, 20),
             ["grpSub"] = new(212, 172, 50, 30),

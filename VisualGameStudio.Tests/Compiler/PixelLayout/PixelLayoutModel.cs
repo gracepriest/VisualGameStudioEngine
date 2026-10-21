@@ -23,7 +23,8 @@ internal static class PixelLayoutModel
 {
     /// <param name="clientSize">The form's client size to lay out at; null is the design size.</param>
     public static Dictionary<string, LayoutBox> Rects(
-        FormDocument document, FormDockMode mode = FormDockMode.Runtime, (int Width, int Height)? clientSize = null)
+        FormDocument document, FormDockMode mode = FormDockMode.Runtime, (int Width, int Height)? clientSize = null,
+        bool clientAreas = true)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -31,17 +32,17 @@ internal static class PixelLayoutModel
         // distances were captured against: the region writer writes a docked container's Designer size, and WinForms
         // captures anchors when a child is added (measured, HiddenSiblingAnchor). Never the Runtime size: a hidden
         // docked sibling changes that, and the children then MOVE by the difference.
-        var design = FormDockLayout.Resolve(document, FormDockMode.Designer);
+        var design = FormDockLayout.Resolve(document, FormDockMode.Designer, clientAreas);
         var boxes = new Dictionary<string, LayoutBox>();
         var now = clientSize ?? design.RootClientSize;
-        Walk(document.Controls, 0, 0, design.RootClientSize, now, shown: true);
+        Walk(document.Controls, 0, 0, design.RootClientSize, now, default, shown: true);
         return boxes;
 
         void Walk(
             IReadOnlyList<FormControl> controls, int originX, int originY,
-            (int Width, int Height) designClient, (int Width, int Height) client, bool shown)
+            (int Width, int Height) designClient, (int Width, int Height) client, FormInsets padding, bool shown)
         {
-            var docked = FormDockLayout.ResolveSiblings(controls, client.Width, client.Height, mode)
+            var docked = FormDockLayout.ResolveSiblings(controls, client.Width, client.Height, mode, padding)
                 .ToDictionary(d => d.Control, d => d.Bounds, ReferenceEqualityComparer.Instance);
 
             foreach (var control in controls)
@@ -77,7 +78,9 @@ internal static class PixelLayoutModel
                 if (FormDockLayout.HasClientArea(control))
                 {
                     var childDesign = design.TryGetClientSize(control, out var size) ? size : FormDockLayout.OwnSizeOf(control);
-                    Walk(control.Children, originX + rect.X, originY + rect.Y, childDesign, (rect.Width, rect.Height), visible);
+                    var area = clientAreas ? FormClientArea.Of(control) : default;
+                    Walk(control.Children, originX + rect.X + area.OriginInset, originY + rect.Y + area.OriginInset,
+                        childDesign, area.ClientSize(rect.Width, rect.Height), area.DockPadding, visible);
                 }
             }
         }

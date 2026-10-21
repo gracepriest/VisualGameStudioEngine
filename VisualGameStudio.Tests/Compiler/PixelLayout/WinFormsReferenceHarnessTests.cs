@@ -338,6 +338,8 @@ public class WinFormsReferenceHarnessTests
         };
 
         var differences = LayoutComparison.Differences(recorded, snapshot.Controls, 0);
+        Assert.That(LayoutComparison.Differences(recorded, model, 0), Is.Empty,
+            "Task 32's shared client-area rule now matches these existing WinForms measurements");
         Assert.That(differences, Is.Empty,
             "the bordered containers no longer measure as recorded:\n  " + string.Join("\n  ", differences));
     }

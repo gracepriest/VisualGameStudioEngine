@@ -346,6 +346,23 @@ public class PortableFirstKindsNodeTests
         Console.WriteLine(CStr(c.AutoScroll) & ":" & c.Element.style.overflow)
         """, "0:False\n1px solid:1\n2px inset:2\nnone:True:auto\nFalse:");
 
+    [Test]
+    public void PortableMetadata_FeedsTheLibraryClientAndEnableSeams() => Expect("CheckBox", """
+        Console.WriteLine(c.VgsClientInset() & ":" & c.VgsDesignClientWidth() & ":" & c.VgsDesignClientHeight())
+        Dim pad As Padding = c.VgsDockPadding()
+        Console.WriteLine(pad.Left & ":" & pad.Top & ":" & pad.Right & ":" & pad.Bottom)
+        c.Enabled = False
+        Console.WriteLine(CStr(c.Element.querySelector("input").disabled))
+        c.Enabled = True
+        c.Focus()
+        Dim raw As Object = c.Element.querySelector("input")
+        Console.WriteLine(CStr(raw.focused))
+        """, "1:198:98\n3:19:3:3\nTrue\nTrue",
+        "__state.els.sut.setAttribute('data-vgs-inset','1'); __state.els.sut.setAttribute('data-vgs-cw','198');" +
+        "__state.els.sut.setAttribute('data-vgs-ch','98'); __state.els.sut.setAttribute('data-vgs-pl','3');" +
+        "__state.els.sut.setAttribute('data-vgs-pt','19'); __state.els.sut.setAttribute('data-vgs-pr','3');" +
+        "__state.els.sut.setAttribute('data-vgs-pb','3'); __state.els.sut.setAttribute('data-vgs-enable-target','input');\n");
+
     [TestCase(false)]
     [TestCase(true)]
     [NonParallelizable]

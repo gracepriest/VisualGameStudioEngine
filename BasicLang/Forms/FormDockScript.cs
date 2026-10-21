@@ -26,13 +26,18 @@ namespace BasicLang.Forms;
 public static class FormDockScript
 {
     /// <summary>The pure resolver, mirrored from C#. ⚠ Line endings normalised: a raw literal takes the source file's.</summary>
-    public static readonly string Core = """
+    public static readonly string Core = ResolverCore(true);
+    private static readonly string LegacyCore = ResolverCore(false);
+
+    // One template: the legacy expansion stays byte-identical, while portable nodes carry
+    // the catalog-resolved client metrics. There is no JavaScript kind/border lookup table.
+    private static string ResolverCore(bool clientAreas) => $$"""
         // vgs-dock: re-docks a Canvas page when a docked control is shown or hidden at run time, as WinForms does.
         // MIRROR of BasicLang FormDockLayout.ResolveSiblings / Walk (Runtime) and FormAnchorCss.Docked.
         // FormDockScriptTests runs this and the C# over one table; change both in one commit.
-        function vgsDockSiblings(nodes, width, height, hidden) {
+        function vgsDockSiblings(nodes, width, height, hidden{{(clientAreas ? ", padding" : "")}}) {
           var cw = Math.max(0, width), ch = Math.max(0, height);
-          var x = 0, y = 0, w = cw, h = ch, placed = [];
+          var x = 0, y = 0, w = cw, h = ch, placed = [];{{(clientAreas ? "\n  padding = padding || [0, 0, 0, 0]; x = padding[0]; y = padding[1]; w -= padding[0] + padding[2]; h -= padding[1] + padding[3];" : "")}}
           for (var n = 0; n < nodes.length; n++) {
             var node = nodes[n];
             if (node.e === null || hidden(node)) continue;
@@ -46,8 +51,8 @@ public static class FormDockScript
           }
           return placed;
         }
-        function vgsDockWalk(nodes, width, height, hidden, out) {
-          var placed = vgsDockSiblings(nodes, width, height, hidden);
+        function vgsDockWalk(nodes, width, height, hidden, out{{(clientAreas ? ", padding" : "")}}) {
+          var placed = vgsDockSiblings(nodes, width, height, hidden{{(clientAreas ? ", padding" : "")}});
           for (var p = 0; p < placed.length; p++) out.push(placed[p]);
           for (var n = 0; n < nodes.length; n++) {
             var node = nodes[n];
@@ -56,7 +61,7 @@ public static class FormDockScript
             for (var q = 0; q < placed.length; q++) {
               if (placed[q].n === node) { iw = placed[q].b[2]; ih = placed[q].b[3]; break; }
             }
-            if (node.k.length > 0) vgsDockWalk(node.k, iw, ih, hidden, out);
+            {{(clientAreas ? "var inset = node.a || 0; iw = Math.max(0, iw - 2 * inset); ih = Math.max(0, ih - 2 * inset);\n    " : "")}}if (node.k.length > 0) vgsDockWalk(node.k, iw, ih, hidden, out{{(clientAreas ? ", node.p" : "")}});
           }
         }
         function vgsDockCss(d) {
@@ -112,11 +117,11 @@ public static class FormDockScript
     /// The inline classic script for <paramref name="form"/>'s page, or null when nothing on it docks. An IIFE, so
     /// nothing leaks into the page's globals beside App.js.
     /// </summary>
-    public static string? PageScript(FormDocument form)
+    public static string? PageScript(FormDocument form, bool clientAreas = false)
     {
         ArgumentNullException.ThrowIfNull(form);
 
-        var root = Root(form);
+        var root = Root(form, clientAreas);
         if (!Docks(root.Children))
         {
             return null;
@@ -125,7 +130,7 @@ public static class FormDockScript
         var breakpoint = form.Layout?.EffectiveMobileBreakpoint ?? FormLayout.DefaultMobileBreakpoint;
         var sb = new StringBuilder();
         sb.Append("<script data-vgs=\"dock\">\n(function () {\n");
-        sb.Append(Core).Append(Bootstrap);
+        sb.Append(clientAreas ? Core : LegacyCore).Append(Bootstrap);
         sb.Append("vgsDockStart(").Append(JsonSerializer.Serialize(root)).Append(", ")
           .Append(breakpoint.ToString(CultureInfo.InvariantCulture)).Append(");\n");
         sb.Append("})();\n</script>\n");
@@ -139,26 +144,26 @@ public static class FormDockScript
     /// children out (<see cref="FormDockLayout.HasClientArea"/>) and whether it is designed hidden. ⛔ The resolver's
     /// own rules, never copies. ⚠ JSON-escaped, so no id can close the <c>&lt;script&gt;</c>.
     /// </summary>
-    public static string DataJson(FormDocument form)
+    public static string DataJson(FormDocument form, bool clientAreas = true)
     {
         ArgumentNullException.ThrowIfNull(form);
-        return JsonSerializer.Serialize(Root(form));
+        return JsonSerializer.Serialize(Root(form, clientAreas));
     }
 
-    private static FormDockNode Root(FormDocument form)
+    private static FormDockNode Root(FormDocument form, bool clientAreas)
     {
         var (width, height) = form.DesignSize;
-        return new FormDockNode("", null, width, height, true, false, Nodes(form.Controls));
+        return new FormDockNode("", null, width, height, true, false, Nodes(form.Controls, clientAreas));
     }
 
-    private static List<FormDockNode> Nodes(IReadOnlyList<FormControl> siblings)
+    private static List<FormDockNode> Nodes(IReadOnlyList<FormControl> siblings, bool clientAreas)
     {
         var nodes = new List<FormDockNode>();
         foreach (var control in siblings)
         {
             var edge = FormDockLayout.EdgeOf(control);
             var hasClientArea = FormDockLayout.HasClientArea(control);
-            var children = hasClientArea ? Nodes(control.Children) : new List<FormDockNode>();
+            var children = hasClientArea ? Nodes(control.Children, clientAreas) : new List<FormDockNode>();
 
             // Neither docks nor holds anything that does: it consumes nothing, so the script need not know it.
             if (edge == null && children.Count == 0)
@@ -167,7 +172,11 @@ public static class FormDockScript
             }
 
             var (width, height) = FormDockLayout.OwnSizeOf(control);
-            nodes.Add(new FormDockNode(control.Id, edge?.ToString(), width, height, hasClientArea, control.IsHidden, children));
+            var area = FormClientArea.Of(control);
+            var pad = area.DockPadding;
+            nodes.Add(new FormDockNode(control.Id, edge?.ToString(), width, height, hasClientArea, control.IsHidden, children,
+                clientAreas ? area.OriginInset : null,
+                clientAreas ? new[] { pad.Left, pad.Top, pad.Right, pad.Bottom } : null));
         }
 
         return nodes;
@@ -185,4 +194,6 @@ internal sealed record FormDockNode(
     [property: JsonPropertyName("h")] int Height,
     [property: JsonPropertyName("c")] bool HasClientArea,
     [property: JsonPropertyName("hd")] bool DesignHidden,
-    [property: JsonPropertyName("k")] IReadOnlyList<FormDockNode> Children);
+    [property: JsonPropertyName("k")] IReadOnlyList<FormDockNode> Children,
+    [property: JsonPropertyName("a"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? OriginInset = null,
+    [property: JsonPropertyName("p"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int[]? DockPadding = null);

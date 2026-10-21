@@ -198,6 +198,7 @@ public class FormCssTests
                 CssConverter: converter), "Hand"),
             FormCssConverter.AutoScrollToOverflow => (new FormPropertyDef("X", FormPropertyType.Bool, "false",
                 CssProperty: "overflow", CssConverter: converter), "true"),
+            FormCssConverter.BorderStyle => (FormControlCatalog.Find("Panel")!.Property("BorderStyle")!, "FixedSingle"),
             _ => throw new ArgumentOutOfRangeException(nameof(converter), converter, "add a sample for the new converter")
         };
 

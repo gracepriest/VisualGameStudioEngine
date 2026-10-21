@@ -370,8 +370,10 @@ public sealed class FormCanvasTransform
                 return null;
             }
 
-            var nested = ContainerAt(control.Children, formPoint, bounds.Value.TopLeft, ignore, dock);
-            return nested ?? (control, bounds.Value.TopLeft);
+            var inset = FormClientArea.Of(control).OriginInset;
+            var origin = bounds.Value.TopLeft + new Vector(inset, inset);
+            var nested = ContainerAt(control.Children, formPoint, origin, ignore, dock);
+            return nested ?? (control, origin);
         }
 
         return null;
@@ -959,11 +961,13 @@ public sealed class FormCanvasTransform
             }
 
             // Its CLIENT origin, for Bands: a strip docked inside this control is placed from here.
-            origins[control] = bounds.Value.TopLeft;
+            var inset = FormClientArea.Of(control).OriginInset;
+            var origin = bounds.Value.TopLeft + new Vector(inset, inset);
+            origins[control] = origin;
 
             yield return new FormLayoutEntry(control, bounds.Value, FormLayoutRole.Control);
 
-            foreach (var nested in Layout(control.Children, bounds.Value.TopLeft, dock, origins))
+            foreach (var nested in Layout(control.Children, origin, dock, origins))
             {
                 yield return nested;
             }

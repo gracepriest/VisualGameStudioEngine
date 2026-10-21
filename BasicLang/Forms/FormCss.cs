@@ -40,6 +40,10 @@ public static class FormCss
             FormCssConverter.Cursor => FormCursors.CssFor(value),
             // AutoScroll=true → the element scrolls its overflow; false says nothing (the element's own overflow stands).
             FormCssConverter.AutoScrollToOverflow => bool.TryParse(value, out var scroll) && scroll ? "auto" : null,
+            FormCssConverter.BorderStyle => property.Canonical(value) switch
+            {
+                "None" => "none", "FixedSingle" => "1px solid", "Fixed3D" => "2px inset", _ => null
+            },
             // ⛔ Never a silent "no declaration": a converter added to the enum without an arm here
             // would drop its row from every page with nothing looking wrong.
             _ => throw new ArgumentOutOfRangeException(nameof(property), property.CssConverter,

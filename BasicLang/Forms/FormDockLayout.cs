@@ -79,7 +79,7 @@ public sealed class FormDockLayoutResult
 
     /// <summary>
     /// ⛔ THE one answer to "how big is the area this container lays its children out in": its resolved bounds
-    /// when it docks, else its stored size. The resolver docks children in it, and the page emitter anchors
+    /// when it docks, else its stored size, minus the catalog's client border. The resolver docks children in it, and the page emitter anchors
     /// children against it (<c>FormAssetEmitter.CanvasPlacement</c>) — one source, filled while resolving. False for a control that is not a
     /// pixel-positioned control of this document, or that Runtime mode skipped as hidden.
     /// </summary>
@@ -115,8 +115,7 @@ public sealed class FormDockLayoutResult
 /// DefaultLayout). ⚠ What is left is NOT clamped — WinForms subtracts each docked control's height/width from
 /// it unclamped (<c>remainingBounds.Height -= element.Bounds.Height</c>), so after an overflowing Top a Bottom
 /// still sits on the form's real bottom edge; only a size HANDED to a control is clamped at 0 (a Fill after an
-/// overflow is 0-sized, never negative). ⚠ A container's client area is taken to be its bounds — a GroupBox's
-/// caption inset and a bordered Panel's 1–2px are recorded gaps (plan spec-claims #11, Task 12 risks). The
+/// overflow is 0-sized, never negative). Client borders and caption dock padding come from FormClientArea. The
 /// WinForms reference harness is the arbiter of all of these (scope call S9: as read, not yet run).</para>
 ///
 /// <para>⚠ Only a POSITIONED control with <see cref="PixelGeometry"/> has a client area, so only such a container's
@@ -131,14 +130,15 @@ public sealed class FormDockLayoutResult
 public static class FormDockLayout
 {
     /// <summary>Every docked thing in <paramref name="document"/>, at every depth, at its design size.</summary>
-    public static FormDockLayoutResult Resolve(FormDocument document, FormDockMode mode = FormDockMode.Designer)
+    public static FormDockLayoutResult Resolve(
+        FormDocument document, FormDockMode mode = FormDockMode.Designer, bool clientAreas = true)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         var root = document.DesignSize;
         var all = new List<FormDockedBounds>();
         var clientSizes = new Dictionary<FormControl, (int Width, int Height)>(ReferenceEqualityComparer.Instance);
-        Walk(document.Controls, root.Width, root.Height, mode, all, clientSizes);
+        Walk(document.Controls, root.Width, root.Height, default, mode, clientAreas, all, clientSizes);
         return new FormDockLayoutResult(all, clientSizes, root);
     }
 
@@ -148,7 +148,8 @@ public static class FormDockLayout
     /// skipped and consume nothing; in <see cref="FormDockMode.Runtime"/> so are hidden ones.
     /// </summary>
     public static IReadOnlyList<FormDockedBounds> ResolveSiblings(
-        IReadOnlyList<FormControl> siblings, int width, int height, FormDockMode mode = FormDockMode.Designer)
+        IReadOnlyList<FormControl> siblings, int width, int height, FormDockMode mode = FormDockMode.Designer,
+        FormInsets padding = default)
     {
         ArgumentNullException.ThrowIfNull(siblings);
 
@@ -158,7 +159,8 @@ public static class FormDockLayout
         // ⛔ UNCLAMPED on purpose (scope call S9): WinForms subtracts each docked control from the remaining
         // rectangle without a floor, so its far edges (Bottom, Right) stay on the container's real edges even
         // after an overflow. Only the sizes handed OUT below are clamped at 0.
-        var remaining = new FormRect(0, 0, clientWidth, clientHeight);
+        var remaining = new FormRect(padding.Left, padding.Top,
+            clientWidth - padding.Left - padding.Right, clientHeight - padding.Top - padding.Bottom);
         var placed = new List<FormDockedBounds>();
 
         foreach (var control in siblings)
@@ -239,10 +241,10 @@ public static class FormDockLayout
         mode == FormDockMode.Designer || !control.IsHidden;
 
     private static void Walk(
-        IReadOnlyList<FormControl> siblings, int width, int height, FormDockMode mode,
+        IReadOnlyList<FormControl> siblings, int width, int height, FormInsets padding, FormDockMode mode, bool clientAreas,
         List<FormDockedBounds> all, Dictionary<FormControl, (int Width, int Height)> clientSizes)
     {
-        var docked = ResolveSiblings(siblings, width, height, mode);
+        var docked = ResolveSiblings(siblings, width, height, mode, padding);
         all.AddRange(docked);
 
         foreach (var control in siblings)
@@ -256,16 +258,18 @@ public static class FormDockLayout
             }
 
             // ⛔ The one rule for a container's client size (exposed as ClientSizeOf): resolved bounds when it
-            // docks, else its stored size.
+            // docks, else its stored size, minus its client border; dock padding is separate.
             var own = docked.FirstOrDefault(d => ReferenceEquals(d.Control, control));
-            var inner = own.Control != null
+            var outer = own.Control != null
                 ? (own.Bounds.Width, own.Bounds.Height)
                 : OwnSizeOf(control);
+            var area = clientAreas ? FormClientArea.Of(control) : default;
+            var inner = area.ClientSize(outer.Item1, outer.Item2);
             clientSizes[control] = inner;
 
             if (control.Children.Count > 0)
             {
-                Walk(control.Children, inner.Item1, inner.Item2, mode, all, clientSizes);
+                Walk(control.Children, inner.Item1, inner.Item2, area.DockPadding, mode, clientAreas, all, clientSizes);
             }
         }
     }
