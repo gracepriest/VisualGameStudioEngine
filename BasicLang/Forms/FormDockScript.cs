@@ -75,26 +75,68 @@ public static class FormDockScript
           if (d.e === "Left") return [["left", px(b[0])], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
           if (d.e === "Right") return [["right", right], ["width", px(b[2])], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
           return [["left", px(b[0])], ["right", right], ["width", width], ["top", px(b[1])], ["bottom", bottom], ["height", height]];
-        }
+        }{{(clientAreas ? "\nfunction vgsDockComplete(decls) {\n  var values = {}, names = [\"left\", \"right\", \"width\", \"top\", \"bottom\", \"height\"], out = [];\n  for (var i = 0; i < decls.length; i++) values[decls[i][0]] = decls[i][1];\n  for (var n = 0; n < names.length; n++) out.push([names[n], values[names[n]] === undefined ? \"auto\" : values[names[n]]]);\n  return out;\n}\n" : "")}}
 
         """.ReplaceLineEndings("\n");
 
-    /// <summary>The DOM glue: observe, re-walk, write the live rules.</summary>
+    /// <summary>The DOM glue: observe, re-walk the live tree, write the live rules.</summary>
     public static readonly string Bootstrap = """
         function vgsDockStart(root, breakpoint) {
           var form = document.querySelector(".vgs-form");
           if (!form) return;
           var live = null, last = null, pending = false;
-          function hidden(node) {
-            var el = document.getElementById(node.i);
-            return el ? getComputedStyle(el).display === "none" : node.hd;
+          function vgsDockLive(form) {
+            function num(el, name, fallback) {
+              var raw = el.getAttribute(name);
+              if (raw === null || raw === "") return fallback;
+              var n = Number(raw);
+              return isNaN(n) ? fallback : n;
+            }
+            function hidden(el) {
+              if (el.hidden) return true;
+              try { return getComputedStyle(el).display === "none"; } catch (e) { return false; }
+            }
+            function pad(el) {
+              var raw = el.getAttribute("data-vgs-pad");
+              if (!raw) return [0, 0, 0, 0];
+              var p = raw.split(",");
+              return [Number(p[0]) || 0, Number(p[1]) || 0, Number(p[2]) || 0, Number(p[3]) || 0];
+            }
+            function walk(el) {
+              var out = [], kids = el.children || [];
+              for (var i = 0; i < kids.length; i++) {
+                var child = kids[i];
+                if (!child || !child.getAttribute || child.getAttribute("data-vgs-control") === null) continue;
+                var area = child.getAttribute("data-vgs-cw") !== null && child.getAttribute("data-vgs-ch") !== null;
+                var edge = child.getAttribute("data-vgs-dock");
+                if (edge === "None" || edge === "") edge = null;
+                out.push({
+                  i: child.id || "",
+                  e: edge,
+                  w: num(child, "data-vgs-w", area ? num(child, "data-vgs-cw", 0) : 0),
+                  h: num(child, "data-vgs-h", area ? num(child, "data-vgs-ch", 0) : 0),
+                  c: area,
+                  hd: hidden(child),
+                  k: area ? walk(child) : [],
+                  a: area ? num(child, "data-vgs-inset", 0) : 0,
+                  p: area ? pad(child) : null
+                });
+              }
+              return out;
+            }
+            var w = form.clientWidth || num(form, "data-vgs-cw", 0);
+            var h = form.clientHeight || num(form, "data-vgs-ch", 0);
+            return { i: "", e: null, w: w, h: h, c: true, hd: false, k: walk(form), a: 0, p: [0, 0, 0, 0] };
           }
           function compute() {
+            var tree = vgsDockLive(form);
+            // The emitted JSON seeds the first picture; a page without live markers keeps it.
+            if (tree.k.length === 0 && root.k.length > 0) tree = root;
             var out = [];
-            vgsDockWalk(root.k, root.w, root.h, hidden, out);
+            vgsDockWalk(tree.k, tree.w, tree.h, function (n) { return n.hd; }, out, tree.p);
             var rules = "";
             for (var r = 0; r < out.length; r++) {
-              var decls = vgsDockCss(out[r]), text = "";
+              var decls = vgsDockComplete(vgsDockCss(out[r])), text = "";
               for (var d = 0; d < decls.length; d++) text += decls[d][0] + ":" + decls[d][1] + ";";
               rules += "#" + out[r].n.i + "{" + text + "}";
             }

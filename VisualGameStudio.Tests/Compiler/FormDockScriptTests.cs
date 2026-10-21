@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using BasicLang.Forms;
@@ -152,11 +153,21 @@ public class FormDockScriptTests
     }
 
     /// <summary>What the page's live dock stylesheet must hold for <paramref name="dock"/> — composed from the C# deciders.</summary>
-    internal static string LiveCss(FormDockLayoutResult dock, int breakpoint)
+    internal static string LiveCss(FormDockLayoutResult dock, int breakpoint, bool completed = false)
     {
+        var names = new[] { "left", "right", "width", "top", "bottom", "height" };
         var rules = string.Concat(dock.All.Select(d =>
-            "#" + d.Control.Id + "{" +
-            string.Concat(FormAnchorCss.Docked(d).Select(p => p.Property + ":" + p.Value + ";")) + "}"));
+        {
+            if (!completed)
+            {
+                return "#" + d.Control.Id + "{" +
+                    string.Concat(FormAnchorCss.Docked(d).Select(p => p.Property + ":" + p.Value + ";")) + "}";
+            }
+
+            var values = FormAnchorCss.Docked(d).ToDictionary(p => p.Property, p => p.Value);
+            return "#" + d.Control.Id + "{" + string.Concat(names.Select(n =>
+                n + ":" + (values.TryGetValue(n, out var value) ? value : "auto") + ";")) + "}";
+        }));
         return breakpoint > 0 ? "@media (width >= " + breakpoint + "px){" + rules + "}" : rules;
     }
 
@@ -375,6 +386,160 @@ public class FormDockScriptTests
         });
     }
 
+    private static FormDocument LivePage(string kind, string? border, int width, int height, params FormControl[] children)
+    {
+        var host = Box("host", 300, 200, "Fill", children);
+        host.Kind = kind;
+        if (kind == "Panel" && border != null) host.Properties["BorderStyle"] = border;
+        if (kind == "GroupBox") host.Properties["Text"] = "Caption";
+        return Page(width, height, "600", host);
+    }
+
+    private static IEnumerable<(string Name, FormDocument Seed, FormDocument Live)> LiveCases()
+    {
+        var kinds = new (string Kind, string? Border, string Label)[]
+        {
+            ("Panel", null, "plain Panel"),
+            ("Panel", "FixedSingle", "bordered Panel"),
+            ("GroupBox", null, "GroupBox")
+        };
+        foreach (var (kind, border, label) in kinds)
+        {
+            FormDocument Seed(params FormControl[] kids) => LivePage(kind, border, 400, 300, kids);
+
+            yield return ($"{label}: undocked at design, docked at run time",
+                Seed(Box("a", 40, 30, null), Box("fill", 1, 1, "Fill")),
+                Seed(Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: docked to None",
+                Seed(Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")),
+                Seed(Box("a", 40, 30, null), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: a docked control's requested size changed",
+                Seed(Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")),
+                Seed(Box("a", 70, 30, "Top"), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: the container is resized with docked children",
+                Seed(Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")),
+                LivePage(kind, border, 500, 340, Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: a docked sibling is hidden",
+                Seed(Box("a", 40, 30, "Top"), Box("b", 50, 20, "Top"), Box("fill", 1, 1, "Fill")),
+                Seed(Box("a", 40, 30, "Top"), Hidden(Box("b", 50, 20, "Top")), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: a docked sibling is shown again",
+                Seed(Box("a", 40, 30, "Top"), Hidden(Box("b", 50, 20, "Top")), Box("fill", 1, 1, "Fill")),
+                Seed(Box("a", 40, 30, "Top"), Box("b", 50, 20, "Top"), Box("fill", 1, 1, "Fill")));
+            yield return ($"{label}: BringToFront changes the dock order",
+                Seed(Box("a", 40, 30, "Top"), Box("b", 50, 20, "Top"), Box("fill", 1, 1, "Fill")),
+                Seed(Box("b", 50, 20, "Top"), Box("a", 40, 30, "Top"), Box("fill", 1, 1, "Fill")));
+        }
+    }
+
+    private sealed record LiveDomNode(
+        string Id, bool Hidden, Dictionary<string, string> Attrs, int ClientWidth, int ClientHeight,
+        List<LiveDomNode> Children);
+
+    private static LiveDomNode LiveNode(FormControl control, FormDockLayoutResult layout)
+    {
+        var area = FormClientArea.Of(control);
+        var pad = area.DockPadding;
+        var (width, height) = FormDockLayout.OwnSizeOf(control);
+        var attrs = new Dictionary<string, string>
+        {
+            ["data-vgs-control"] = "absolute",
+            ["data-vgs-inset"] = area.OriginInset.ToString(CultureInfo.InvariantCulture),
+            ["data-vgs-pad"] = $"{pad.Left},{pad.Top},{pad.Right},{pad.Bottom}",
+            ["data-vgs-dock"] = FormDockLayout.EdgeOf(control)?.ToString() ?? "None",
+            ["data-vgs-w"] = width.ToString(CultureInfo.InvariantCulture),
+            ["data-vgs-h"] = height.ToString(CultureInfo.InvariantCulture)
+        };
+        if (control.Geometry is PixelGeometry pixel)
+        {
+            attrs["data-vgs-x"] = pixel.X.ToString(CultureInfo.InvariantCulture);
+            attrs["data-vgs-y"] = pixel.Y.ToString(CultureInfo.InvariantCulture);
+        }
+        var hasClient = layout.TryGetClientSize(control, out var client);
+        if (hasClient)
+        {
+            attrs["data-vgs-cw"] = client.Width.ToString(CultureInfo.InvariantCulture);
+            attrs["data-vgs-ch"] = client.Height.ToString(CultureInfo.InvariantCulture);
+        }
+        var children = control.Children.Where(c => c.Definition?.HtmlTag != null)
+            .Select(c => LiveNode(c, layout)).ToList();
+        return new LiveDomNode(control.Id, control.IsHidden, attrs,
+            hasClient ? client.Width : 0, hasClient ? client.Height : 0, children);
+    }
+
+    private static string? RunLive(string dir, FormDocument seed, FormDocument live, int breakpoint)
+    {
+        var html = FormAssetEmitter.Html(seed, "App.js", FormStyle.Portable);
+        const string open = "<script data-vgs=\"dock\">";
+        var start = html.IndexOf(open, StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0), "the portable page carries no reflow script");
+        start += open.Length;
+        var script = html.Substring(start, html.IndexOf("</script>", start, StringComparison.Ordinal) - start);
+
+        var layout = FormDockLayout.Resolve(live, FormDockMode.Runtime, clientAreas: true);
+        var (formWidth, formHeight) = live.DesignSize;
+        var root = new LiveDomNode("formArea", false, new Dictionary<string, string>
+        {
+            ["class"] = "vgs-form",
+            ["data-vgs-cw"] = formWidth.ToString(CultureInfo.InvariantCulture),
+            ["data-vgs-ch"] = formHeight.ToString(CultureInfo.InvariantCulture)
+        }, formWidth, formHeight,
+            live.Controls.Where(c => c.Definition?.HtmlTag != null).Select(c => LiveNode(c, layout)).ToList());
+
+        var harness = $$"""
+            const data = {{JsonSerializer.Serialize(root)}};
+            const map = new Map();
+            function build(n, parent) {
+              const e = {
+                id: n.Id, hidden: n.Hidden, attrs: Object.assign({}, n.Attrs),
+                style: {}, className: "", children: [], parentElement: parent,
+                clientWidth: n.ClientWidth, clientHeight: n.ClientHeight,
+                getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+                setAttribute: function (k, v) { this.attrs[k] = String(v); },
+                appendChild: function (c) { c.parentElement = this; this.children.push(c); return c; }
+              };
+              map.set(e.id, e);
+              for (const kid of n.Children) e.appendChild(build(kid, e));
+              return e;
+            }
+            const form = build(data, null);
+            const head = { children: [], appendChild: function (c) { this.children.push(c); return c; } };
+            globalThis.MutationObserver = function () { this.observe = function () {}; };
+            globalThis.getComputedStyle = function (e) { return { display: e.hidden ? "none" : "block" }; };
+            globalThis.window = globalThis;
+            globalThis.document = {
+              head: head,
+              querySelector: function (s) { return s === ".vgs-form" ? form : null; },
+              getElementById: function (id) { return map.get(id) || null; },
+              createElement: function (t) { return { tagName: t, id: "", textContent: "" }; }
+            };
+            {{script}}
+            window.vgsDock.reflow();
+            console.log(head.children.length ? head.children[0].textContent : "(none)");
+            """;
+        return RunNode(dir, "live.cjs", harness);
+    }
+
+    [Test]
+    [Category("Integration")]
+    public void TheLiveWalk_ReadsTheDomEachReflow_AndCompletesSixProperties()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var (name, seed, live) in LiveCases())
+            {
+                var css = RunLive(_dir, seed, live, 600);
+                if (css == null)
+                {
+                    Assert.Ignore("node is not on PATH, so the page's reflow script cannot be run here");
+                }
+
+                Assert.That(css!.Trim(),
+                    Is.EqualTo(LiveCss(FormDockLayout.Resolve(live, FormDockMode.Runtime, clientAreas: true), 600, completed: true)),
+                    name);
+            }
+        });
+    }
+
     private static FormDocument Glued(bool panelHidden = false, string breakpoint = "600")
     {
         var panel = Box("pnlTop", 10, 40, "Top");
@@ -385,6 +550,20 @@ public class FormDockScriptTests
 
         return Page(640, 480, breakpoint, panel, Strip("MenuStrip", "menuStrip1"), Strip("StatusStrip", "statusStrip1"),
             Box("fill", 1, 1, "Fill"));
+    }
+
+    [Test]
+    public void APortablePageWithNothingDocked_StillCarriesTheHook()
+    {
+        var page = Page(Box("b", 10, 10, null));
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("<script data-vgs=\"dock\">"));
+            Assert.That(html, Does.Contain("window.vgsDock = { request: request, reflow: reflow };"));
+            Assert.That(html, Does.Contain("function vgsDockComplete(decls)"));
+        });
     }
 
     [Test]
