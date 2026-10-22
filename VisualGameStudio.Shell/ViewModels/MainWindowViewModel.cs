@@ -348,6 +348,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private readonly Dictionary<string, CodeEditorDocumentViewModel> _openDocuments = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _documentCleanupActions = new(StringComparer.OrdinalIgnoreCase);
 
+    // The aggregator holds handlers weakly, so a subscription's disposable is the only strong
+    // reference. These two were discarded, letting a GC silently turn NavigateToFileEvent into a
+    // no-op after a double-click. Keep them for the lifetime of the window.
+    private readonly IDisposable _designerDiagnosticsSubscription;
+    private readonly IDisposable _navigateToFileSubscription;
+
     // Documents with a save currently in progress. Only touched on the UI thread;
     // prevents an auto-save from overlapping a manual save (and vice versa).
     private readonly HashSet<string> _documentsBeingSaved = new(StringComparer.OrdinalIgnoreCase);
@@ -579,14 +585,14 @@ public partial class MainWindowViewModel : ViewModelBase
         // and the language server's diagnostics for the same .bas do not erase one another — the
         // same reasoning as the extension collections below, and the reason an empty publish is
         // meaningful rather than a no-op: it is how the previous save's findings are cleared.
-        _eventAggregator.Subscribe<DesignerDiagnosticsEvent>(OnDesignerDiagnostics);
+        _designerDiagnosticsSubscription = _eventAggregator.Subscribe<DesignerDiagnosticsEvent>(OnDesignerDiagnostics);
 
         // ⛔⛔ WITHOUT THIS SUBSCRIPTION THE DOUBLE-CLICK GESTURE IS DECORATIVE. The designer writes
         // the handler into the .bas and publishes "now take them there"; a document view model has
         // no reference to the tab well, so nothing else can answer it. The symptom of forgetting is
         // the worst kind here — double-clicking a Button silently DOES generate the handler, and the
         // user sees absolutely nothing happen and concludes the designer is broken.
-        _eventAggregator.Subscribe<NavigateToFileEvent>(OnNavigateToFileRequested);
+        _navigateToFileSubscription = _eventAggregator.Subscribe<NavigateToFileEvent>(OnNavigateToFileRequested);
 
         // Subscribe to solution events
         _solutionService.SolutionLoaded += OnSolutionLoaded;

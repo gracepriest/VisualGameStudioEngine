@@ -64,8 +64,9 @@ drop path in a fixed order, so they are stable for the run and keep the handler 
 The test uses the actual generated `Button1_Click` name rather than inventing a fixture id.
 
 **Two sizes on one form.** The form is opened at 800×560 (zoom ≠ 1), the Label is dropped there, then
-the window is resized to 1400×900 (zoom ≠ 1 and different) and the TextBox and Button are dropped.
-This exercises both sizes through the same real canvas and avoids a duplicate form. The final
+the window is resized to 1000×700 (zoom ≠ 1 and different) and the TextBox and Button are dropped.
+`FormCanvasTransform.Fit` caps at 1.0, so the second size must stay under the cap to exercise a real
+scale. This exercises both sizes through the same real canvas and avoids a duplicate form. The final
 document is the one built and retargeted.
 
 **The WinForms retarget gets the same handler body deliberately.** `ConvertToPair` produces a
@@ -75,9 +76,16 @@ for the same output. A public empty `Cover` method is added because `RunWinForms
 `Show`; this is the harness's established entry hook, not a product path.
 
 **The web build is proven twice, then run.** `BuildService.BuildProjectAsync` must succeed and write
-`bin/Debug/net8.0/PortableEndToEnd.html`. Edge runs that IDE-built site. The site is then removed and
-the real CLI build must recreate the page; this proves the CLI route independently. The Edge output
-is compared with the WinForms output.
+its JavaScript site to `bin/Debug` (its configured output path); Edge runs that IDE-built site. The
+site is then removed and the real CLI build must recreate the page at its own
+`bin/Debug/net8.0` path (the CLI always appends the target framework). This proves the CLI route
+independently. The Edge output is compared with the WinForms output.
+
+**The shell must keep its navigation subscription.** `EventAggregator` holds handlers weakly, and
+`MainWindowViewModel` discarded the `IDisposable` returned by
+`Subscribe<NavigateToFileEvent>`. After a GC, a double-click wrote the handler but no tab opened.
+The test exposed this; the view model now retains both subscriptions. The fix is on the shipping
+route, not a test seam.
 
 ## Test shape
 

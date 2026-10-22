@@ -775,6 +775,11 @@ internal static class PortableRuntimeHarnesses
                     Click(action.Id);
                     Key("a", "KeyA", 65, modifiers: 2);
                     break;
+                case "clear":
+                    Click(action.Id);
+                    Key("a", "KeyA", 65, modifiers: 2);
+                    Key("Backspace", "Backspace", 8, 0);
+                    break;
                 case "key":
                     Key(action.Text, action.Text, 0, 0);
                     break;
