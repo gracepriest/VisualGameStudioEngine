@@ -13,7 +13,7 @@ namespace VisualGameStudio.Tests.Compiler;
 [Category("Integration")]
 public class PortableFirstKindsNodeTests
 {
-    private static readonly string[] FirstKinds =
+    internal static readonly string[] FirstKinds =
         { "Button", "Label", "TextBox", "CheckBox", "RadioButton", "Panel", "GroupBox" };
 
     private const string Fixtures = """

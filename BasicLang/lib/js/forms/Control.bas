@@ -40,6 +40,30 @@ Namespace System.Windows.Forms
             End Set
         End Property
 
+        ' Task 35: the catalog's D2 web-only rows are real library members, not designer-only
+        ' attributes. They stay behind #If WEB in shared code; desktop has no such members.
+        Public Property CssClass As String
+            Get
+                Return Me.VgsElementFor("CssClass").className
+            End Get
+            Set(value As String)
+                If value Is Nothing Then value = ""
+                Me.VgsElementFor("CssClass").className = value
+            End Set
+        End Property
+
+        Public Property Style As String
+            Get
+                Dim raw As String = Me.VgsElementFor("Style").getAttribute("style")
+                If raw Is Nothing Then Return ""
+                Return raw
+            End Get
+            Set(value As String)
+                If value Is Nothing Then value = ""
+                Me.VgsElementFor("Style").setAttribute("style", value)
+            End Set
+        End Property
+
         Public ReadOnly Property Controls As ControlCollection
             Get
                 Return _controls
@@ -1030,7 +1054,12 @@ Namespace System.Windows.Forms
             If _owner.VgsIsAttached() AndAlso Not _owner.VgsElement().contains(el) Then
                 Throw New InvalidOperationException("Control '" & child.Name & "' is not inside its parent's element.")
             End If
-            _items.Add(child)
+            Dim kept As New List(Of Control)()
+            For Each item As Control In _items
+                If item IsNot child Then kept.Add(item)
+            Next
+            kept.Add(child)
+            _items = kept
             child.VgsAttach(el, _owner)
         End Sub
 

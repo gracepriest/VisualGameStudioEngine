@@ -22,6 +22,7 @@ Public Extern Class Document
     Public Property head As Element
     Public Property body As Element
     Public Property documentElement As Element
+    Public Property activeElement As Element
     Public Function getElementById(id As String) As Element
     Public Function querySelector(selectors As String) As Element
     Public Function createElement(tagName As String) As Element
@@ -39,6 +40,8 @@ Public Extern Class Element
     Public Property innerHTML As String
     Public Property innerText As String
     Public Property value As String
+    Public Property selectionStart As Integer
+    Public Property selectionEnd As Integer
     Public Property type As String
     Public Property readOnly As Boolean
     Public Property maxLength As Integer
