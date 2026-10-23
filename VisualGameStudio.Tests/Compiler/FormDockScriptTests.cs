@@ -566,6 +566,82 @@ public class FormDockScriptTests
         });
     }
 
+    /// <summary>
+    /// Task 36, spec 11.9: the observer and the portable library share one scheduler. The observer
+    /// marks the work pending; a library request in the same turn must not run a second reflow.
+    /// Two computes would be two style writes (and two layout reads) for one Visible gesture.
+    /// </summary>
+    [Test]
+    [Category("Integration")]
+    public void OneScheduler_CoalescesTheObserverAndTheLibraryRequest()
+    {
+        var model = Glued();
+        var html = FormAssetEmitter.Html(model, "App.js", FormStyle.Portable);
+        const string open = "<script data-vgs=\"dock\">";
+        var start = html.IndexOf(open, StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThanOrEqualTo(0), "the portable page carries no reflow script");
+        start += open.Length;
+        var script = html.Substring(start, html.IndexOf("</script>", start, StringComparison.Ordinal) - start);
+
+        var harness = $$"""
+            let writes = 0, microtasks = [], observer = null;
+            const map = new Map();
+            function node(id, attrs) {
+              const e = {
+                id: id, hidden: false, attrs: attrs, children: [], parentElement: null,
+                getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+                setAttribute: function (k, v) { this.attrs[k] = String(v); },
+                appendChild: function (c) { c.parentElement = this; this.children.push(c); return c; }
+              };
+              map.set(id, e);
+              return e;
+            }
+            const form = node("formArea", {});
+            form.className = "vgs-form";
+            form.clientWidth = 640;
+            form.clientHeight = 480;
+            const child = node("pnlTop", {
+              "data-vgs-control": "absolute", "data-vgs-dock": "Top",
+              "data-vgs-w": "10", "data-vgs-h": "40"
+            });
+            form.appendChild(child);
+            globalThis.window = globalThis;
+            globalThis.queueMicrotask = function (cb) { microtasks.push(cb); };
+            globalThis.MutationObserver = function (cb) { observer = cb; this.observe = function () {}; };
+            globalThis.getComputedStyle = function (e) { return { display: e.hidden ? "none" : "block" }; };
+            const head = { children: [], appendChild: function (c) { this.children.push(c); return c; } };
+            globalThis.document = {
+              head: head,
+              querySelector: function (s) { return s === ".vgs-form" ? form : null; },
+              getElementById: function (id) { return map.get(id) || null; },
+              createElement: function (t) {
+                let text = "";
+                return {
+                  tagName: t, id: "",
+                  get textContent() { return text; },
+                  set textContent(v) { text = v; writes++; }
+                };
+              }
+            };
+            {{script}}
+            observer([{ type: "attributes", attributeName: "hidden" }]);
+            child.hidden = true;
+            window.vgsDock.request();
+            console.log("pending=" + microtasks.length);
+            while (microtasks.length > 0) microtasks.shift()();
+            console.log("writes=" + writes + ";styles=" + head.children.length);
+            console.log("css=" + (head.children.length > 0 ? head.children[0].textContent : ""));
+            """;
+
+        var output = RunNode(_dir, "coalesce.cjs", harness);
+        if (output == null)
+        {
+            Assert.Ignore("node is not on PATH, so the page's reflow script cannot be run here");
+        }
+
+        Assert.That(output, Does.StartWith("pending=1\nwrites=1;styles=1\ncss="));
+    }
+
     [Test]
     [Category("Integration")]
     public void HidingADockedPanel_AtRunTime_ReDocksItsSiblings_AsWinFormsDoes()

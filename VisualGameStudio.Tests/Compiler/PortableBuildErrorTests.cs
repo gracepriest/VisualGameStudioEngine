@@ -348,4 +348,25 @@ public class PortableBuildErrorTests
         Assert.That(result.Success, Is.True, Errors(result));
         Assert.That(Errors(result), Does.Not.Contain("ElementOnDesktop"));
     }
+
+    /// <summary>
+    /// The receiver NAME is the check (spec 5.11, K14). WinForms members type as Object, so an
+    /// Object receiver's `.Element` must reach csc untouched rather than being named by our
+    /// receiver check; only a declared library type is refused.
+    /// </summary>
+    [Test]
+    public void DesktopBuild_DoesNotNameElementOnAnObjectReceiver()
+    {
+        var result = Compile(Cs(), ("LoginForm.bas",
+            "Using System.Windows.Forms\n\n" +
+            "Public Class LoginForm\n" +
+            "    Private btn As Button\n" +
+            "    Public Sub Test()\n" +
+            "        Dim o As Object = btn\n" +
+            "        Dim e = o.Element\n" +
+            "    End Sub\n" +
+            "End Class\n"));
+
+        Assert.That(Errors(result), Does.Not.Contain("ElementOnDesktop"));
+    }
 }

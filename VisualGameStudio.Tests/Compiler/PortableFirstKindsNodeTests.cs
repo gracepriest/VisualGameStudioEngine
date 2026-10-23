@@ -371,6 +371,7 @@ public class PortableFirstKindsNodeTests
         try
         {
             await File.WriteAllTextAsync(Path.Combine(dir, "Main.bas"), """
+                ' <vgs:designer region="init" form="Main.blwebform" style="portable" hash="abcd">
                 Using System
                 Using System.Windows.Forms
                 Module Program
@@ -400,6 +401,7 @@ public class PortableFirstKindsNodeTests
                         label.Text = text.Text
                     End Sub
                 End Module
+                ' </vgs:designer>
                 """);
             var projectPath = Path.Combine(dir, "Site.blproj");
             await File.WriteAllTextAsync(projectPath, """

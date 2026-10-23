@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using BasicLang.Compiler;
 using BasicLang.Compiler.CodeGen.JavaScript;
+using BasicLang.Forms;
 using NUnit.Framework;
 
 namespace VisualGameStudio.Tests.Compiler;
@@ -321,7 +322,16 @@ public class PortableControlNodeTests
         try
         {
             var file = Path.Combine(dir, "Main.bas");
-            File.WriteAllText(file, source);
+
+            // Task 34 refuses a library control created at run time OUTSIDE the designer init
+            // region. These behaviour fixtures predate that rule, so give each one the portable
+            // init region a real .blwebform has; the controls they create are legal there.
+            var body = source.Replace("\r\n", "\n").TrimEnd('\n') + "\n";
+            var marked = RegionMarkers.FormatOpen(
+                    RegionMarkers.Init, "Main.blwebform", RegionMarkers.HashContent(body), "",
+                    FormCodeStyle.PortableValue) +
+                "\n" + body + RegionMarkers.FormatClose("") + "\n";
+            File.WriteAllText(file, marked);
             var result = new BasicCompiler(new CompilerOptions { TargetBackend = "javascript" }).CompileProjectFiles(new[] { file });
             if (result.HasErrors) return (false, "", string.Join(" | ", result.AllErrors.Select(e => e.Message)));
             var js = new JavaScriptCodeGenerator().Generate(result.CombinedIR!);
