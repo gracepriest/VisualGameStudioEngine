@@ -172,6 +172,83 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         return true;
     }
 
+    private bool _portableConversionOffered;
+
+    /// <summary>
+    /// True when this open should offer the one-way DOM-to-portable conversion (Task 44): a web form
+    /// whose code-behind markers still say DOM. Refused documents and already-portable forms are not
+    /// offered, and the offer is made once per open, never on a reload.
+    /// </summary>
+    public async Task<bool> ShouldOfferPortableConversionAsync()
+    {
+        if (_portableConversionOffered || !IsFormDocument || FilePath == null || DesignDocument == null)
+        {
+            return false;
+        }
+
+        if (DesignDocument.Target != BasicLang.Forms.FormTarget.Web)
+        {
+            return false;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        if (!await CodeBehindExistsAsync(codePath))
+        {
+            return false;
+        }
+
+        var code = await ReadCodeBehindAsync(codePath, CancellationToken.None);
+        var style = BasicLang.Forms.FormCodeStyle.Of(code, Path.GetFileName(FilePath), BasicLang.Forms.FormTarget.Web);
+        if (style.Problem != null || style.Style != BasicLang.Forms.FormStyle.Dom)
+        {
+            return false;
+        }
+
+        _portableConversionOffered = true;
+        return true;
+    }
+
+    /// <summary>Marks the offer declined without touching a byte.</summary>
+    public void DismissPortableConversionOffer() => _portableConversionOffered = true;
+
+    /// <summary>
+    /// Converts this form's code-behind once, through the same <see cref="BasicLang.Forms.FormCodeConversion"/>
+    /// the CLI uses, and publishes the conversion findings to the Error List.
+    /// </summary>
+    public async Task<bool> ConvertToPortableAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsFormDocument || FilePath == null)
+        {
+            return false;
+        }
+
+        var file = DesignFile;
+        if (file == null)
+        {
+            return false;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        if (!await CodeBehindExistsAsync(codePath))
+        {
+            return false;
+        }
+
+        var before = await ReadCodeBehindAsync(codePath, cancellationToken);
+        var result = BasicLang.Forms.FormCodeConversion.Convert(file.Model, before);
+        var findings = result.Diagnostics.Select(ToDiagnosticItem).ToList();
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, findings));
+
+        if (result.Diagnostics.Any(d => !d.IsWarning))
+        {
+            return false;
+        }
+
+        await WriteCodeBehindAsync(codePath, result.Text, cancellationToken);
+        _portableConversionOffered = true;
+        return true;
+    }
+
     /// <summary>The property grid beside the canvas. Always present; empty until something is selected.</summary>
     public ViewModels.Designer.FormPropertyGridViewModel PropertyGrid { get; } = new();
 

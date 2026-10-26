@@ -2535,6 +2535,21 @@ public partial class MainWindowViewModel : ViewModelBase
             // reload must not throw a user who switched to Code view back into the canvas.
             document.EnterDesignModeForFormDocument();
 
+            // Task 44: opening a DOM-style web form offers the one-way conversion to the portable
+            // Forms library. The offer never writes; Convert writes once through the same pure
+            // function the CLI uses, and Not now is byte-identical.
+            if (await document.ShouldOfferPortableConversionAsync())
+            {
+                ShowNotification(
+                    "This web form still uses DOM-style code. Convert it to the portable Forms library?",
+                    "info",
+                    new List<NotificationAction>
+                    {
+                        new("Convert", () => _ = document.ConvertToPortableAsync()),
+                        new("Not now", document.DismissPortableConversionOffer)
+                    });
+            }
+
             // Update status bar for the new document
             StatusBar.UpdateForFile(filePath);
             StatusBar.DetectLineEnding(content);
