@@ -89,6 +89,9 @@ public enum FormCssConverter
     /// <summary><c>Visible=false</c> → <c>display: none</c>; <c>true</c> → no declaration.</summary>
     VisibleToDisplay,
 
+    /// <summary>A <c>PictureBoxSizeMode</c> → <c>object-fit</c>, plus <c>object-position</c> where the mode needs it.</summary>
+    PictureBoxSizeMode,
+
     /// <summary>A Font → <c>font-family</c>, <c>font-size</c> and, only when set, <c>font-weight</c>/<c>font-style</c>/<c>text-decoration</c>.</summary>
     Font,
 
@@ -1197,10 +1200,12 @@ public sealed record FormItemRule(IReadOnlyList<string> Kinds, string Add)
 /// regardless.</para>
 /// </param>
 /// <param name="Implies">
-/// What constructing this script MEANS in WinForms' vocabulary — a web Timer runs the moment it is
-/// wired, and WinForms says that with <c>Enabled=True</c>. Stated on the row so the retarget can
-/// cross "wired means running" by rule in both directions and name it (BL8027), rather than switch
-/// on the kind or let a Timer silently stop on the window or silently start on the page.
+/// What constructing this script MEANS in WinForms' vocabulary — the legacy DOM web template
+/// runs a Timer the moment it is wired, and WinForms says that with <c>Enabled=True</c>. Stated on
+/// the row so the retarget can cross "wired means running" by rule in both directions and name it
+/// (BL8027), rather than switch on the kind or let a Timer silently stop on the window or silently
+/// start on the page. ⚠ Task 39's portable Timer constructs with its properties and honors
+/// <c>Enabled</c>, so this rule describes the DOM template only.
 /// </param>
 public sealed record FormWebScript(string FieldType, string Construct, FormImpliedProperty? Implies = null);
 
@@ -1919,6 +1924,8 @@ public static class FormControlCatalog
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
                 WinFormsEnumType: "PictureBoxSizeMode", DomMember: "style.objectFit",
+                CssProperty: "object-fit", CssConverter: FormCssConverter.PictureBoxSizeMode,
+                PortableCssOnly: true,
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls how the PictureBox will handle image placement and control sizing."),
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None", new[] { "None", "FixedSingle", "Fixed3D" },
@@ -2265,8 +2272,10 @@ public static class FormControlCatalog
                 new("Interval", FormPropertyType.Int, "100",
                     Category: FormPropertyCategory.Behavior,
                     Description: "The frequency of Elapsed events in milliseconds."),
-                // ⚠ WinForms only: a JS interval cannot exist disabled — wired means running.
-                new("Enabled", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                // Both targets: the portable Timer owns its interval handle, so it can start and
+                // stop on the page exactly as WinForms' Enabled does. (The legacy DOM page still
+                // treats a wired interval as running; that path is unchanged.)
+                new("Enabled", FormPropertyType.Bool, "false",
                     Category: FormPropertyCategory.Behavior,
                     Description: "Enables generation of Elapsed events.")
             },
@@ -2277,8 +2286,10 @@ public static class FormControlCatalog
             // ⛔ The TYPED call over the Window the init region declares, and a parameterless
             // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
             WebHandlerTakesEvent: false,
-            // ⚠ Wired means running here, and Enabled=True is how WinForms says the same thing: the
-            // retarget crosses that by this rule (BL8027) rather than losing it in either direction.
+            // ⚠ The LEGACY DOM template treats wired as running, and Enabled=True is how WinForms
+            // says the same thing: the retarget crosses that by this rule (BL8027). The portable
+            // Timer (Task 39) constructs with Enabled and honors it, so this rule is not its runtime
+            // behaviour.
             WebScript: new FormWebScript("Integer", "w.setInterval(AddressOf {handler}, {Interval})",
                 Implies: new FormImpliedProperty("Enabled", "true"))),
 
@@ -2354,8 +2365,10 @@ public static class FormControlCatalog
         // ==================================================================
         // Task 24 — menus, toolbars and status bars. Strips are Docked (no geometry, a Dock
         // PROPERTY); items live in their host's Children and are added by the HOST row's verb in
-        // document order. ⛔ No Common(). ⛔ Enabled is WinForms-only except on the <input> —
-        // a browser ignores `disabled` on <nav>/<li>/<span> (spec §4).
+        // document order. ⛔ No Common(). ⛔ Item Enabled is WinForms-only except on the <input> —
+        // a browser ignores `disabled` on <li>/<span> (spec §4). The strip hosts inherit
+        // Control.Enabled on the web, so their catalog row is a known member collision, like
+        // ProgressBar.Style, not a WebUnavailableMember refusal.
         // ==================================================================
 
         new("MenuStrip", "MenuStrip", "nav", null, false, new List<FormPropertyDef>

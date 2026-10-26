@@ -37,9 +37,16 @@ Public Extern Class Element
     Public Property tagName As String
     Public Property className As String
     Public Property textContent As String
+    ' Task 39: a menu item's caption is its own direct text node, before any nested submenu.
+    Public Property firstChild As Element
+    Public Property nodeValue As String
+    Public Property nodeType As Integer
     Public Property innerHTML As String
     Public Property innerText As String
     Public Property value As String
+    Public Property valueAsDate As DateTime
+    Public Property selectedIndex As Integer
+    Public Property multiple As Boolean
     Public Property selectionStart As Integer
     Public Property selectionEnd As Integer
     Public Property type As String
@@ -51,6 +58,7 @@ Public Extern Class Element
     Public Property parentElement As Element
     Public Property firstElementChild As Element
     Public Property nextElementSibling As Element
+    Public Property childElementCount As Integer
     Public Property style As CSSStyleDeclaration
     Public Property classList As DOMTokenList
     Public Property clientWidth As Integer

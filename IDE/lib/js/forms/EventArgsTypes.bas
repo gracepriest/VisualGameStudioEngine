@@ -22,6 +22,24 @@ Namespace System
 End Namespace
 
 Namespace System.Windows.Forms
+    ' Task 39: ToolStrip.ItemClicked supplies the item that was clicked. The item class is
+    ' declared in its own library file; only the reference is needed here.
+    Public Class ToolStripItemClickedEventArgs
+        Inherits EventArgs
+
+        Private ReadOnly _clickedItem As ToolStripItem
+
+        Public Sub New(clickedItem As ToolStripItem)
+            _clickedItem = clickedItem
+        End Sub
+
+        Public ReadOnly Property ClickedItem As ToolStripItem
+            Get
+                Return _clickedItem
+            End Get
+        End Property
+    End Class
+
     Public Class MouseEventArgs
         Inherits EventArgs
 
@@ -111,10 +129,6 @@ Namespace System.Windows.Forms
     End Class
 
     Public Class LinkLabelLinkClickedEventArgs
-        Inherits EventArgs
-    End Class
-
-    Public Class ToolStripItemClickedEventArgs
         Inherits EventArgs
     End Class
 End Namespace

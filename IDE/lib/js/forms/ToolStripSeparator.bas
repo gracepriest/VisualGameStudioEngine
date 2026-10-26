@@ -1,4 +1,4 @@
-' Portable control library — ToolStripSeparator shell (task 28). Behaviour lands in 2b.
+' Portable control library - ToolStripSeparator (task 39).
 Namespace System.Windows.Forms
     Public Class ToolStripSeparator
         Inherits ToolStripItem

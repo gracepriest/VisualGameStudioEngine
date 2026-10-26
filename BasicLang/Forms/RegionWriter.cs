@@ -311,7 +311,9 @@ public static class RegionWriter
         // would say a retained Timer.Enabled line "is not written" while it is.
         var target = style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
 
-        // Components too (Task 25): a Timer's Enabled is WinForms-only and is skipped on the web.
+        // Components too (Task 25). A DOM component writes only the properties its WebScript
+        // template names; Task 39's Timer.Enabled is a both-target catalog row but not part of the
+        // legacy setInterval template, so the loop below reports it as unwritten rather than silent.
         foreach (var control in form.AllControls().Concat(form.AllComponents()))
         {
             var definition = control.Definition;
@@ -323,13 +325,29 @@ public static class RegionWriter
             foreach (var name in control.Properties.Keys)
             {
                 var property = definition.Property(name);
-                if (property != null && !property.AppliesTo(target))
+                if (property == null)
                 {
+                    continue;
+                }
+
+                // A DOM script component is built from its WebScript template: a property the
+                // template does not mention never reaches the generated code, even when the
+                // catalog says the portable library supports it. Timer.Enabled is the live case
+                // (Task 39): the portable Timer honors it, the legacy setInterval template does
+                // not, so a DOM page must still be told the value is not written.
+                var templateSkips = style == FormStyle.Dom &&
+                                    definition is { IsComponent: true, WebScript: { } script } &&
+                                    !script.Construct.Contains("{" + name + "}", StringComparison.Ordinal);
+
+                if (!property.AppliesTo(target) || templateSkips)
+                {
+                    var why = templateSkips
+                        ? $"is not written by the {target} {definition.Kind} template"
+                        : $"does not exist on {target}";
                     diagnostics.Add(new DesignDiagnostic(
                         DesignCodes.PropertyNotOnTarget,
-                        $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' does not exist " +
-                        $"on {target}, so it is not written into the generated code. The " +
-                        "value is preserved in the document.",
+                        $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' {why}, so it is not " +
+                        "written into the generated code. The value is preserved in the document.",
                         filePath, 0, 0, IsWarning: true));
                 }
             }

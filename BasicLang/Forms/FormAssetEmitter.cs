@@ -548,6 +548,18 @@ public static class FormAssetEmitter
             sb.Append($" {attribute}=\"{Attr(raw)}\"");
         }
 
+        // The library's SizeMode getter reads this attribute. The catalog's allowed-value order is
+        // the WinForms enum order (Normal=0, StretchImage=1, AutoSize=2, CenterImage=3, Zoom=4), so
+        // a design-time mode survives into the portable page's live property, not just its CSS.
+        if (row.Kind == "PictureBox" &&
+            control.Properties.TryGetValue("SizeMode", out var sizeMode) &&
+            row.Property("SizeMode") is { AllowedValues: { } modes })
+        {
+            var canonical = row.Property("SizeMode")!.Canonical(sizeMode);
+            var modeIndex = Array.IndexOf(modes.ToArray(), canonical);
+            if (modeIndex >= 0) sb.Append($" data-vgs-sizemode=\"{modeIndex}\"");
+        }
+
         if (row.CaptionWrapper != null)
         {
             sb.Append($"><input type=\"{Attr(row.HtmlInputType!)}\" tabindex=\"{Number(control.TabIndex)}\"");
@@ -569,7 +581,6 @@ public static class FormAssetEmitter
         if (Flag(control, "MultiSelect") == true) sb.Append(" multiple");
         if (tag == "img" && control.Properties.TryGetValue("Image", out var image))
             sb.Append($" src=\"{Attr(image)}\" alt=\"{Attr(control.Id)}\"");
-        if (tag == "select" && text != null) sb.Append($" title=\"{Attr(text)}\""); // Task 37 changes ComboBox.Text.
         sb.Append('>');
         if (tag is "input" or "img") { sb.Append('\n'); return; }
 
@@ -577,6 +588,21 @@ public static class FormAssetEmitter
         else if (tag == "select" && control.Properties.TryGetValue("Items", out var items))
         {
             var index = control.Properties.TryGetValue("SelectedIndex", out var selected) && FormPropertyDef.TryParseInt(selected, out var parsed) ? parsed : -1;
+            // Task 37: Text is the selected option's caption, not a title. An explicit
+            // non-negative SelectedIndex wins; otherwise the first exact Text match.
+            if (index < 0 && text != null)
+            {
+                var match = 0;
+                foreach (var item in FormPropertyDef.SplitItems(items))
+                {
+                    if (string.Equals(item, text, StringComparison.Ordinal))
+                    {
+                        index = match;
+                        break;
+                    }
+                    match++;
+                }
+            }
             var at = 0;
             foreach (var item in FormPropertyDef.SplitItems(items))
                 sb.Append($"<option{(at++ == index ? " selected" : "")}>{Text(item)}</option>");

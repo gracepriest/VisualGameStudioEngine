@@ -76,8 +76,9 @@ public static class FormRetarget
         state.ConvertControls(source.Controls, document.Controls, "the form");
 
         // The tray (Task 25): the same kind/property/bind rules — a ToolTip has no web row and is
-        // BL8023, a Timer's Enabled has no web meaning and is BL8024, the Tick bind becomes tick —
-        // and none of the geometry pass below, because a component has no place on either side.
+        // BL8023, a Timer's Tick bind becomes tick and its Enabled now crosses as a both-target
+        // row (Task 39) — and none of the geometry pass below, because a component has no place
+        // on either side.
         state.ConvertControls(source.Components, document.Components, "the tray");
 
         if (to == FormTarget.Web)
@@ -567,11 +568,13 @@ public static class FormRetarget
         // ==============================================================
         // "Wired means running" crosses by RULE, and is named (Task 25 review)
         //
-        // A web Timer runs the moment it is wired; a WinForms one runs only with Enabled=True. Left
-        // to the property rules alone, a wired web Timer arrived on the window with Enabled absent —
-        // default False — and never fired, with no finding; and a disabled WinForms Timer arrived on
-        // the page wired, and ran from load, with no finding. The catalog row states the equivalence
-        // (FormWebScript.Implies); this is the one place that applies it, in both directions.
+        // The LEGACY DOM web template runs a Timer the moment it is wired; a WinForms one runs
+        // only with Enabled=True. Left to the property rules alone, a wired web Timer arrived on
+        // the window with Enabled absent — default False — and never fired, with no finding; and a
+        // disabled WinForms Timer arrived on the page wired, and ran from load, with no finding.
+        // The catalog row states the equivalence (FormWebScript.Implies); this is the one place
+        // that applies it, in both directions. ⚠ Task 39's portable Timer honors Enabled; this
+        // rule still describes the default DOM template the retarget may feed.
         // ==============================================================
 
         /// <summary>The row's implied property, when the source is wired on the event that crosses; else null.</summary>

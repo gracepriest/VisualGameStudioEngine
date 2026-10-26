@@ -28,6 +28,20 @@ public static class FormCss
             return FormFontValue.TryParse(value, out var font) ? font.Css : Array.Empty<(string, string)>();
         }
 
+        // PictureBox sizing fixes the image's fit and, for the unpainted modes, its anchor point.
+        if (property.CssConverter == FormCssConverter.PictureBoxSizeMode)
+        {
+            return property.Canonical(value) switch
+            {
+                "Normal" => new[] { ("object-fit", "none"), ("object-position", "left top") },
+                "StretchImage" => new[] { ("object-fit", "fill"), ("object-position", "center") },
+                "AutoSize" => new[] { ("object-fit", "none"), ("object-position", "left top") },
+                "CenterImage" => new[] { ("object-fit", "none"), ("object-position", "center") },
+                "Zoom" => new[] { ("object-fit", "contain"), ("object-position", "center") },
+                _ => Array.Empty<(string, string)>()
+            };
+        }
+
         var converted = property.CssConverter switch
         {
             FormCssConverter.None => IsSafeVerbatim(value) ? value : null,

@@ -1036,7 +1036,7 @@ public class FormRetargetTests
         """;
 
     [Test]
-    public void ToWeb_ATimerCrossesToTheTray_WithItsTickBind_AndLosesWhatTheWebLacks()
+    public void ToWeb_ATimerCrossesToTheTray_WithItsTickBindAndEnabled()
     {
         var source = WinForms(WinFormsWithTray);
 
@@ -1048,13 +1048,14 @@ public class FormRetargetTests
             Assert.That(result.Document.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btnLogin" }), "a component is not hoisted into the controls");
             Assert.That(tmr.Geometry, Is.Null);
             Assert.That(tmr.Properties["Interval"], Is.EqualTo("500"), "shared, so it crosses");
-            Assert.That(tmr.Properties.ContainsKey("Enabled"), Is.False, "WinForms-only: a JS interval cannot exist disabled");
+            Assert.That(tmr.Properties["Enabled"], Is.EqualTo("true"),
+                "both targets: the portable Timer owns its interval and can start and stop it");
             Assert.That(tmr.UnknownAttributes["Note"], Is.EqualTo("keep me"), "D9: not ours, so it crosses");
             Assert.That(tmr.Binds.Single().Event, Is.EqualTo("tick"), "the catalog's default event, in the web's vocabulary");
             Assert.That(tmr.Binds.Single().Handler, Is.EqualTo("tmr_Tick"));
 
-            // Enabled="true" on a WIRED Timer is not a loss: on the web the wiring IS the enabling.
-            // Reporting it as BL8024 told the user to "re-express it on the other side" — of nothing.
+            // Enabled now crosses as a real property, so it is not a BL8024 loss. The default DOM
+            // web template still runs a wired Timer regardless of Enabled, which BL8027 names.
             Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty);
             var crossed = Of(result, DesignCodes.RetargetRunStateCrossed).Single();
             Assert.That(crossed.IsWarning, Is.True);
@@ -1097,7 +1098,7 @@ public class FormRetargetTests
     }
 
     [Test]
-    public void ToWeb_AnUnwiredTimer_LosesEnabledAsBefore_AndSaysNothingAboutRunning()
+    public void ToWeb_AnUnwiredTimer_KeepsEnabled_AndSaysNothingAboutRunning()
     {
         var source = WinForms(WinFormsWithTray.Replace("<Bind Event=\"Tick\" Handler=\"tmr_Tick\"/>", ""));
 
@@ -1105,8 +1106,9 @@ public class FormRetargetTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Of(result, DesignCodes.RetargetPropertyLost).Single().Message, Does.Contain("'tmr.Enabled'"),
-                "with no handler nothing runs on either side, so Enabled is simply a property the web lacks");
+            Assert.That(result.Document.Components.Single(c => c.Id == "tmr").Properties["Enabled"], Is.EqualTo("true"),
+                "Enabled is a both-target row now, so it crosses even with no handler");
+            Assert.That(Of(result, DesignCodes.RetargetPropertyLost), Is.Empty);
             Assert.That(Of(result, DesignCodes.RetargetRunStateCrossed), Is.Empty);
         });
     }

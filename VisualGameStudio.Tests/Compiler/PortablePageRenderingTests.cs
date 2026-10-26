@@ -139,6 +139,188 @@ public class PortablePageRenderingTests
     }
 
     [Test]
+    public void PortableComboBox_TextSelectsAnOption_InsteadOfWritingATitle()
+    {
+        var page = Page();
+        var combo = Box("ComboBox", "pick", w: 180);
+        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Text"] = "Beta";
+        page.Controls.Add(combo);
+
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+        var select = Regex.Match(html, "<select id=\"pick\".*?</select>", RegexOptions.Singleline).Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(Tag(html, "pick"), Does.StartWith("<select ").And.Not.Contain("title="));
+            Assert.That(select, Does.Contain("<option>Alpha</option><option selected>Beta</option><option>Gamma</option>"));
+        });
+    }
+
+    [Test]
+    public void PortableComboBox_AnExplicitSelectedIndexWinsOverText()
+    {
+        var page = Page();
+        var combo = Box("ComboBox", "pick", w: 180);
+        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Text"] = "Beta";
+        combo.Properties["SelectedIndex"] = "2";
+        page.Controls.Add(combo);
+
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+        Assert.That(html, Does.Contain("<option>Alpha</option><option>Beta</option><option selected>Gamma</option>"));
+    }
+
+    [Test]
+    public void PortablePictureBox_WritesSrcAndPortableSizeModeCss_WithoutChangingTheDomPage()
+    {
+        var page = Page();
+        var picture = Box("PictureBox", "photo", w: 200, h: 120);
+        picture.Properties["Image"] = "images/a.png";
+        picture.Properties["SizeMode"] = "CenterImage";
+        page.Controls.Add(picture);
+
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+        var css = FormAssetEmitter.Css(page, FormStyle.Portable);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Tag(html, "photo"), Does.StartWith("<img ").And.Contain("src=\"images/a.png\"")
+                .And.Contain("alt=\"photo\"").And.Contain("data-vgs-sizemode=\"3\""));
+            Assert.That(css, Does.Contain("#photo {").And.Contain("object-fit: none")
+                .And.Contain("object-position: center"));
+            Assert.That(FormAssetEmitter.Css(page), Does.Not.Contain("object-fit"));
+        });
+    }
+
+    [Test]
+    public void PortableValueKinds_MapTheirCatalogRowsToInputAndProgressMarkup()
+    {
+        var page = Page();
+        var numeric = Box("NumericUpDown", "num");
+        numeric.Properties["Minimum"] = "1";
+        numeric.Properties["Maximum"] = "10";
+        numeric.Properties["Value"] = "5";
+        numeric.Properties["Increment"] = "2";
+        numeric.Properties["ReadOnly"] = "true";
+        numeric.Properties["TextAlign"] = "Right";
+        var date = Box("DateTimePicker", "when", w: 200);
+        var track = Box("TrackBar", "level", w: 150, h: 45);
+        track.Properties["Minimum"] = "1";
+        track.Properties["Maximum"] = "10";
+        track.Properties["Value"] = "4";
+        var progress = Box("ProgressBar", "bar", w: 150, h: 23);
+        progress.Properties["Maximum"] = "200";
+        progress.Properties["Value"] = "25";
+        page.Controls.AddRange(new[] { numeric, date, track, progress });
+
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+        var css = FormAssetEmitter.Css(page, FormStyle.Portable);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Tag(html, "num"), Does.StartWith("<input ").And.Contain("type=\"number\"")
+                .And.Contain("min=\"1\"").And.Contain("max=\"10\"").And.Contain("value=\"5\"")
+                .And.Contain("step=\"2\"").And.Contain("readonly"));
+            Assert.That(Tag(html, "when"), Does.StartWith("<input ").And.Contain("type=\"date\"")
+                .And.Not.Contain("value="));
+            Assert.That(Tag(html, "level"), Does.StartWith("<input ").And.Contain("type=\"range\"")
+                .And.Contain("min=\"1\"").And.Contain("max=\"10\"").And.Contain("value=\"4\""));
+            Assert.That(Tag(html, "bar"), Does.StartWith("<progress ").And.Contain("max=\"200\"")
+                .And.Contain("value=\"25\"").And.Not.Contain("min="));
+            Assert.That(css, Does.Contain("#num {").And.Contain("text-align: right"));
+        });
+    }
+
+    [Test]
+    public void PortableStrips_RenderPageChromeWrappersAndNestedSubmenus()
+    {
+        // Grid/Flow pages put docked strips outside the form area as page chrome. A Canvas page
+        // positions them inside it; that shape is covered by the canvas layout tests.
+        var page = Page(FormLayoutKind.Grid);
+        var menu = new FormControl { Kind = "MenuStrip", Id = "menuStrip1" };
+        menu.Properties["Dock"] = "Top";
+        var file = new FormControl { Kind = "ToolStripMenuItem", Id = "mnuFile" };
+        file.Properties["Text"] = "&File";
+        var open = new FormControl { Kind = "ToolStripMenuItem", Id = "mnuOpen" };
+        open.Properties["Text"] = "&Open...";
+        var separator = new FormControl { Kind = "ToolStripSeparator", Id = "sep1" };
+        var exit = new FormControl { Kind = "ToolStripMenuItem", Id = "mnuExit" };
+        exit.Properties["Text"] = "E&xit";
+        file.Children.AddRange(new[] { open, separator, exit });
+        menu.Children.Add(file);
+
+        var tools = new FormControl { Kind = "ToolStrip", Id = "toolStrip1" };
+        tools.Properties["Dock"] = "Top";
+        var toolButton = new FormControl { Kind = "ToolStripButton", Id = "tsbOpen" };
+        toolButton.Properties["Text"] = "Open";
+        tools.Children.Add(toolButton);
+
+        var status = new FormControl { Kind = "StatusStrip", Id = "statusStrip1" };
+        status.Properties["Dock"] = "Bottom";
+        var statusLabel = new FormControl { Kind = "ToolStripStatusLabel", Id = "lblStatus" };
+        statusLabel.Properties["Text"] = "Ready";
+        status.Children.Add(statusLabel);
+
+        page.Controls.AddRange(new[] { menu, tools, status });
+        var html = FormAssetEmitter.Html(page, "App.js", FormStyle.Portable);
+        var css = FormAssetEmitter.Css(page, FormStyle.Portable);
+
+        var divOpen = html.IndexOf("<div class=\"vgs-form\"", StringComparison.Ordinal);
+        var divClose = html.IndexOf("</div>", StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(divOpen, Is.GreaterThanOrEqualTo(0));
+            Assert.That(divClose, Is.GreaterThan(divOpen));
+            Assert.That(html.IndexOf("<nav id=\"menuStrip1\"", StringComparison.Ordinal),
+                Is.GreaterThanOrEqualTo(0).And.LessThan(divOpen));
+            Assert.That(html.IndexOf("<menu id=\"toolStrip1\"", StringComparison.Ordinal),
+                Is.GreaterThanOrEqualTo(0).And.LessThan(divOpen));
+            Assert.That(html.IndexOf("<footer id=\"statusStrip1\"", StringComparison.Ordinal),
+                Is.GreaterThan(divClose));
+
+            Assert.That(Tag(html, "menuStrip1"), Does.StartWith("<nav ").And.Contain("class=\"vgs-MenuStrip\"")
+                .And.Contain("data-vgs-dock=\"Top\""));
+            Assert.That(Tag(html, "toolStrip1"), Does.StartWith("<menu ").And.Contain("class=\"vgs-ToolStrip\"")
+                .And.Contain("role=\"toolbar\""));
+            Assert.That(Tag(html, "statusStrip1"), Does.StartWith("<footer ").And.Contain("class=\"vgs-StatusStrip\"")
+                .And.Contain("role=\"status\""));
+
+            var pos = -1;
+            void ExpectNext(string fragment)
+            {
+                var index = html.IndexOf(fragment, pos + 1, StringComparison.Ordinal);
+                Assert.That(index, Is.GreaterThan(pos), $"expected '{fragment}' after position {pos}");
+                pos = index;
+            }
+
+            ExpectNext("<ul>");
+            ExpectNext("<li id=\"mnuFile\" class=\"vgs-ToolStripMenuItem\"");
+            ExpectNext(">File");
+            ExpectNext("<ul>");
+            ExpectNext("<li id=\"mnuOpen\"");
+            ExpectNext("<li id=\"sep1\" class=\"vgs-ToolStripSeparator\" role=\"separator\"");
+            ExpectNext("<li id=\"mnuExit\"");
+            ExpectNext(">Exit");
+            ExpectNext("</ul>");
+            ExpectNext("</li>");
+            ExpectNext("<input id=\"tsbOpen\" class=\"vgs-ToolStripButton\"");
+            ExpectNext("value=\"Open\"");
+            ExpectNext("<span id=\"lblStatus\"");
+            ExpectNext(">Ready</span>");
+
+            Assert.That(html, Does.Not.Contain("&File"));
+            Assert.That(html, Does.Not.Contain("&amp;File"));
+            Assert.That(html, Does.Not.Contain("E&xit"));
+            foreach (var id in new[] { "menuStrip1", "mnuFile", "mnuOpen", "sep1", "mnuExit", "toolStrip1", "tsbOpen", "statusStrip1", "lblStatus" })
+            {
+                Assert.That(Tag(html, id), Does.Not.Contain("tabindex"), $"{id} must not carry a tabindex");
+            }
+
+            Assert.That(css, Does.Contain(".vgs-MenuStrip ul{list-style:none"));
+            Assert.That(css, Does.Contain(".vgs-ToolStrip{display:flex"));
+            Assert.That(css, Does.Contain(".vgs-StatusStrip{display:flex"));
+        });
+    }
+
+    [Test]
     public void FirstKindWebProperties_RecordTheirLiveDomMember()
     {
         foreach (var kind in new[] { "Button", "Label", "TextBox", "CheckBox", "RadioButton", "Panel", "GroupBox" })

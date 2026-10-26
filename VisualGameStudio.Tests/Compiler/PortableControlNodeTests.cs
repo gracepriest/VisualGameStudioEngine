@@ -52,6 +52,8 @@ public class PortableControlNodeTests
                 this.innerText = "";
                 this.value = "";
                 this._checked = false;
+                this._selected = false;
+                this._selectionSet = false;
                 this.parentElement = null;
                 this.children = [];
                 this.attributes = Object.create(null);
@@ -73,16 +75,51 @@ public class PortableControlNodeTests
                 this.className = "";
                 this.focused = false;
                 this.selectCalls = 0;
+                this._textNode = null;
+                this._textOwner = null;
                 globalThis.__state.all.push(this);
             }
             get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
             set textContent(value) {
                 this._text = String(value);
+                this._textNode = null;
+                this._textOwner = null;
                 for (const child of this.children) child.parentElement = null;
                 this.children = [];
             }
+            get firstChild() {
+                if (this._text !== "") {
+                    if (!this._textNode) {
+                        this._textNode = new StubElement("", "TEXT");
+                        this._textNode._text = this._text;
+                        this._textNode._textOwner = this;
+                    }
+                    return this._textNode;
+                }
+                return this.children.length === 0 ? null : this.children[0];
+            }
+            get nodeValue() { return this._text; }
+            set nodeValue(value) {
+                this._text = String(value);
+                if (this._textOwner) this._textOwner._text = this._text;
+            }
+            get nodeType() { return this.tagName === "TEXT" ? 3 : 1; }
             get type() { return this.getAttribute("type") || "text"; }
             set type(value) { this.setAttribute("type", value); }
+            get valueAsDate() {
+                if (this.tagName !== "INPUT" || !this.value) return null;
+                const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(this.value);
+                if (!match) return null;
+                return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+            }
+            set valueAsDate(value) {
+                if (value === null || value === undefined) { this.value = ""; return; }
+                const date = value instanceof Date ? value : new Date(value);
+                if (Number.isNaN(date.getTime())) { this.value = ""; return; }
+                const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+                const day = String(date.getUTCDate()).padStart(2, "0");
+                this.value = String(date.getUTCFullYear()) + "-" + month + "-" + day;
+            }
             get disabled() { return this.getAttribute("disabled") !== null; }
             set disabled(value) { if (value) this.setAttribute("disabled", ""); else this.removeAttribute("disabled"); }
             get hidden() { return this.getAttribute("hidden") !== null; }
@@ -101,7 +138,32 @@ public class PortableControlNodeTests
                         peer.getAttribute("name") === this.getAttribute("name")) peer._checked = false;
                 }
             }
+            get options() {
+                return this.tagName === "SELECT"
+                    ? this.children.filter(child => child.tagName === "OPTION")
+                    : [];
+            }
+            get selectedIndex() {
+                if (this.tagName !== "SELECT") return -1;
+                const options = this.options;
+                const explicit = options.findIndex(option => option._selected);
+                if (explicit >= 0) return explicit;
+                if (!this._selectionSet && !this.multiple && options.length > 0) return 0;
+                return -1;
+            }
+            set selectedIndex(value) {
+                if (this.tagName !== "SELECT") return;
+                const index = Number(value);
+                this._selectionSet = true;
+                this.options.forEach((option, at) => option._selected = at === index);
+            }
+            get multiple() { return this.getAttribute("multiple") !== null; }
+            set multiple(value) {
+                if (value) this.setAttribute("multiple", "");
+                else this.removeAttribute("multiple");
+            }
             get firstElementChild() { return this.children.length === 0 ? null : this.children[0]; }
+            get childElementCount() { return this.children.length; }
             get nextElementSibling() {
                 if (this.parentElement === null) return null;
                 const siblings = this.parentElement.children;
@@ -133,15 +195,21 @@ public class PortableControlNodeTests
                     altKey: false,
                     relatedTarget: null,
                     defaultPrevented: false,
-                    preventDefault() { this.defaultPrevented = true; }
+                    propagationStopped: false,
+                    preventDefault() { this.defaultPrevented = true; },
+                    stopPropagation() { this.propagationStopped = true; }
                 }, props || {});
                 let at = this;
                 do {
                     event.currentTarget = at;
                     for (const listener of (at.listeners[type] || []).slice()) listener(event);
+                    if (event.propagationStopped) break;
                     at = props && props.bubbles === false ? null : at.parentElement;
                 } while (at);
                 return event;
+            }
+            dispatchEvent(event) {
+                return this.dispatch(event && event.type ? event.type : "", event);
             }
             click() {
                 if (this.disabled) return;
@@ -207,12 +275,28 @@ public class PortableControlNodeTests
             }
             removeAttribute(name) { delete this.attributes[name]; }
             appendChild(child) {
+                if (child.tagName === "TEXT") {
+                    if (child.parentElement !== null) child.parentElement.removeChild(child);
+                    this._text = this._text + child._text;
+                    this._textNode = child;
+                    child._textOwner = this;
+                    child.parentElement = this;
+                    return child;
+                }
                 if (child.parentElement !== null) child.parentElement.removeChild(child);
                 this.children.push(child);
                 child.parentElement = this;
                 return child;
             }
             removeChild(child) {
+                if (child.tagName === "TEXT") {
+                    if (this._textNode === child) {
+                        this._text = "";
+                        this._textNode = null;
+                    }
+                    child.parentElement = null;
+                    return child;
+                }
                 const index = this.children.indexOf(child);
                 if (index >= 0) this.children.splice(index, 1);
                 child.parentElement = null;
@@ -229,6 +313,14 @@ public class PortableControlNodeTests
             }
             insertBefore(child, reference) {
                 if (reference === null) return this.appendChild(child);
+                if (child.tagName === "TEXT") {
+                    if (child.parentElement !== null) child.parentElement.removeChild(child);
+                    this._text = child._text + this._text;
+                    this._textNode = child;
+                    child._textOwner = this;
+                    child.parentElement = this;
+                    return child;
+                }
                 const index = this.children.indexOf(reference);
                 if (index < 0) throw new Error("insertBefore: missing reference");
                 this.children.splice(index, 0, child);

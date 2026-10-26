@@ -36,7 +36,8 @@ internal sealed record PortableRuntimeCase(
 /// and <c>Key</c> go through CDP <c>Input.*</c>; <c>Focus</c> is used only where a fieldset cannot
 /// receive focus and is named by the caller.
 /// </summary>
-internal sealed record PortableWebAction(string Kind, string Id = "", string Text = "", string Script = "");
+internal sealed record PortableWebAction(
+    string Kind, string Id = "", string Text = "", string Script = "", string Event = "");
 
 /// <summary>
 /// Task 35's shared runtime harnesses. The pixel harnesses remain layout-only; these two run generated
@@ -212,6 +213,7 @@ internal static class PortableRuntimeHarnesses
 
             internal static class Driver
             {
+                private const int WM_MOUSEMOVE = 0x0200;
                 private const int WM_LBUTTONDOWN = 0x0201;
                 private const int WM_LBUTTONUP = 0x0202;
                 private const int WM_CHAR = 0x0102;
@@ -260,9 +262,27 @@ internal static class PortableRuntimeHarnesses
 
                 private static void Click(Control control)
                 {
+                    // A direct WM_LBUTTONDOWN/UP does not update the process-wide MouseButtons state in a
+                    // non-interactive desktop, so ButtonBase never sees a completed click. BM_CLICK is the
+                    // real button message and raises Click/CheckedChanged exactly once.
+                    if (control is ButtonBase)
+                    {
+                        control.Focus();
+                        SendMessage(control.Handle, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+                        Application.DoEvents();
+                        return;
+                    }
+                    ClickAt(control, Math.Max(1, control.ClientSize.Width / 2), Math.Max(1, control.ClientSize.Height / 2));
+                }
+
+                private static void ClickAt(Control control, int x, int y)
+                {
                     control.Focus();
-                    var point = new Point(Math.Max(1, control.ClientSize.Width / 2), Math.Max(1, control.ClientSize.Height / 2));
+                    var point = new Point(x, y);
                     var lparam = (IntPtr)((point.Y << 16) | point.X);
+                    // A real click moves the pointer first; LinkLabel tracks the hovered link on
+                    // mouse move and only then treats the button pair as a link click.
+                    SendMessage(control.Handle, WM_MOUSEMOVE, IntPtr.Zero, lparam);
                     SendMessage(control.Handle, WM_LBUTTONDOWN, MK_LBUTTON, lparam);
                     SendMessage(control.Handle, WM_LBUTTONUP, IntPtr.Zero, lparam);
                     Application.DoEvents();
@@ -320,6 +340,22 @@ internal static class PortableRuntimeHarnesses
                     var enter = typeof(Control).GetMethod("OnEnter", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (enter == null) throw new MissingMethodException("Control", "OnEnter");
                     enter.Invoke(control, new object[] { EventArgs.Empty });
+                    Application.DoEvents();
+                }
+
+                private static void RaiseClick(Control control)
+                {
+                    var click = typeof(Control).GetMethod("OnClick", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (click == null) throw new MissingMethodException("Control", "OnClick");
+                    click.Invoke(control, new object[] { EventArgs.Empty });
+                    Application.DoEvents();
+                }
+
+                private static void RaiseScroll(Control control)
+                {
+                    var scroll = typeof(TrackBar).GetMethod("OnScroll", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (scroll == null) throw new MissingMethodException("TrackBar", "OnScroll");
+                    scroll.Invoke(control, new object[] { EventArgs.Empty });
                     Application.DoEvents();
                 }
 

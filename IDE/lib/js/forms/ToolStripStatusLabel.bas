@@ -1,4 +1,4 @@
-' Portable control library — ToolStripStatusLabel shell (task 28). Behaviour lands in 2b.
+' Portable control library - ToolStripStatusLabel (task 39).
 Namespace System.Windows.Forms
     Public Class ToolStripStatusLabel
         Inherits ToolStripItem

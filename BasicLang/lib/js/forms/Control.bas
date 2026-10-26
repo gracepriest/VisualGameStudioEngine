@@ -428,6 +428,11 @@ Namespace System.Windows.Forms
             End If
         End Sub
 
+        ' Task 37: the owner of an ObjectCollection is told when the live selection changed.
+        ' ComboBox/ListBox override this to mark the DOM and raise SelectedIndexChanged.
+        Public Overridable Sub VgsNotifySelectionChanged()
+        End Sub
+
         ' Kind hooks never change the common event surface. Delegates are retained by each
         ' kind so removing or replacing an element removes the SAME listener identities.
         Public Overridable Sub VgsAttachExtraListeners()

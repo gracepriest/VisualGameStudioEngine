@@ -190,6 +190,7 @@ public class FormCssTests
             FormCssConverter.ContentAlignmentHorizontal => (FormControlCatalog.Find("Label")!.Property("TextAlign")!, "MiddleLeft"),
             FormCssConverter.VisibleToDisplay => (new FormPropertyDef("X", FormPropertyType.Bool, "true",
                 CssProperty: "display", CssConverter: converter), "false"),
+            FormCssConverter.PictureBoxSizeMode => (FormControlCatalog.Find("PictureBox")!.Property("SizeMode")!, "CenterImage"),
             FormCssConverter.Font => (new FormPropertyDef("X", FormPropertyType.Font, CssProperty: "font",
                 CssConverter: converter), "Segoe UI, 9pt"),
             FormCssConverter.Padding => (new FormPropertyDef("X", FormPropertyType.Padding, CssProperty: "padding",
