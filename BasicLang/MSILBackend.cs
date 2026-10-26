@@ -493,7 +493,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             _typeMap["UShort"] = "uint16";
             _typeMap["UInteger"] = "uint32";
             _typeMap["ULong"] = "uint64";
-            _typeMap["Decimal"] = "valuetype [System.Runtime]System.Decimal";
+            _typeMap["Decimal"] = "valuetype [mscorlib]System.Decimal";
+            _typeMap["Date"] = "valuetype [mscorlib]System.DateTime";
+            _typeMap["DateTime"] = "valuetype [mscorlib]System.DateTime";
         }
 
         /// <summary>
@@ -702,6 +704,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             var trimmed = typeName.Trim();
             if (trimmed.EndsWith("[]", StringComparison.Ordinal))
                 return IlTypeSpec(trimmed.Substring(0, trimmed.Length - 2)) + "[]";
+
+            // ⛔ An already-full IL type spec (`valuetype [mscorlib]System.Decimal`, `class Foo`,
+            // `[mscorlib]System.String`) must pass through untouched — MapTypeName would sanitize
+            // its brackets/spaces into a single identifier (`valuetypemscorlibSystemDecimal`) and
+            // the `.locals init` line would name a class that does not exist.
+            if (trimmed.Contains('[') || trimmed.StartsWith("valuetype ", StringComparison.Ordinal)
+                || trimmed.StartsWith("class ", StringComparison.Ordinal))
+                return trimmed;
 
             var mapped = MapTypeName(trimmed);
 
@@ -1083,6 +1093,9 @@ namespace BasicLang.Compiler.CodeGen.MSIL
             switch (typeName.ToLowerInvariant())
             {
                 case "integer": return "int32";
+                case "decimal": return "valuetype [mscorlib]System.Decimal";
+                case "date":
+                case "datetime": return "valuetype [mscorlib]System.DateTime";
                 case "long": return "int64";
                 case "single": return "float32";
                 case "double": return "float64";
@@ -5192,6 +5205,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // contract the refusal message promises.
             };
 
+        private static readonly Dictionary<string, (string Token, string ReturnSpec)> NetStaticProperties =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DateTime.Now"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+                ["DateTime.Today"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+                ["DateTime.UtcNow"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+            };
+
         /// <summary>
         /// Resolves a dotted static call to its recorded IL signature, matching the overload on
         /// argument specs. Returns false when the receiver is not a .NET static type at all — that
@@ -6294,6 +6315,13 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure) return IlTypeToken(type);
 
+            // ⛔ .NET value types (DateTime, Decimal, TimeSpan, Guid, ...) arrive as TypeKind.Class
+            // from the semantic analyzer, but they are structs in the CLR and must be boxed to their
+            // OWN type for Console.WriteLine / concat / store-into-Object. Without this they are
+            // left as raw values where a reference belongs → InvalidProgramException.
+            if (spec.StartsWith("valuetype ", StringComparison.Ordinal))
+                return spec.Substring("valuetype ".Length);
+
             return null;
         }
 
@@ -7310,6 +7338,21 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            var staticTypeName = fieldAccess?.Object?.Name;
+            if (!string.IsNullOrEmpty(staticTypeName)
+                && !ResolvesAsValue(staticTypeName)
+                && IRBuilder.IsKnownNetStaticTypeName(staticTypeName))
+            {
+                var dotted = staticTypeName + "." + fieldAccess.FieldName;
+                if (NetStaticProperties.TryGetValue(dotted, out var prop))
+                {
+                    WriteLine($"    call {prop.ReturnSpec} {prop.Token}::get_{fieldAccess.FieldName}()");
+                    _currentStack++;
+                    EmitFieldAccessResult(fieldAccess, fieldAccess.Type);
+                    return;
+                }
+            }
+
             // ⛔ A `Shared` field reached as `Counter.Total`. The receiver is a TYPE NAME, not a
             // value: loading it emitted `// WARNING: Unknown local 'Counter'` and pushed nothing,
             // and the `ldfld` that followed read a field off an empty stack — InvalidProgramException.
