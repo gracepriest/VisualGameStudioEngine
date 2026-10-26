@@ -204,6 +204,23 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             foreach (var f in module.Functions)
                 if (!string.IsNullOrEmpty(f.Name)) _userFunctionNames.Add(f.Name);
 
+            // Enums are frozen objects of their numeric members. A user enum member access is
+            // lowered to a constant where the analyzer knew it; this declaration covers every
+            // remaining reference and keeps the emitted name defined.
+            var emittedEnums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var enumDecl in module.Enums.Values)
+            {
+                var enumName = SanitizeName(enumDecl.Name);
+                if (!emittedEnums.Add(enumName)) continue;
+                Line($"const {enumName} = Object.freeze({{");
+                _indentLevel++;
+                foreach (var member in enumDecl.Members)
+                    Line($"{SanitizeName(member.Name)}: {member.Value?.ToString() ?? "0"},");
+                _indentLevel--;
+                Line("});");
+                Line();
+            }
+
             // Classes BEFORE free functions: JS class declarations are not hoisted the way
             // function declarations are, so a `new Person()` reached from the entry point
             // would hit the temporal dead zone. Base before derived for the same reason:
@@ -427,7 +444,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             (value?.Type?.Name?.ToLowerInvariant()) switch
             {
                 "boolean" or "string" or "byte" or "sbyte" or "short" or "ushort"
-                    or "integer" or "uinteger" or "single" or "double" => true,
+                    or "integer" or "uinteger" or "single" or "double" or "decimal" => true,
                 _ => false,
             };
 

@@ -8,7 +8,7 @@ Namespace System.Windows.Forms
 
         Public Property TextAlign As ContentAlignment
             Get
-                Return Me.VgsContentAlignment(ContentAlignment.TopLeft)
+                Return Me.VgsContentAlignment(CType(1, ContentAlignment))
             End Get
             Set(value As ContentAlignment)
                 Me.VgsSetContentAlignment(value)

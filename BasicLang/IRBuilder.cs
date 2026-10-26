@@ -7415,6 +7415,13 @@ namespace BasicLang.Compiler.IR
             // and a ~27 s Native AOT publish round trip. Measured before this change:
             // FileMode.Open emitted a real bl_net_System_IO_FileMode_Open__… export. Move this
             // arm below the emission and the value stays correct while the export comes back.
+            if (_semanticAnalyzer?.UserEnumConstants != null
+                && _semanticAnalyzer.UserEnumConstants.TryGetValue(node, out var userEnum))
+            {
+                _expressionResult = new IRConstant(userEnum.Value, userEnum.Type);
+                return;
+            }
+
             if (_semanticAnalyzer?.NetEnumConstants != null
                 && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
             {

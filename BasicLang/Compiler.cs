@@ -598,18 +598,22 @@ namespace BasicLang.Compiler
         internal static bool HasPortableNamespaceReferenceText(string source)
         {
             var tokens = new Lexer(source).Tokenize();
-            for (var i = 0; i + 4 < tokens.Count; i++)
+            for (var i = 0; i + 2 < tokens.Count; i++)
             {
                 if (tokens[i].Type != TokenType.Identifier ||
-                    !string.Equals(tokens[i].Lexeme, "System", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(tokens[i].Lexeme, "System", StringComparison.OrdinalIgnoreCase) ||
+                    tokens[i + 1].Type != TokenType.Dot ||
+                    tokens[i + 2].Type != TokenType.Identifier)
                     continue;
-                if (tokens[i + 1].Type != TokenType.Dot ||
-                    tokens[i + 2].Type != TokenType.Identifier ||
-                    tokens[i + 3].Type != TokenType.Dot ||
-                    tokens[i + 4].Type != TokenType.Identifier)
-                    continue;
-                if (string.Equals(tokens[i + 2].Lexeme, "Windows", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(tokens[i + 2].Lexeme, "Drawing", StringComparison.OrdinalIgnoreCase))
+
+                if (string.Equals(tokens[i + 2].Lexeme, "Drawing", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                if (i + 4 < tokens.Count &&
+                    string.Equals(tokens[i + 2].Lexeme, "Windows", StringComparison.OrdinalIgnoreCase) &&
+                    tokens[i + 3].Type == TokenType.Dot &&
+                    tokens[i + 4].Type == TokenType.Identifier &&
+                    string.Equals(tokens[i + 4].Lexeme, "Forms", StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
@@ -1181,6 +1185,13 @@ namespace BasicLang.Compiler
                     {
                         combined.Enums[enumDecl.Key] = enumDecl.Value;
                     }
+                }
+
+                foreach (var key in combined.Enums.Keys.Where(k => k.Contains('.', StringComparison.Ordinal)).ToList())
+                {
+                    var simple = key.Substring(key.LastIndexOf('.') + 1);
+                    if (!combined.Enums.ContainsKey(simple))
+                        combined.Enums[simple] = combined.Enums[key];
                 }
 
                 // Add delegates

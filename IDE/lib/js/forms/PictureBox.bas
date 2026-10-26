@@ -28,23 +28,23 @@ Namespace System.Windows.Forms
         Public Property SizeMode As PictureBoxSizeMode
             Get
                 Dim raw As String = Me.VgsElementFor("SizeMode").getAttribute("data-vgs-sizemode")
-                If raw Is Nothing OrElse raw = "" Then Return PictureBoxSizeMode.Normal
+                If raw Is Nothing OrElse raw = "" Then Return CType(0, PictureBoxSizeMode)
                 Return CType(Integer.Parse(raw), PictureBoxSizeMode)
             End Get
             Set(value As PictureBoxSizeMode)
                 Me.VgsElementFor("SizeMode").setAttribute("data-vgs-sizemode", CStr(CInt(value)))
                 Dim fit As String = "none"
                 Dim position As String = "left top"
-                If value = PictureBoxSizeMode.StretchImage Then
+                If value = CType(1, PictureBoxSizeMode) Then
                     fit = "fill"
                     position = "center"
-                ElseIf value = PictureBoxSizeMode.Zoom Then
+                ElseIf value = CType(4, PictureBoxSizeMode) Then
                     fit = "contain"
                     position = "center"
-                ElseIf value = PictureBoxSizeMode.CenterImage Then
+                ElseIf value = CType(3, PictureBoxSizeMode) Then
                     fit = "none"
                     position = "center"
-                ElseIf value = PictureBoxSizeMode.AutoSize Then
+                ElseIf value = CType(2, PictureBoxSizeMode) Then
                     fit = "none"
                     position = "left top"
                 End If

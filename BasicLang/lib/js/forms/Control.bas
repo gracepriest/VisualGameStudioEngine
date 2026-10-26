@@ -231,12 +231,12 @@ Namespace System.Windows.Forms
         Public Property Dock As DockStyle
             Get
                 Dim raw As String = Me.VgsElementFor("Dock").getAttribute("data-vgs-dock")
-                If raw = "Top" Then Return DockStyle.Top
-                If raw = "Bottom" Then Return DockStyle.Bottom
-                If raw = "Left" Then Return DockStyle.Left
-                If raw = "Right" Then Return DockStyle.Right
-                If raw = "Fill" Then Return DockStyle.Fill
-                Return DockStyle.None
+                If raw = "Top" Then Return CType(1, DockStyle)
+                If raw = "Bottom" Then Return CType(2, DockStyle)
+                If raw = "Left" Then Return CType(3, DockStyle)
+                If raw = "Right" Then Return CType(4, DockStyle)
+                If raw = "Fill" Then Return CType(5, DockStyle)
+                Return CType(0, DockStyle)
             End Get
             Set(value As DockStyle)
                 Dim el As Element = Me.VgsElementFor("Dock")
@@ -245,13 +245,13 @@ Namespace System.Windows.Forms
                 Dim w As Integer = Me.VgsReadWidth()
                 Dim h As Integer = Me.VgsReadHeight()
                 Dim name As String = "None"
-                If value = DockStyle.Top Then name = "Top"
-                If value = DockStyle.Bottom Then name = "Bottom"
-                If value = DockStyle.Left Then name = "Left"
-                If value = DockStyle.Right Then name = "Right"
-                If value = DockStyle.Fill Then name = "Fill"
+                If value = CType(1, DockStyle) Then name = "Top"
+                If value = CType(2, DockStyle) Then name = "Bottom"
+                If value = CType(3, DockStyle) Then name = "Left"
+                If value = CType(4, DockStyle) Then name = "Right"
+                If value = CType(5, DockStyle) Then name = "Fill"
                 el.setAttribute("data-vgs-dock", name)
-                If value = DockStyle.None Then
+                If value = CType(0, DockStyle) Then
                     ' Restore the requested bounds, not the dock's last live rectangle.
                     Me.VgsWriteGeometry(Me.VgsRequested("data-vgs-x", x), Me.VgsRequested("data-vgs-y", y), Me.VgsRequested("data-vgs-w", w), Me.VgsRequested("data-vgs-h", h))
                 Else
@@ -467,34 +467,34 @@ Namespace System.Windows.Forms
         End Function
 
         Public Function VgsMouseButton(button As Integer) As MouseButtons
-            If button = 0 Then Return MouseButtons.Left
-            If button = 1 Then Return MouseButtons.Middle
-            If button = 2 Then Return MouseButtons.Right
-            Return MouseButtons.None
+            If button = 0 Then Return CType(1048576, MouseButtons)
+            If button = 1 Then Return CType(4194304, MouseButtons)
+            If button = 2 Then Return CType(2097152, MouseButtons)
+            Return CType(0, MouseButtons)
         End Function
 
         Public Function VgsKeyCode(e As DomEvent) As Keys
             Dim code As String = e.code
             If code = "" Then code = e.key
 
-            If code = "Enter" OrElse code = "NumpadEnter" Then Return Keys.Enter
-            If code = "Escape" Then Return Keys.Escape
-            If code = "Backspace" Then Return Keys.Back
-            If code = "Tab" Then Return Keys.Tab
-            If code = "Space" Then Return Keys.Space
-            If code = "Delete" Then Return Keys.Delete
-            If code = "Insert" Then Return Keys.Insert
-            If code = "Home" Then Return Keys.Home
+            If code = "Enter" OrElse code = "NumpadEnter" Then Return CType(13, Keys)
+            If code = "Escape" Then Return CType(27, Keys)
+            If code = "Backspace" Then Return CType(8, Keys)
+            If code = "Tab" Then Return CType(9, Keys)
+            If code = "Space" Then Return CType(32, Keys)
+            If code = "Delete" Then Return CType(46, Keys)
+            If code = "Insert" Then Return CType(45, Keys)
+            If code = "Home" Then Return CType(36, Keys)
             If code = "End" Then Return CType(35, Keys)
-            If code = "PageUp" Then Return Keys.PageUp
-            If code = "PageDown" Then Return Keys.PageDown
-            If code = "ArrowLeft" Then Return Keys.Left
-            If code = "ArrowUp" Then Return Keys.Up
-            If code = "ArrowRight" Then Return Keys.Right
-            If code = "ArrowDown" Then Return Keys.Down
-            If code = "ShiftLeft" OrElse code = "ShiftRight" Then Return Keys.ShiftKey
-            If code = "ControlLeft" OrElse code = "ControlRight" Then Return Keys.ControlKey
-            If code = "AltLeft" OrElse code = "AltRight" Then Return Keys.Menu
+            If code = "PageUp" Then Return CType(33, Keys)
+            If code = "PageDown" Then Return CType(34, Keys)
+            If code = "ArrowLeft" Then Return CType(37, Keys)
+            If code = "ArrowUp" Then Return CType(38, Keys)
+            If code = "ArrowRight" Then Return CType(39, Keys)
+            If code = "ArrowDown" Then Return CType(40, Keys)
+            If code = "ShiftLeft" OrElse code = "ShiftRight" Then Return CType(16, Keys)
+            If code = "ControlLeft" OrElse code = "ControlRight" Then Return CType(17, Keys)
+            If code = "AltLeft" OrElse code = "AltRight" Then Return CType(18, Keys)
 
             If code.Length = 4 AndAlso Strings.Left(code, 3) = "Key" Then
                 Dim letter As Integer = AscW(Mid(code, 4, 1))
@@ -521,7 +521,7 @@ Namespace System.Windows.Forms
                 Return CType(letter, Keys)
             End If
 
-            Return Keys.None
+            Return CType(0, Keys)
         End Function
 
         Public Function VgsAncestorDisabled(start As Element) As Boolean
@@ -1042,9 +1042,9 @@ Namespace System.Windows.Forms
             Dim el As Element = Me.VgsElementFor("TextAlign")
             el.setAttribute("data-vgs-textalign", CStr(CInt(value)))
             Dim align As String = "left"
-            If value = ContentAlignment.TopCenter OrElse value = ContentAlignment.MiddleCenter OrElse value = ContentAlignment.BottomCenter Then
+            If value = CType(2, ContentAlignment) OrElse value = CType(32, ContentAlignment) OrElse value = CType(512, ContentAlignment) Then
                 align = "center"
-            ElseIf value = ContentAlignment.TopRight OrElse value = ContentAlignment.MiddleRight OrElse value = ContentAlignment.BottomRight Then
+            ElseIf value = CType(4, ContentAlignment) OrElse value = CType(64, ContentAlignment) OrElse value = CType(1024, ContentAlignment) Then
                 align = "right"
             End If
             Me.VgsSetStyle("text-align", align)

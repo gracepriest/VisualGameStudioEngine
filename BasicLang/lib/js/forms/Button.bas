@@ -8,7 +8,7 @@ Namespace System.Windows.Forms
 
         Public Property TextAlign As ContentAlignment
             Get
-                Return Me.VgsContentAlignment(ContentAlignment.MiddleCenter)
+                Return Me.VgsContentAlignment(CType(32, ContentAlignment))
             End Get
             Set(value As ContentAlignment)
                 Me.VgsSetContentAlignment(value)

@@ -126,15 +126,15 @@ Namespace System.Windows.Forms
                 Dim s As String = w.getComputedStyle(Me.VgsElementFor("TextAlign")).textAlign
                 If s Is Nothing Then s = ""
                 If s = "" Then s = Me.VgsStyleValue("text-align")
-                If s = "center" Then Return HorizontalAlignment.Center
-                If s = "right" Then Return HorizontalAlignment.Right
-                Return HorizontalAlignment.Left
+                If s = "center" Then Return CType(2, HorizontalAlignment)
+                If s = "right" Then Return CType(1, HorizontalAlignment)
+                Return CType(0, HorizontalAlignment)
             End Get
             Set(value As HorizontalAlignment)
                 Dim align As String = "left"
-                If value = HorizontalAlignment.Center Then
+                If value = CType(2, HorizontalAlignment) Then
                     align = "center"
-                ElseIf value = HorizontalAlignment.Right Then
+                ElseIf value = CType(1, HorizontalAlignment) Then
                     align = "right"
                 End If
                 Me.VgsSetStyle("text-align", align)

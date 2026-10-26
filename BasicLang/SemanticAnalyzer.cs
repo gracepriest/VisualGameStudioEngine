@@ -494,6 +494,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         internal IReadOnlyDictionary<AST.ExpressionNode, Net.NetEnumConstant> NetEnumConstants =>
             _netAnnotations.NetEnumConstants;
 
+        // User enums whose member is known at compile time. IRBuilder folds these to constants;
+        // otherwise `HorizontalAlignment.Right` emits a bare JS identifier.
+        private readonly Dictionary<string, object> _userEnumMemberValues =
+            new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<AST.ExpressionNode, (object Value, TypeInfo Type)> _userEnumConstants =
+            new Dictionary<AST.ExpressionNode, (object Value, TypeInfo Type)>(ReferenceEqualityComparer.Instance);
+
+        internal IReadOnlyDictionary<AST.ExpressionNode, (object Value, TypeInfo Type)> UserEnumConstants =>
+            _userEnumConstants;
+
         /// <summary>
         /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
         /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
@@ -2586,7 +2596,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (literal.Text is string text)
             {
-                var trimmed = text.TrimEnd('F', 'f', 'L', 'l');
+                var trimmed = text.TrimEnd('F', 'f', 'L', 'l', 'D', 'd');
                 if (decimal.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
                     return true;
             }
@@ -2599,6 +2609,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case short s: value = s; return true;
                 case byte b: value = b; return true;
                 case sbyte sb: value = sb; return true;
+                case double dbl: value = (decimal)dbl; return true;
+                case float fl: value = (decimal)fl; return true;
                 case decimal d: value = d; return true;
             }
 
@@ -7102,6 +7114,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
             foreach (var member in node.Members)
             {
                 var memberName = $"{node.Name}.{member.Name}";
+                if (member.Value is LiteralExpressionNode { Value: { } literal })
+                    _userEnumMemberValues[memberName] = literal;
                 if (_currentScope.Resolve(memberName) == null)
                 {
                     _currentScope.Define(new Symbol(
@@ -13213,6 +13227,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 {
                     SetNodeSymbol(node, member);
                     SetNodeType(node, enumSymbol.Type);
+                    if (_userEnumMemberValues.TryGetValue(qualified, out var value))
+                        _userEnumConstants[node] = (value, enumSymbol.Type);
                     return;
                 }
             }
