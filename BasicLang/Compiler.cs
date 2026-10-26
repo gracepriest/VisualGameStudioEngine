@@ -430,6 +430,10 @@ namespace BasicLang.Compiler
                 }
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
+                // A program class must not silently shadow a portable-library class.
+                CheckPortableLibraryNameCollisions(projectUnits, result);
+                if (result.HasErrors) return FinalizeResult(result, startTime);
+
                 // Phase 2: compile library-like units (.mod/.cls) before entry
                 // files (.bas/.bl) so their full-fidelity exported symbols
                 // exist when an entry file that uses them is analyzed. Symbol
@@ -593,8 +597,22 @@ namespace BasicLang.Compiler
 
         internal static bool HasPortableNamespaceReferenceText(string source)
         {
-            return source.Contains("System.Windows.Forms", StringComparison.Ordinal)
-                || source.Contains("System.Drawing", StringComparison.Ordinal);
+            var tokens = new Lexer(source).Tokenize();
+            for (var i = 0; i + 4 < tokens.Count; i++)
+            {
+                if (tokens[i].Type != TokenType.Identifier ||
+                    !string.Equals(tokens[i].Lexeme, "System", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (tokens[i + 1].Type != TokenType.Dot ||
+                    tokens[i + 2].Type != TokenType.Identifier ||
+                    tokens[i + 3].Type != TokenType.Dot ||
+                    tokens[i + 4].Type != TokenType.Identifier)
+                    continue;
+                if (string.Equals(tokens[i + 2].Lexeme, "Windows", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(tokens[i + 2].Lexeme, "Drawing", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         public static string DomDeclarationsPath =>
@@ -623,6 +641,62 @@ namespace BasicLang.Compiler
         /// <summary>
         /// Parse a file and collect its imports
         /// </summary>
+        private static void CheckPortableLibraryNameCollisions(
+            IReadOnlyList<CompilationUnit> units, CompilationResult result)
+        {
+            var libraryDirectory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            static bool IsLibraryUnit(CompilationUnit unit, string directory) =>
+                Path.GetFullPath(unit.FilePath).StartsWith(directory, StringComparison.OrdinalIgnoreCase);
+
+            if (!units.Any(u => IsLibraryUnit(u, libraryDirectory))) return;
+
+            var libraryClasses = new Dictionary<string, (string FullName, string SimpleName)>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var unit in units.Where(u => IsLibraryUnit(u, libraryDirectory)))
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                    libraryClasses[cls.SimpleName] = (cls.FullName, cls.SimpleName);
+
+            foreach (var unit in units.Where(u => !IsLibraryUnit(u, libraryDirectory)))
+            {
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                {
+                    if (!libraryClasses.TryGetValue(cls.SimpleName, out var libraryClass)) continue;
+                    result.AllErrors.Add(new SemanticError(
+                        $"PortableLibraryNameCollision: program class '{cls.SimpleName}' collides with " +
+                        $"the portable library's '{libraryClass.FullName}'. Rename the program class.",
+                        cls.Line, cls.Column));
+                }
+            }
+        }
+
+        private static IEnumerable<(string FullName, string SimpleName, int Line, int Column)>
+            EnumerateClasses(IEnumerable<ASTNode> nodes, string prefix)
+        {
+            if (nodes == null) yield break;
+            foreach (var node in nodes)
+            {
+                switch (node)
+                {
+                    case NamespaceNode ns:
+                        var namespacePrefix = string.IsNullOrEmpty(prefix) ? ns.Name : prefix + "." + ns.Name;
+                        foreach (var nested in EnumerateClasses(ns.Members, namespacePrefix)) yield return nested;
+                        break;
+                    case ModuleNode module:
+                        foreach (var nested in EnumerateClasses(module.Members, prefix)) yield return nested;
+                        break;
+                    case ClassNode cls:
+                        var fullName = string.IsNullOrEmpty(prefix) ? cls.Name : prefix + "." + cls.Name;
+                        yield return (fullName, cls.Name, cls.Line, cls.Column);
+                        foreach (var nested in EnumerateClasses(cls.Members, fullName)) yield return nested;
+                        break;
+                }
+            }
+        }
+
         private void ParseAndCollectImports(CompilationUnit unit, CompilationResult result)
         {
             if (unit.Status != CompilationStatus.Pending)
@@ -1079,6 +1153,16 @@ namespace BasicLang.Compiler
                     {
                         combined.Classes[cls.Key] = cls.Value;
                     }
+                }
+
+                // A namespaced class is also addressable by its simple name: the portable
+                // library's Color/Point/Font are declared under System.Drawing and used
+                // unqualified through `Using System.Drawing`.
+                foreach (var key in combined.Classes.Keys.Where(k => k.Contains('.', StringComparison.Ordinal)).ToList())
+                {
+                    var simple = key.Substring(key.LastIndexOf('.') + 1);
+                    if (!combined.Classes.ContainsKey(simple))
+                        combined.Classes[simple] = combined.Classes[key];
                 }
 
                 // Add interfaces

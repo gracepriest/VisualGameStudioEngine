@@ -2588,12 +2588,12 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "mid" when args.Count == 2:
                     result = $"{Recv()}.substr({args[1]} - 1)"; return true;
 
-                case "left" when args.Count == 2:
+                case "left" or "strings.left" when args.Count == 2:
                     result = $"{Recv()}.substring(0, {args[1]})"; return true;
 
                 // n == 0 must yield "", which this does; `.slice(-n)` would return the WHOLE
                 // string for 0 because -0 === 0.
-                case "right" when args.Count == 2:
+                case "right" or "strings.right" when args.Count == 2:
                     result = $"{Recv()}.substring({Recv()}.length - ({args[1]}))"; return true;
 
                 // 1-BASED, and 0 (not JS's -1) means "not found".
@@ -2611,6 +2611,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     result = $"String.fromCharCode({args[0]})"; return true;
                 case "asc" or "ascw" when args.Count == 1:
                     result = $"{Recv()}.charCodeAt(0)"; return true;
+
+                // Decimal is a JS number here; Parse is the one static use the portable library needs.
+                case "decimal.parse" when args.Count == 1:
+                    result = $"parseFloat({args[0]})"; return true;
 
                 default:
                     return false;

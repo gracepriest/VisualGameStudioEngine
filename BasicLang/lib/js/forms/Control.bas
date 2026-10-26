@@ -602,8 +602,8 @@ Namespace System.Windows.Forms
             For Each entry As String In _vgsDecls
                 If Strings.Left(entry, prefix.Length) = prefix Then
                     Dim value As String = Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
-                    If CStr(Mid(value, value.Length, 1)) = ";" Then value = CStr(Strings.Left(value, value.Length - 1))
-                    If Strings.Left(value, 1) = " " Then value = CStr(Mid(value, 2, value.Length - 1))
+                    If CStr(Mid(value, value.Length, 1)) = ";" Then value = CStr(Mid(value, 1, value.Length - 1))
+                    If Mid(value, 1, 1) = " " Then value = CStr(Mid(value, 2, value.Length - 1))
                     Return value
                 End If
             Next

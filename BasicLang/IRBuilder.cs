@@ -7686,8 +7686,12 @@ namespace BasicLang.Compiler.IR
                     // a keyword can name no variable. IsKnownNetStaticType knows `String` but not
                     // `Integer`, which sent `Integer.Parse(s)` down the INSTANCE arm as a call on a
                     // variable named Integer.
-                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
-                        || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name);
+                    // `Me` is the current instance, never a static type. Without this guard the
+                    // PascalCase .NET-name heuristic below routes `Me.VgsElementFor(...)` into the
+                    // fused static arm and emits a free call named "Me.VgsElementFor".
+                    bool isNetType = !string.Equals(objVar.Name, "Me", StringComparison.OrdinalIgnoreCase)
+                        && (objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
+                            || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name));
 
                     // A declared name is never a type name, so the guard applies to BOTH
                     // sources of type-ness, not just the class-name one. It used to read
