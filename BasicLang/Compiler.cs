@@ -551,11 +551,24 @@ namespace BasicLang.Compiler
             var directory = WebFormsLibraryDirectory;
             if (!Directory.Exists(directory)) return files;
 
+            // Foundational library files must compile before the kinds that consume their enums and
+            // base types. Master's analyzer does not hoist sibling enums across namespace blocks.
+            var foundation = new[]
+            {
+                "Enums.bas", "Drawing.bas", "EventArgsTypes.bas", "Core.bas",
+                "Control.bas", "ControlStripItem.bas", "ControlStrip.bas"
+            };
             var libraryFiles = Directory
                 .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
                 .Where(f => string.Equals(Path.GetExtension(f), ".bas", StringComparison.OrdinalIgnoreCase)
                          || string.Equals(Path.GetExtension(f), ".bli", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+                .OrderBy(f =>
+                {
+                    var name = Path.GetFileName(f);
+                    var index = Array.FindIndex(foundation, x => string.Equals(x, name, StringComparison.OrdinalIgnoreCase));
+                    return index < 0 ? foundation.Length : index;
+                })
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase);
 
             foreach (var libraryFile in libraryFiles)
             {
@@ -950,6 +963,36 @@ namespace BasicLang.Compiler
                         unit.ExportedSymbols.Add(symbol);
                     }
                 }
+            }
+
+            // Namespace scopes: enums declared inside `Namespace System.Windows.Forms` are Type
+            // symbols in CHILD scopes, not the global one. Export them and their qualified member
+            // constants so `DockStyle` / `DockStyle.Top` resolve across library files.
+            foreach (var childScope in AllChildScopes(scope))
+            {
+                foreach (var symbol in childScope.Symbols.Values)
+                {
+                    if (symbol.IsSiblingSignature) continue;
+                    if (symbol.Kind == SymbolKind.Type ||
+                        symbol.Kind == SymbolKind.Class ||
+                        symbol.Kind == SymbolKind.Structure ||
+                        symbol.Kind == SymbolKind.Interface ||
+                        (symbol.Kind == SymbolKind.Constant && symbol.Name.Contains('.', StringComparison.Ordinal)))
+                    {
+                        if (symbol.Access == AST.AccessModifier.Public || symbol.Kind == SymbolKind.Type)
+                            unit.ExportedSymbols.Add(symbol);
+                    }
+                }
+            }
+        }
+
+        private static IEnumerable<Scope> AllChildScopes(Scope scope)
+        {
+            foreach (var child in scope.Children)
+            {
+                yield return child;
+                foreach (var nested in AllChildScopes(child))
+                    yield return nested;
             }
         }
 

@@ -722,6 +722,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                             pendingClasses.Add((classNode, classType));
                         }
                     }
+                    else if (decl is EnumNode enumNode)
+                    {
+                        RegisterSiblingEnumShell(enumNode, unit);
+                    }
                 }
             }
 
@@ -840,8 +844,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     continue;
                 }
 
-                yield return decl;
+                foreach (var node in FlattenNamespace(decl))
+                    yield return node;
             }
+        }
+
+        /// <summary>Namespace blocks are transparent for sibling signatures: their classes and enums
+        /// are visible exactly as a top-level one is.</summary>
+        private static IEnumerable<ASTNode> FlattenNamespace(ASTNode node)
+        {
+            if (node is NamespaceNode ns)
+            {
+                foreach (var child in ns.Members)
+                    foreach (var nested in FlattenNamespace(child))
+                        yield return nested;
+                yield break;
+            }
+
+            yield return node;
         }
 
         /// <summary>
@@ -850,6 +870,37 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// second pass. Returns null when the name is already taken (stdlib,
         /// a completed sibling, or an earlier pending sibling wins).
         /// </summary>
+        private void RegisterSiblingEnumShell(EnumNode enumNode, CompilationUnit unit)
+        {
+            if (string.IsNullOrEmpty(enumNode.Name)) return;
+            if (GlobalScope.Resolve(enumNode.Name) != null) return;
+
+            var enumType = _typeManager.GetType(enumNode.Name)
+                           ?? _typeManager.DefineType(enumNode.Name, TypeKind.Enum);
+            if (enumType == null) return;
+
+            GlobalScope.Define(new Symbol(enumNode.Name, SymbolKind.Type, enumType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName
+            });
+
+            foreach (var member in enumNode.Members)
+            {
+                var name = enumNode.Name + "." + member.Name;
+                if (GlobalScope.Resolve(name) == null)
+                {
+                    GlobalScope.Define(new Symbol(name, SymbolKind.Constant, enumType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName
+                    });
+                }
+            }
+        }
+
         private TypeInfo RegisterSiblingClassShell(ClassNode classNode, CompilationUnit unit)
         {
             if (string.IsNullOrEmpty(classNode.Name)) return null;
@@ -7027,7 +7078,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(EnumNode node)
         {
-            var enumType = _typeManager.DefineType(node.Name, TypeKind.Enum);
+            var enumType = _typeManager.GetType(node.Name)
+                           ?? _typeManager.DefineType(node.Name, TypeKind.Enum);
             if (enumType == null)
             {
                 Error($"Enum '{node.Name}' is already defined", node.Line, node.Column);
@@ -7035,22 +7087,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             var symbol = new Symbol(node.Name, SymbolKind.Type, enumType, node.Line, node.Column);
-            if (!_currentScope.Define(symbol))
+            if (_currentScope.Resolve(node.Name) == null)
             {
-                Error($"Symbol '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                _currentScope.Define(symbol);
             }
 
             // Define enum members as constants in current scope
             foreach (var member in node.Members)
             {
-                var memberSymbol = new Symbol(
-                    $"{node.Name}.{member.Name}",
-                    SymbolKind.Constant,
-                    enumType,
-                    member.Line,
-                    member.Column
-                );
-                _currentScope.Define(memberSymbol);
+                var memberName = $"{node.Name}.{member.Name}";
+                if (_currentScope.Resolve(memberName) == null)
+                {
+                    _currentScope.Define(new Symbol(
+                        memberName,
+                        SymbolKind.Constant,
+                        enumType,
+                        member.Line,
+                        member.Column));
+                }
 
                 // If member has explicit value, analyze it
                 if (member.Value != null)
@@ -13140,6 +13194,23 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void BindMemberAccess(MemberAccessExpressionNode node)
         {
+            // A USER ENUM member: `DockStyle.Top`, `Keys.Enter`, `MouseButtons.Left`. The enum
+            // visitor defines the member as a `Type.Member` constant in the declaring scope; a
+            // member access must find that constant and present the enum type, or every library
+            // use of an enum member types as Object.
+            if (node.Object is IdentifierExpressionNode enumId
+                && ResolveTypeSymbol(enumId.Name) is { Kind: SymbolKind.Type, Type.Kind: TypeKind.Enum } enumSymbol)
+            {
+                var qualified = enumId.Name + "." + node.MemberName;
+                var member = _currentScope?.Resolve(qualified) ?? GlobalScope.Resolve(qualified);
+                if (member != null)
+                {
+                    SetNodeSymbol(node, member);
+                    SetNodeType(node, enumSymbol.Type);
+                    return;
+                }
+            }
+
             // First, check if this is a module reference (ModuleName.Symbol).
             // Skip this when the identifier is a local variable/parameter: a
             // variable named like a module/file (e.g. "player" vs class "Player"
