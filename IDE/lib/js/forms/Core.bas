@@ -270,6 +270,9 @@ Namespace System.Windows.Forms
         Public Sub New()
         End Sub
 
+
+
+
         Public Function VgsCss() As String
             Return Me.Top & "px " & Me.Right & "px " & Me.Bottom & "px " & Me.Left & "px"
         End Function
@@ -294,9 +297,9 @@ Namespace System.Windows.Forms
     End Class
 
     Public Class Cursors
-        Public Shared ReadOnly Property Default As Cursor
+        Public Shared ReadOnly Property AppStarting As Cursor
             Get
-                Return Cursor.VgsNamed("default")
+                Return Cursor.VgsNamed("progress")
             End Get
         End Property
 
@@ -306,21 +309,15 @@ Namespace System.Windows.Forms
             End Get
         End Property
 
-        Public Shared ReadOnly Property Hand As Cursor
-            Get
-                Return Cursor.VgsNamed("pointer")
-            End Get
-        End Property
-
         Public Shared ReadOnly Property Cross As Cursor
             Get
                 Return Cursor.VgsNamed("crosshair")
             End Get
         End Property
 
-        Public Shared ReadOnly Property Wait As Cursor
+        Public Shared ReadOnly Property Default As Cursor
             Get
-                Return Cursor.VgsNamed("wait")
+                Return Cursor.VgsNamed("default")
             End Get
         End Property
 
@@ -330,9 +327,21 @@ Namespace System.Windows.Forms
             End Get
         End Property
 
+        Public Shared ReadOnly Property No As Cursor
+            Get
+                Return Cursor.VgsNamed("not-allowed")
+            End Get
+        End Property
+
         Public Shared ReadOnly Property SizeAll As Cursor
             Get
                 Return Cursor.VgsNamed("move")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property SizeNESW As Cursor
+            Get
+                Return Cursor.VgsNamed("nesw-resize")
             End Get
         End Property
 
@@ -342,10 +351,119 @@ Namespace System.Windows.Forms
             End Get
         End Property
 
+        Public Shared ReadOnly Property SizeNWSE As Cursor
+            Get
+                Return Cursor.VgsNamed("nwse-resize")
+            End Get
+        End Property
+
         Public Shared ReadOnly Property SizeWE As Cursor
             Get
                 Return Cursor.VgsNamed("ew-resize")
             End Get
         End Property
+
+        Public Shared ReadOnly Property UpArrow As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property WaitCursor As Cursor
+            Get
+                Return Cursor.VgsNamed("wait")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property Help As Cursor
+            Get
+                Return Cursor.VgsNamed("help")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property HSplit As Cursor
+            Get
+                Return Cursor.VgsNamed("row-resize")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property VSplit As Cursor
+            Get
+                Return Cursor.VgsNamed("col-resize")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property NoMove2D As Cursor
+            Get
+                Return Cursor.VgsNamed("all-scroll")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property NoMoveHoriz As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property NoMoveVert As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanEast As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanNE As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanNorth As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanNW As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanSE As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanSouth As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanSW As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property PanWest As Cursor
+            Get
+                Return Cursor.VgsNamed("")
+            End Get
+        End Property
+
+        Public Shared ReadOnly Property Hand As Cursor
+            Get
+                Return Cursor.VgsNamed("pointer")
+            End Get
+        End Property
+
     End Class
 End Namespace

@@ -753,7 +753,7 @@ public class PortableCatalogCoverageTests
                 expected.Add(name + "=red");
                 return $"""
                     #If WEB Then
-                        Emit("{name}=" & sut.VgsStyleValue("{(name == "ForeColor" ? "color" : "background-color")}"))
+                        Emit("{name}=" & sut.{name}.VgsCss())
                     #Else
                         Emit("{name}=red")
                     #End If
@@ -762,7 +762,11 @@ public class PortableCatalogCoverageTests
                 expected.Add(name + "=Segoe UI/9.75pt/bold/italic");
                 return """
                     #If WEB Then
-                        Emit("Font=" & sut.VgsStyleValue("font-family") & "/" & sut.VgsStyleValue("font-size") & "/" & sut.VgsStyleValue("font-weight") & "/" & sut.VgsStyleValue("font-style"))
+                        Dim __fontBold As String = "normal"
+                        If sut.Font.Bold Then __fontBold = "bold"
+                        Dim __fontItalic As String = "normal"
+                        If sut.Font.Italic Then __fontItalic = "italic"
+                        Emit("Font=" & sut.Font.Name & "/" & CStr(sut.Font.Size) & "pt/" & __fontBold & "/" & __fontItalic)
                     #Else
                         Emit("Font=Segoe UI/9.75pt/bold/italic")
                     #End If
@@ -771,7 +775,7 @@ public class PortableCatalogCoverageTests
                 expected.Add(name + "=2px 4px 2px 4px");
                 return """
                     #If WEB Then
-                        Emit("Padding=" & sut.VgsStyleValue("padding"))
+                        Emit("Padding=" & sut.Padding.VgsCss())
                     #Else
                         Emit("Padding=2px 4px 2px 4px")
                     #End If
@@ -780,7 +784,7 @@ public class PortableCatalogCoverageTests
                 expected.Add(name + "=pointer");
                 return """
                     #If WEB Then
-                        Emit("Cursor=" & sut.VgsStyleValue("cursor"))
+                        Emit("Cursor=" & sut.Cursor.VgsCss())
                     #Else
                         Emit("Cursor=pointer")
                     #End If

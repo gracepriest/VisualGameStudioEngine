@@ -119,7 +119,7 @@ public class SolutionExplorerNewFormTests
     }
 
     [Test]
-    public async Task AddWebFormPortableCommand_WritesAPortableWebPairThroughTheGeneratedCommand()
+    public async Task AddNewFormCommand_WritesAPortableWebPairThroughTheGeneratedCommand()
     {
         _project.UseWindowsForms = null;
         AnswerThePrompt("PortableLogin");
@@ -127,7 +127,7 @@ public class SolutionExplorerNewFormTests
         var opened = new List<string>();
         _vm.FileOpenRequested += (_, path) => opened.Add(path);
 
-        await _vm.AddWebFormPortableCommand.ExecuteAsync(null);
+        await _vm.AddNewFormCommand.ExecuteAsync(null);
 
         var codePath = Path.Combine(_dir, "PortableLogin.bas");
         Assert.Multiple(() =>
@@ -224,8 +224,8 @@ public class SolutionExplorerNewFormTests
 
         // Task 30's opt-in is also a reachability gate: a generated command with no binding is
         // exactly as dead as the unattributed method once was.
-        Assert.That(text, Does.Contain("AddWebFormPortableCommand"),
-            "the Add submenu must bind AddWebFormPortableCommand.");
+        Assert.That(text, Does.Contain("AddNewFormCommand"),
+            "the Add submenu must bind AddNewFormCommand.");
         Assert.That(Regex.IsMatch(text, "Header=\"New Web Form \\(portable\\)"), Is.True,
             "the portable opt-in must be labelled distinctly from the ordinary New Form.");
     }

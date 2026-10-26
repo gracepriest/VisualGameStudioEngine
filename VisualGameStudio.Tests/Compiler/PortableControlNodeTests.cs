@@ -828,8 +828,8 @@ public class PortableControlNodeTests
             """);
 
         Assert.That(result.Ok, Is.True, result.Errors);
-        var rule = "color: red;background-color: black;font-family: Arial;font-size: 12pt;" +
-            "font-weight: bold;font-style: normal;cursor: pointer;padding: 1px 2px 3px 4px;";
+        var rule = "color: red;background-color: black;font-family: \"Arial\";font-size: 12pt;" +
+            "font-weight: bold;cursor: pointer;padding: 1px 2px 3px 4px;";
         Assert.That(result.Output, Is.EqualTo(
             rule + "\n" + "#btn{" + rule + "}\nvgs-live\nhidden=True\nfocused=True"));
     }

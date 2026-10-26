@@ -18,6 +18,11 @@ Namespace System.Windows.Forms
         Private _onKeyDown As Action(Of DomEvent)
         Private _onKeyUp As Action(Of DomEvent)
         Private _onFocusIn As Action(Of DomEvent)
+        Private _foreColor As Color
+        Private _backColor As Color
+        Private _font As Font
+        Private _cursor As Cursor
+        Private _padding As Padding
 
         ' Task 33: ONE page stylesheet, one #id rule per touched control (spec 5.8).
         ' Entries are "id|name: value;" so a re-set property replaces in place and
@@ -28,6 +33,11 @@ Namespace System.Windows.Forms
 
         Public Sub New()
             _name = ""
+            _foreColor = New Color()
+            _backColor = New Color()
+            _font = New Font()
+            _cursor = New Cursor()
+            _padding = New Padding()
             _controls = New ControlCollection(Me)
         End Sub
 
@@ -256,60 +266,71 @@ Namespace System.Windows.Forms
 
         Public Overridable Property ForeColor As Color
             Get
-                Return New Color()
+                Return _foreColor
             End Get
             Set(value As Color)
+                _foreColor = value
                 Me.VgsSetStyle("color", value.VgsCss())
             End Set
         End Property
-
         Public Overridable Property BackColor As Color
             Get
-                Return New Color()
+                Return _backColor
             End Get
             Set(value As Color)
+                _backColor = value
                 Me.VgsSetStyle("background-color", value.VgsCss())
             End Set
         End Property
-
         Public Overridable Property Font As Font
             Get
-                Return New Font()
+                Return _font
             End Get
             Set(value As Font)
-                Me.VgsSetStyle("font-family", value.Name)
-                Me.VgsSetStyle("font-size", value.Size & "pt")
+                _font = value
+                Me.VgsSetStyle("font-family", Chr(34) & value.Name & Chr(34))
+                Me.VgsSetStyle("font-size", CStr(value.Size) & "pt")
                 If value.Bold Then
                     Me.VgsSetStyle("font-weight", "bold")
                 Else
-                    Me.VgsSetStyle("font-weight", "normal")
+                    Me.VgsRemoveDeclaration(Me.VgsElementFor("style").id, "font-weight")
                 End If
                 If value.Italic Then
                     Me.VgsSetStyle("font-style", "italic")
                 Else
-                    Me.VgsSetStyle("font-style", "normal")
+                    Me.VgsRemoveDeclaration(Me.VgsElementFor("style").id, "font-style")
                 End If
+                Dim decoration As String = ""
+                If value.Underline Then decoration = "underline"
+                If value.Strikeout Then
+                    If decoration = "" Then decoration = "line-through" Else decoration = decoration & " line-through"
+                End If
+                If decoration = "" Then
+                    Me.VgsRemoveDeclaration(Me.VgsElementFor("style").id, "text-decoration")
+                Else
+                    Me.VgsSetStyle("text-decoration", decoration)
+                End If
+                Me.VgsFlushStyles()
             End Set
         End Property
-
         Public Overridable Property Cursor As Cursor
             Get
-                Return New Cursor()
+                Return _cursor
             End Get
             Set(value As Cursor)
+                _cursor = value
                 Me.VgsSetStyle("cursor", value.VgsCss())
             End Set
         End Property
-
         Public Overridable Property Padding As Padding
             Get
-                Return New Padding()
+                Return _padding
             End Get
             Set(value As Padding)
+                _padding = value
                 Me.VgsSetStyle("padding", value.VgsCss())
             End Set
         End Property
-
         Public Sub Show()
             Me.Visible = True
         End Sub

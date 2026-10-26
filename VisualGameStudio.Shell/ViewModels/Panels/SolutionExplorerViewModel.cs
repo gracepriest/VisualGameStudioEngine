@@ -1298,19 +1298,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// the next load.</para>
     /// </summary>
     [RelayCommand]
-    private async Task AddNewFormAsync() => await AddFormAsync(portable: false);
+    private async Task AddNewFormAsync() => await AddFormAsync(portable: true);
 
-    /// <summary>
-    /// "Add ▸ New Web Form (portable)…" — the Task 30 opt-in command. It is deliberately a separate
-    /// command in the same Add submenu: the ordinary command keeps each project's target, while this
-    /// one always writes a <c>.blwebform</c> whose markers say <c>style="portable"</c>.
-    ///
-    /// <para>⛔ Keep the attribute adjacent to this method. The same toolkit trap that made
-    /// <see cref="AddNewFormAsync"/> unreachable applies here: a doc comment between the attribute
-    /// and the declaration makes the generated command bind to the wrong method.</para>
-    /// </summary>
-    [RelayCommand]
-    private async Task AddWebFormPortableAsync() => await AddFormAsync(portable: true);
 
     private async Task AddFormAsync(bool portable)
     {

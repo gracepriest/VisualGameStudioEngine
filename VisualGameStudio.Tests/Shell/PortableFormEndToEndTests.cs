@@ -226,10 +226,10 @@ public class PortableFormEndToEndTests
             Assert.That(project.TargetBackend, Is.EqualTo(TargetBackend.JavaScript));
 
             var main = provider.GetRequiredService<MainWindowViewModel>();
-            Assert.That(main.SolutionExplorer.AddWebFormPortableCommand, Is.Not.Null,
+            Assert.That(main.SolutionExplorer.AddNewFormCommand, Is.Not.Null,
                 "the generated portable form command must exist on the real solution explorer");
 
-            await main.SolutionExplorer.AddWebFormPortableCommand.ExecuteAsync(null);
+            await main.SolutionExplorer.AddNewFormCommand.ExecuteAsync(null);
 
             var formPath = Path.Combine(project.ProjectDirectory, FormName + ".blwebform");
             var codePath = BasicLang.Forms.FormCodeBehind.PathFor(formPath);
