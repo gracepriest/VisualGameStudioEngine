@@ -871,7 +871,6 @@ namespace BasicLang.Compiler
                 // surface through AllErrors. HasErrors filters by severity, so warnings
                 // here cannot fail the build.
                 result.AllErrors.AddRange(analyzer.Errors);
-
                 if (!success)
                 {
                     unit.Status = CompilationStatus.Error;
@@ -938,8 +937,7 @@ namespace BasicLang.Compiler
                     symbol.Kind == SymbolKind.Subroutine ||
                     symbol.Kind == SymbolKind.Class)
                 {
-                    unit.ExportedSymbols.Add(symbol);
-                }
+                    unit.ExportedSymbols.Add(symbol);                }
             }
 
             // ⛔ A Module block's variables and constants live in the Module's OWN scope, a child

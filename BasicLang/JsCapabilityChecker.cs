@@ -301,8 +301,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 ["Int64"] = (LongCode, LongWhy),     // .NET spelling of the same type
                 ["ULong"] = (LongCode, LongWhy),     // 64-bit unsigned: identical 2^53 defect
                 ["UInt64"] = (LongCode, LongWhy),
-                ["Char"] = ("BL7004",
-                    "JavaScript has no character type. Use String."),
             };
 
         private const string LongCode = "BL7003";
@@ -403,10 +401,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                // Erased numerics and primitives. Long/ULong/Char are absent on purpose —
+                // Erased numerics and primitives. Long/ULong are absent on purpose; Char is a one-character String on JS —
                 // they have their own diagnostics and are rejected before this set is read.
                 "Integer", "Single", "Double", "Boolean", "String", "Byte", "SByte",
-                "Short", "UShort", "UInteger", "Void",
+                "Short", "UShort", "UInteger", "Void", "Char", "Decimal",
 
                 // .NET spellings of the same primitives. An Enum's UnderlyingType arrives as
                 // "Int32", not "Integer", so omitting these rejects every enum in the program.

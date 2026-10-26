@@ -680,6 +680,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     };
 
                     GlobalScope.Define(importedSymbol);
+                    if (importedSymbol.Type != null &&
+                        (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
+                         symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type))
+                    {
+                        _typeManager.ImportType(importedSymbol.Type);
+                    }
                 }
             }
 

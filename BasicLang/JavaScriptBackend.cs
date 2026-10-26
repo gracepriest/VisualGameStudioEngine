@@ -2389,7 +2389,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // that channel, and it is not theoretical: before it existed,
                 // Console.WriteLine("a"c) emitted `console.log(a);` — a bare undeclared
                 // identifier, a ReferenceError in the browser from a green build.
-                case char: throw JsCapabilityChecker.BannedConstantRejection("Char", v);
+                case char c: return "\"" + EscapeJsString(c.ToString()) + "\"";
                 case long: throw JsCapabilityChecker.BannedConstantRejection("Long", v);
                 case ulong: throw JsCapabilityChecker.BannedConstantRejection("ULong", v);
 
@@ -4249,6 +4249,20 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             // Widening to floating point, and Single↔Double: the double already holds it.
             if (target.IsFloatingPoint() && (source.IsIntegral() || source.IsFloatingPoint()))
+            {
+                rendered = Expr(cast.Value);
+                return true;
+            }
+
+            // Enums are their underlying numeric value on JS. CType(Integer, SomeEnum) and
+            // CType(SomeEnum, Integer) are therefore the value itself.
+            if (target.Kind == TypeKind.Enum && (source.IsIntegral() || source.Kind == TypeKind.Enum))
+            {
+                rendered = Expr(cast.Value);
+                return true;
+            }
+
+            if (source.Kind == TypeKind.Enum && target.IsIntegral())
             {
                 rendered = Expr(cast.Value);
                 return true;
