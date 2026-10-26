@@ -78,12 +78,12 @@ public class SolutionExplorerNewFormTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(File.Exists(Path.Combine(_dir, "LoginForm.blform")), Is.True,
-                "the .blform document must be written to disk");
+            Assert.That(File.Exists(Path.Combine(_dir, "LoginForm.blwebform")), Is.True,
+                "the portable web document must be written to disk");
             Assert.That(File.Exists(Path.Combine(_dir, "LoginForm.bas")), Is.True,
                 "the code-behind must be written to disk");
 
-            Assert.That(_project.Items.Any(i => i.Include == "LoginForm.blform"), Is.True,
+            Assert.That(_project.Items.Any(i => i.Include == "LoginForm.blwebform"), Is.True,
                 "the document must be listed in the project, or the build cannot find it");
             Assert.That(_project.Items.Any(i => i.Include == "LoginForm.bas"), Is.True,
                 "the code-behind must be listed in the project");
@@ -94,7 +94,7 @@ public class SolutionExplorerNewFormTests
             // anywhere: precisely the "I can't see the form designer" report. Raising both would
             // not fix it either, because the open handler is `async void` and the two reads race
             // for the active tab.
-            Assert.That(opened, Is.EqualTo(new[] { Path.Combine(_dir, "LoginForm.blform") }),
+            Assert.That(opened, Is.EqualTo(new[] { Path.Combine(_dir, "LoginForm.blwebform") }),
                 "the form document must be the file that opens");
         });
 

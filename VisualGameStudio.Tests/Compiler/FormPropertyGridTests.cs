@@ -829,7 +829,9 @@ public class FormPropertyGridTests
         Assert.Multiple(() =>
         {
             Assert.That(web.Items.Select(i => i.Kind),
-                Is.EquivalentTo(FormControlCatalog.For(FormTarget.Web).Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.All.Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
+            Assert.That(web.Items.Where(i => !FormControlCatalog.Find(i.Kind)!.SupportsTarget(FormTarget.Web)).All(i => i.DesktopOnly),
+                Is.True, "desktop-only kinds must be badged on the web toolbox");
             Assert.That(winForms.Items.Select(i => i.Kind),
                 Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
         });
