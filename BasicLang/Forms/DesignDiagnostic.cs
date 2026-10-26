@@ -136,6 +136,13 @@ public static class DesignCodes
     /// </summary>
     public const string PlacementRefused = "BL8019";
 
+    /// <summary>A DOM use outside the designer regions, reported by the code conversion.</summary>
+    public const string DomUsage = "BL8036";
+
+    /// <summary>A handler whose signature the code conversion could not rewrite safely.</summary>
+    public const string NonSimpleHandler = "BL8037";
+
+
     /// <summary>
     /// A handler is declared AFTER the designer region that wires it. An <c>AddressOf</c> naming a
     /// later-declared <c>Sub</c> erases its parameter types and then fails to match the event's
