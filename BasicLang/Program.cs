@@ -374,6 +374,7 @@ namespace BasicLang.Compiler.Driver
         {
             var check = false;
             var retarget = false;
+            var convert = false;
             string? outDir = null;
             var paths = new List<string>();
 
@@ -387,6 +388,10 @@ namespace BasicLang.Compiler.Driver
 
                     case "--retarget":
                         retarget = true;
+                        break;
+
+                    case "--convert":
+                        convert = true;
                         break;
 
                     case "--out":
@@ -416,20 +421,24 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
-            // Exactly one of the two verbs.
-            if (check == retarget)
+            // Exactly one verb.
+            var verbs = (check ? 1 : 0) + (retarget ? 1 : 0) + (convert ? 1 : 0);
+            if (verbs != 1)
             {
                 PrintDesignUsage();
                 return 2;
             }
 
-            return check ? DesignCheck(paths, outDir) : DesignRetarget(paths, outDir);
+            if (check) return DesignCheck(paths, outDir);
+            if (retarget) return DesignRetarget(paths, outDir);
+            return DesignConvert(paths);
         }
 
         static void PrintDesignUsage()
         {
             Console.Error.WriteLine("Usage: basiclang design --check <file.bas> [more files...]");
             Console.Error.WriteLine("       basiclang design --retarget <form.blform|form.blwebform> --out <directory>");
+            Console.Error.WriteLine("       basiclang design --convert <form.blwebform>");
         }
 
         static int DesignCheck(List<string> paths, string? outDir)
@@ -602,6 +611,56 @@ namespace BasicLang.Compiler.Driver
             return 0;
         }
 
+        static int DesignConvert(List<string> paths)
+        {
+            if (paths.Count != 1)
+            {
+                Console.Error.WriteLine("design --convert: exactly one .blwebform is required.");
+                return 2;
+            }
+
+            var source = paths[0];
+            if (!File.Exists(source))
+            {
+                Console.Error.WriteLine($"design --convert: file not found: {source}");
+                return 2;
+            }
+
+            var target = BasicLang.Forms.Serialization.FormDocumentReader.TargetOfExtension(source);
+            if (target != BasicLang.Forms.FormTarget.Web)
+            {
+                Console.Error.WriteLine("design --convert: only a web form (.blwebform) can be converted.");
+                return 2;
+            }
+
+            var file = BasicLang.Forms.Serialization.FormDocumentReader.Read(source, File.ReadAllText(source));
+            if (file.IsRefused)
+            {
+                foreach (var finding in file.Diagnostics) Console.WriteLine(finding.Format());
+                Console.WriteLine("design --convert: the form was refused; nothing was written.");
+                return 1;
+            }
+
+            var codePath = BasicLang.Forms.FormCodeBehind.PathFor(source);
+            if (!File.Exists(codePath))
+            {
+                Console.Error.WriteLine($"design --convert: code-behind not found: {codePath}");
+                return 2;
+            }
+
+            var converted = BasicLang.Forms.FormCodeConversion.Convert(file.Model, File.ReadAllText(codePath));
+            var errors = converted.Diagnostics.Where(d => !d.IsWarning).ToList();
+            foreach (var finding in converted.Diagnostics) Console.WriteLine(finding.Format());
+            if (errors.Count > 0)
+            {
+                Console.WriteLine("design --convert: conversion refused; nothing was written.");
+                return 1;
+            }
+
+            File.WriteAllText(codePath, converted.Text);
+            Console.WriteLine($"design --convert: wrote {Path.GetFileName(codePath)}, {converted.Diagnostics.Count} warning(s).");
+            return 0;
+        }
         static void HandleNewCommand(string[] args)
         {
             var templateEngine = new TemplateEngine();
