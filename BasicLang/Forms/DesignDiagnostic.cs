@@ -143,6 +143,17 @@ public static class DesignCodes
     /// controls are positioned by its layout rather than by pixels.</para>
     /// </summary>
     public const string PlacementRefused = "BL8019";
+    /// <summary>A web form mixed DOM markers with portable/WinForms code, so the style is ambiguous.</summary>
+    public const string MixedCodeStyle = "BL8039";
+
+    /// <summary>A DOM use outside the designer regions, reported by code conversion.</summary>
+    public const string DomUsage = "BL8040";
+
+    /// <summary>A handler whose signature the code conversion could not rewrite safely.</summary>
+    public const string NonSimpleHandler = "BL8041";
+
+    /// <summary>A web form uses a WinForms-only control, so its page cannot be built.</summary>
+    public const string DesktopOnlyKind = "BL8042";
 
     /// <summary>
     /// A handler is declared AFTER the designer region that wires it. An <c>AddressOf</c> naming a

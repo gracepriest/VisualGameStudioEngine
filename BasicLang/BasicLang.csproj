@@ -41,6 +41,9 @@
          beside BasicLang.exe as lib/js/dom-core.bli; BasicCompiler.DomDeclarationsPath
          probes exactly that path. -->
     <None Include="lib\js\dom-core.bli" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The portable WinForms-shaped library. One glob so a new kind cannot be shipped in
+         source but missing beside the compiler. -->
+    <None Include="lib\js\forms\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

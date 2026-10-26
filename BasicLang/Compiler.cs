@@ -351,7 +351,7 @@ namespace BasicLang.Compiler
 
             try
             {
-                var files = WithJavaScriptDeclarations(sourceFiles)
+                var files = WithWebFormsLibrary(WithJavaScriptDeclarations(sourceFiles))
                     .Where(File.Exists)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -535,6 +535,55 @@ namespace BasicLang.Compiler
         /// them — and a program reaches the runtime objects through the hatch:
         /// <c>Dim d As Document = ::document</c>.
         /// </summary>
+        /// <summary>
+        /// The shipped portable Forms library: plain BasicLang sources beside the compiler.
+        /// Included only for a JavaScript build whose user sources mention the Forms/Drawing namespaces.
+        /// </summary>
+        public static string WebFormsLibraryDirectory =>
+            Path.Combine(AppContext.BaseDirectory, "lib", "js", "forms");
+
+        private List<string> WithWebFormsLibrary(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles.ToList();
+            if (!IsJavaScriptTarget) return files;
+            if (!files.Any(HasPortableNamespaceReference)) return files;
+
+            var directory = WebFormsLibraryDirectory;
+            if (!Directory.Exists(directory)) return files;
+
+            var libraryFiles = Directory
+                .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Where(f => string.Equals(Path.GetExtension(f), ".bas", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(Path.GetExtension(f), ".bli", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var libraryFile in libraryFiles)
+            {
+                if (!files.Any(f => string.Equals(f, libraryFile, StringComparison.OrdinalIgnoreCase)))
+                    files.Add(libraryFile);
+            }
+            return files;
+        }
+
+        /// <summary>Token-level trigger for the portable library; shared with the LSP.</summary>
+        internal static bool HasPortableNamespaceReference(string filePath)
+        {
+            try
+            {
+                return HasPortableNamespaceReferenceText(File.ReadAllText(filePath));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        internal static bool HasPortableNamespaceReferenceText(string source)
+        {
+            return source.Contains("System.Windows.Forms", StringComparison.Ordinal)
+                || source.Contains("System.Drawing", StringComparison.Ordinal);
+        }
+
         public static string DomDeclarationsPath =>
             Path.Combine(AppContext.BaseDirectory, "lib", "js", "dom-core.bli");
 

@@ -408,6 +408,20 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public string HeaderKind => IsMultiSelection ? string.Empty : SelectedControl?.Kind
         ?? (_file != null ? _file.Model.RootElementName : string.Empty);
 
+    /// <summary>"desktop" for a WinForms-only kind on a web form; empty otherwise.</summary>
+    public string HeaderBadge
+    {
+        get
+        {
+            if (IsMultiSelection || SelectedControl?.Definition is not { } definition) return string.Empty;
+            return _file?.Model.Target == FormTarget.Web && !definition.SupportsTarget(FormTarget.Web)
+                ? "desktop"
+                : string.Empty;
+        }
+    }
+
+    public bool HasHeaderBadge => HeaderBadge.Length > 0;
+
     /// <summary>True when there is nothing to show, so the view can say so rather than look broken.</summary>
     public bool IsEmpty => Rows.Count == 0;
 
@@ -645,6 +659,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         }
 
         _selectedControls = value == null ? Array.Empty<FormControl>() : new[] { value };
+        OnPropertyChanged(nameof(HeaderBadge));
+        OnPropertyChanged(nameof(HasHeaderBadge));
         Rebuild();
     }
 

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 namespace BasicLang.Forms;
 
@@ -15,32 +15,32 @@ public enum FormPropertyType
     /// <summary>One of <see cref="FormPropertyDef.AllowedValues"/>, or one of its <see cref="FormPropertyDef.Aliases"/>.</summary>
     Enum,
     /// <summary>
-    /// <c>75, 23</c> — WinForms' <c>SizeConverter</c> text. Emitted as ONE <c>New Size(w, h)</c>
-    /// statement: the fan-in rule, because <c>X.Width = …</c> through a struct return is CS1612.
+    /// <c>75, 23</c> ΓÇö WinForms' <c>SizeConverter</c> text. Emitted as ONE <c>New Size(w, h)</c>
+    /// statement: the fan-in rule, because <c>X.Width = ΓÇª</c> through a struct return is CS1612.
     /// </summary>
     Size,
 
     /// <summary>
-    /// <c>Segoe UI, 9pt, style=Bold, Italic</c> — WinForms' <c>FontConverter</c> text (<see cref="FormFontValue"/>).
-    /// ONE <c>New Font(…)</c> statement; five CSS declarations at most.
+    /// <c>Segoe UI, 9pt, style=Bold, Italic</c> ΓÇö WinForms' <c>FontConverter</c> text (<see cref="FormFontValue"/>).
+    /// ONE <c>New Font(ΓÇª)</c> statement; five CSS declarations at most.
     /// </summary>
     Font,
 
-    /// <summary><c>4</c> or <c>4, 2, 4, 2</c> (Left, Top, Right, Bottom — <see cref="FormPaddingValue"/>). ONE <c>New Padding(…)</c>.</summary>
+    /// <summary><c>4</c> or <c>4, 2, 4, 2</c> (Left, Top, Right, Bottom ΓÇö <see cref="FormPaddingValue"/>). ONE <c>New Padding(ΓÇª)</c>.</summary>
     Padding,
 
     /// <summary>A <c>System.Windows.Forms.Cursors</c> member (<see cref="FormCursors"/>). The web's cursor through ONE table.</summary>
     Cursor,
 
     /// <summary>
-    /// A proportion from 0 to 1, stored as an invariant decimal (<c>0.85</c>) — WinForms' <c>Double</c> Opacity, the one
-    /// row of this shape (slice 3 pre-flight §3). Out of range is Degraded rather than clamped as WinForms would. ⚠ A
+    /// A proportion from 0 to 1, stored as an invariant decimal (<c>0.85</c>) ΓÇö WinForms' <c>Double</c> Opacity, the one
+    /// row of this shape (slice 3 pre-flight ┬º3). Out of range is Degraded rather than clamped as WinForms would. ΓÜá A
     /// Double row with a different range needs a range facet, not this type.
     /// </summary>
     Fraction,
 
     /// <summary>
-    /// The Id of another control on the same form (<c>AcceptButton</c>) — emitted as that field, AFTER the controls are
+    /// The Id of another control on the same form (<c>AcceptButton</c>) ΓÇö emitted as that field, AFTER the controls are
     /// constructed. <see cref="FormPropertyDef.ReferenceKinds"/> names the kinds it may point at; the region writer,
     /// which has the document, warns BL8034 for a reference that names none of them.
     /// </summary>
@@ -48,14 +48,14 @@ public enum FormPropertyType
 
     /// <summary>
     /// Space-separated CSS class names (D2's web-only <c>CssClass</c>): each token a letter, <c>_</c> or <c>-</c> then
-    /// letters, digits, <c>_</c> and <c>-</c>. Anything else is Degraded — it lands inside the element's class attribute.
+    /// letters, digits, <c>_</c> and <c>-</c>. Anything else is Degraded ΓÇö it lands inside the element's class attribute.
     /// </summary>
     CssClasses,
 
     /// <summary>
     /// An image file (slice 4 D-5a, PictureBox.Image): a path relative to the PROJECT, forward slashes
-    /// (<see cref="FormAssetPaths"/>). WinForms: <c>System.Drawing.Image.FromFile(Path.Combine(AppContext.BaseDirectory, …))</c>
-    /// — never .svg/.webp (GDI+ cannot decode them), never a URL. Web: <c>&lt;img src&gt;</c> relative to the site, or a URL.
+    /// (<see cref="FormAssetPaths"/>). WinForms: <c>System.Drawing.Image.FromFile(Path.Combine(AppContext.BaseDirectory, ΓÇª))</c>
+    /// ΓÇö never .svg/.webp (GDI+ cannot decode them), never a URL. Web: <c>&lt;img src&gt;</c> relative to the site, or a URL.
     /// A rooted path is WinForms-only; <c>..</c> out of the project is Degraded on both.
     /// </summary>
     Image,
@@ -69,9 +69,9 @@ public enum FormPropertyType
 }
 
 /// <summary>
-/// Visual Studio's property-grid groups (spec §2.1). ⚠ Events use their OWN enum,
-/// <see cref="FormEventCategory"/> — WinForms files events under Action, Mouse, Key, Property
-/// Changed… which are not property groups.
+/// Visual Studio's property-grid groups (spec ┬º2.1). ΓÜá Events use their OWN enum,
+/// <see cref="FormEventCategory"/> ΓÇö WinForms files events under Action, Mouse, Key, Property
+/// ChangedΓÇª which are not property groups.
 /// </summary>
 public enum FormPropertyCategory
 {
@@ -87,8 +87,8 @@ public enum FormPropertyCategory
 }
 
 /// <summary>
-/// How a row's value becomes a CSS declaration when it is not the value verbatim (spec §2.1). ONE
-/// place owns each conversion — <see cref="FormCss"/> — so the page cannot carry two opinions.
+/// How a row's value becomes a CSS declaration when it is not the value verbatim (spec ┬º2.1). ONE
+/// place owns each conversion ΓÇö <see cref="FormCss"/> ΓÇö so the page cannot carry two opinions.
 /// </summary>
 public enum FormCssConverter
 {
@@ -98,26 +98,31 @@ public enum FormCssConverter
     /// <summary>A colour: system colours map to CSS system colours; <c>#AARRGGBB</c> becomes <c>rgba()</c>.</summary>
     Color,
 
-    /// <summary>A <c>ContentAlignment</c>: only its horizontal part (<c>…Left</c> → <c>left</c>).</summary>
+    /// <summary>A <c>ContentAlignment</c>: only its horizontal part (<c>ΓÇªLeft</c> ΓåÆ <c>left</c>).</summary>
     ContentAlignmentHorizontal,
 
-    /// <summary><c>Visible=false</c> → <c>display: none</c>; <c>true</c> → no declaration.</summary>
+    /// <summary><c>Visible=false</c> ΓåÆ <c>display: none</c>; <c>true</c> ΓåÆ no declaration.</summary>
     VisibleToDisplay,
 
-    /// <summary>A Font → <c>font-family</c>, <c>font-size</c> and, only when set, <c>font-weight</c>/<c>font-style</c>/<c>text-decoration</c>.</summary>
+    /// <summary>A <c>PictureBoxSizeMode</c> ΓåÆ <c>object-fit</c>, plus <c>object-position</c> where the mode needs it.</summary>
+    PictureBoxSizeMode,
+
+    /// <summary>A Font ΓåÆ <c>font-family</c>, <c>font-size</c> and, only when set, <c>font-weight</c>/<c>font-style</c>/<c>text-decoration</c>.</summary>
     Font,
 
-    /// <summary>A Padding → <c>padding</c>, in CSS order (top right bottom left).</summary>
+    /// <summary>A Padding ΓåÆ <c>padding</c>, in CSS order (top right bottom left).</summary>
     Padding,
 
-    /// <summary>A Cursors member → its CSS <c>cursor</c> keyword (<see cref="FormCursors.CssFor"/>).</summary>
+    /// <summary>A Cursors member ΓåÆ its CSS <c>cursor</c> keyword (<see cref="FormCursors.CssFor"/>).</summary>
     Cursor,
 
-    /// <summary><c>AutoScroll=true</c> → <c>overflow: auto</c>; <c>false</c> → no declaration.</summary>
-    AutoScrollToOverflow
+    /// <summary><c>AutoScroll=true</c> ΓåÆ <c>overflow: auto</c>; <c>false</c> ΓåÆ no declaration.</summary>
+    AutoScrollToOverflow,
+    /// <summary>Portable Panel border: None/FixedSingle/Fixed3D.</summary>
+    BorderStyle
 }
 
-/// <summary>What the property grid does with a value an editor pushed — see <see cref="FormPropertyDef.Judge"/>.</summary>
+/// <summary>What the property grid does with a value an editor pushed ΓÇö see <see cref="FormPropertyDef.Judge"/>.</summary>
 public enum FormEditVerdict
 {
     /// <summary>The value is what the row already shows: write nothing, raise nothing.</summary>
@@ -135,7 +140,7 @@ public enum FormEditVerdict
 
 /// <summary>
 /// Whether a Color row's WinForms setter takes a translucent colour (WinFormsTranslucentBackColorRunTests measures it per
-/// kind): <see cref="Allowed"/>, or it throws <c>ArgumentException</c> — on a control (<see cref="ThrowsOnControl"/>) or
+/// kind): <see cref="Allowed"/>, or it throws <c>ArgumentException</c> ΓÇö on a control (<see cref="ThrowsOnControl"/>) or
 /// on the Form itself (<see cref="ThrowsOnForm"/>, whose refusal points at Opacity).
 /// </summary>
 public enum FormTranslucency
@@ -154,8 +159,8 @@ public enum FormTranslucency
 /// The <c>System.Windows.Forms</c> enum an <see cref="FormPropertyType.Enum"/> value belongs to,
 /// e.g. <c>ContentAlignment</c>.
 ///
-/// <para>⛔ Required for every Enum property, and MEASURED, not assumed. The generated source is
-/// C# by way of BasicLang, and an unqualified <c>Center</c> is not a value in either — BasicLang
+/// <para>Γ¢ö Required for every Enum property, and MEASURED, not assumed. The generated source is
+/// C# by way of BasicLang, and an unqualified <c>Center</c> is not a value in either ΓÇö BasicLang
 /// compiles <c>lbl.TextAlign = Center</c> happily (WinForms member access degrades to
 /// <c>Object</c> with no diagnostic) and csc then rejects the emitted C# with CS0103. Nothing
 /// short of csc catches it.</para>
@@ -163,7 +168,7 @@ public enum FormTranslucency
 /// <param name="Targets">
 /// The targets this property actually EXISTS on; null means both.
 ///
-/// <para>⛔ Not a preference — a fact about the platform, and every entry here was found by csc
+/// <para>Γ¢ö Not a preference ΓÇö a fact about the platform, and every entry here was found by csc
 /// rather than by reading docs. WinForms <c>RadioButton</c> has no <c>GroupName</c> (it groups by
 /// container) and WinForms <c>ListBox</c> has no <c>MultiSelect</c> (it has <c>SelectionMode</c>).
 /// Both compiled green through BasicLang and were rejected by csc with CS1061.</para>
@@ -173,58 +178,58 @@ public enum FormTranslucency
 /// edits. <c>PasswordChar</c> is a <c>char</c> and <c>Image</c> is a <c>System.Drawing.Image</c>;
 /// assigning a string to either is CS0029.
 ///
-/// <para>⚠ <c>Convert.ToChar</c>, not <c>CChar</c> — measured. BasicLang passes <c>CChar</c>
+/// <para>ΓÜá <c>Convert.ToChar</c>, not <c>CChar</c> ΓÇö measured. BasicLang passes <c>CChar</c>
 /// through to the C# backend verbatim and C# has no such function, so it fails at csc with
 /// CS0103.</para>
 /// </param>
 /// <param name="IsItemCollection">
 /// True when the value is a list that must be ADDED to a read-only collection rather than assigned.
-/// <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning one is CS0200. ⛔ ADR 0020: the document
+/// <c>ComboBox.Items</c> and <c>ListBox.Items</c> are get-only, so assigning one is CS0200. Γ¢ö ADR 0020: the document
 /// stores one <c>&lt;Item&gt;</c> child per item (a legacy comma attribute is still read); the model holds the items
 /// joined by LF (<see cref="FormItems"/>).
 /// </param>
 /// <param name="HtmlAttribute">See <see cref="HtmlAttributeName"/>.</param>
 /// <param name="Category">
-/// The Visual Studio group this row appears under. ⛔ Required in practice: the parity test compares
+/// The Visual Studio group this row appears under. Γ¢ö Required in practice: the parity test compares
 /// it with WinForms for every WinForms row, and a completeness test requires it on EVERY row
 /// (web-only and <see cref="FormControlCatalog.FormRoot"/> included). Nullable only so a missing one
 /// is detectable.
 /// </param>
 /// <param name="Description">
-/// The description-pane text. For a WinForms row, WinForms' own <c>[Description]</c> — the parity
+/// The description-pane text. For a WinForms row, WinForms' own <c>[Description]</c> ΓÇö the parity
 /// test compares it with the snapshot, so it cannot drift from what VS shows.
 /// </param>
 /// <param name="CssProperty">
-/// The CSS property this row becomes on the web (<c>BackColor</c> → <c>background-color</c>), walked
+/// The CSS property this row becomes on the web (<c>BackColor</c> ΓåÆ <c>background-color</c>), walked
 /// generically by <c>FormAssetEmitter</c> exactly as <see cref="HtmlAttribute"/> is. Null when the row
 /// has no single-declaration CSS meaning.
 /// </param>
-/// <param name="CssConverter">How the value becomes the CSS value — see <see cref="FormCssConverter"/>.</param>
+/// <param name="CssConverter">How the value becomes the CSS value ΓÇö see <see cref="FormCssConverter"/>.</param>
 /// <param name="WebDefault">
-/// The web's default where the browser's differs from WinForms' (spec §2.7). Null = same as
+/// The web's default where the browser's differs from WinForms' (spec ┬º2.7). Null = same as
 /// <see cref="Default"/>; the EMPTY string = "no static default on the web". Read through
 /// <see cref="DefaultFor"/>, never directly.
 /// </param>
 /// <param name="Aliases">
 /// Legacy document values, keyed by the legacy spelling, mapped to a canonical
-/// <see cref="AllowedValues"/> member (spec §2.8 — TextAlign's <c>Left</c> → <c>MiddleLeft</c>).
+/// <see cref="AllowedValues"/> member (spec ┬º2.8 ΓÇö TextAlign's <c>Left</c> ΓåÆ <c>MiddleLeft</c>).
 /// ACCEPTED (Canon, round-trips byte-for-byte), EMITTED as the canonical member, never OFFERED.
 /// Build it with <c>StringComparer.OrdinalIgnoreCase</c>.
 /// </param>
 /// <param name="OracleExemption">
-/// Why the WinForms snapshot is NOT the truth for this row — a stated reason, carried on the row so
+/// Why the WinForms snapshot is NOT the truth for this row ΓÇö a stated reason, carried on the row so
 /// the parity test prints it rather than keeping a hand list. Null for every row the snapshot judges.
 /// </param>
 /// <param name="WebLayouts">
-/// On the web, the page layouts this row exists on (spec 2026-09-27 §2.3); null = every layout. Read by
-/// <see cref="FormRootValues.Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/> and by NOTHING else —
-/// ⛔ a FormRoot row's applicability is never <see cref="AppliesTo"/> alone: ClientSize targets the web (a
+/// On the web, the page layouts this row exists on (spec 2026-09-27 ┬º2.3); null = every layout. Read by
+/// <see cref="FormRootValues.Applies(FormPropertyDef, FormTarget, FormLayoutKind?)"/> and by NOTHING else ΓÇö
+/// Γ¢ö a FormRoot row's applicability is never <see cref="AppliesTo"/> alone: ClientSize targets the web (a
 /// Canvas page has a design size) and does not exist on a Grid page. A catalog gate
 /// (<c>FormRootLayoutTests.WebLayouts_IsDeclaredOnlyOnFormRootRows_ThatExistOnTheWeb</c>) refuses it on a
 /// control row, where no consumer reads it.
 /// </param>
 /// <param name="ReferenceKinds">
-/// For a <see cref="FormPropertyType.Reference"/> row: the control kinds it may name (<c>AcceptButton</c> → Button, the
+/// For a <see cref="FormPropertyType.Reference"/> row: the control kinds it may name (<c>AcceptButton</c> ΓåÆ Button, the
 /// catalog's one <c>IButtonControl</c>). Null on every other row.
 /// </param>
 public sealed record FormPropertyDef(
@@ -247,18 +252,20 @@ public sealed record FormPropertyDef(
     IReadOnlyList<FormLayoutKind>? WebLayouts = null,
     IReadOnlyList<string>? ReferenceKinds = null,
     FormTranslucency WinFormsTranslucency = FormTranslucency.Allowed,
-    bool Mergeable = true)
+    bool Mergeable = true,
+    string? DomMember = null,
+    bool PortableCssOnly = false)
 {
-    // Mergeable: whether Visual Studio's Properties window offers this row when SEVERAL controls are selected — WinForms'
+    // Mergeable: whether Visual Studio's Properties window offers this row when SEVERAL controls are selected ΓÇö WinForms'
     // [MergableProperty] (.NET spells it "Mergable"), absent = true. MEASURED, not chosen: tools/WinFormsMetadataDump records
     // the attribute and the parity test (CatalogParity.CompareProperty) holds every WinForms row to it. Property-grid
     // slice 6, pre-flight 2026-10-05 D-2 rule 2: false on the item collections (Items), which VS hides for a multi-selection.
 
     /// <summary>
-    /// ⛔ THE one answer to "is this the same row as <paramref name="other"/>?" for a multi-selection (slice 6 D-2 rule 1):
+    /// Γ¢ö THE one answer to "is this the same row as <paramref name="other"/>?" for a multi-selection (slice 6 D-2 rule 1):
     /// the same name, the same <see cref="FormPropertyType"/>, the same <see cref="WinFormsEnumType"/> and the same
     /// <see cref="AllowedValues"/> in the same order. Visual Studio merges a property across objects only when its name AND
-    /// its property TYPE agree — and an Enum's type is its enum: TextAlign is <c>ContentAlignment</c> on a Button and
+    /// its property TYPE agree ΓÇö and an Enum's type is its enum: TextAlign is <c>ContentAlignment</c> on a Button and
     /// <c>HorizontalAlignment</c> on a TextBox, so the two are different rows and a Button + TextBox selection offers no
     /// TextAlign (writing <c>MiddleCenter</c> into a TextBox would be refused at best). Symmetric and reflexive. Whether
     /// the row applies on the document's target (<see cref="AppliesTo"/>) is asked separately, per member.
@@ -270,16 +277,23 @@ public sealed record FormPropertyDef(
         (AllowedValues ?? Array.Empty<string>()).SequenceEqual(other.AllowedValues ?? Array.Empty<string>(), StringComparer.Ordinal);
 
     // WinFormsTranslucency: for a Color row, whether the WinForms setter THROWS on a translucent colour (alpha < 255, or
-    // Transparent) — Control.BackColor on a control without ControlStyles.SupportsTransparentBackColor ("does not support
+    // Transparent) ΓÇö Control.BackColor on a control without ControlStyles.SupportsTransparentBackColor ("does not support
     // transparent background colors"). Measured per kind, and pinned, by WinFormsTranslucentBackColorRunTests. Such a
     // value is refused on WinForms (Degraded in a document, refused in the editor); the web keeps alpha (rgba).
 
-    /// <summary>True when the WinForms setter throws on a translucent colour — a control's, or the Form's own.</summary>
+    /// <summary>True when the WinForms setter throws on a translucent colour ΓÇö a control's, or the Form's own.</summary>
     public bool OpaqueOnWinForms => WinFormsTranslucency != FormTranslucency.Allowed;
 
     /// <summary>The Form's own row: its refusal points at Opacity, what a see-through window is for.</summary>
     private bool OpaqueForm => WinFormsTranslucency == FormTranslucency.ThrowsOnForm;
-    // ⛔ Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with —
+    /// <summary>Live DOM location; used by conversion and the Node mapping gate, not a second property list.</summary>
+    public string? DomMember { get; init; } = DomMember ??
+        (CssProperty != null ? "style." + System.Text.RegularExpressions.Regex.Replace(CssProperty, "-([a-z])", m => m.Groups[1].Value.ToUpperInvariant())
+            : HtmlAttribute == "maxlength" ? "maxLength"
+            : HtmlAttribute is "value" or "min" or "max" or "step" or "placeholder" or "title" ? HtmlAttribute
+            : HtmlAttribute != null ? "getAttribute(\"" + HtmlAttribute + "\")" : IsItemCollection ? "options" : null);
+
+    // Γ¢ö Normalised to OrdinalIgnoreCase whatever comparer the caller built the dictionary with ΓÇö
     // Accepts and Canonical are case-insensitive for members, and an alias lookup that silently
     // used a different comparer would make `left` Degraded while `Left` is Canon. The init accessor
     // normalises too, so a `with` copy cannot bypass it.
@@ -297,7 +311,7 @@ public sealed record FormPropertyDef(
             ? null
             : aliases is Dictionary<string, string> d && ReferenceEquals(d.Comparer, StringComparer.OrdinalIgnoreCase)
                 ? d
-                // Throws on two keys differing only by case — a table that ambiguous is a catalog bug.
+                // Throws on two keys differing only by case ΓÇö a table that ambiguous is a catalog bug.
                 : new Dictionary<string, string>(aliases, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True when this property exists on <paramref name="target"/>.</summary>
@@ -307,21 +321,21 @@ public sealed record FormPropertyDef(
     /// The HTML attribute this property becomes, or null when the emitter handles it specially (or
     /// not at all).
     ///
-    /// <para>⛔ Here rather than in the emitter because the emitter's alternative is a hand-written
-    /// <c>if</c> per property — which is a second list beside this table and goes stale the moment a
+    /// <para>Γ¢ö Here rather than in the emitter because the emitter's alternative is a hand-written
+    /// <c>if</c> per property ΓÇö which is a second list beside this table and goes stale the moment a
     /// row is added. WinForms <c>Minimum</c> is HTML <c>min</c>; nothing but the catalog can know
     /// that, and nothing else should have to.</para>
     ///
-    /// <para>⚠ Not every web property is a plain attribute. <c>Checked</c>, <c>ReadOnly</c> and
+    /// <para>ΓÜá Not every web property is a plain attribute. <c>Checked</c>, <c>ReadOnly</c> and
     /// <c>MultiSelect</c> are BOOLEAN attributes whose presence is the value, and <c>Items</c>
-    /// becomes child elements — those stay in the emitter, which is where that shape lives.</para>
+    /// becomes child elements ΓÇö those stay in the emitter, which is where that shape lives.</para>
     /// </summary>
     public string? HtmlAttributeName => HtmlAttribute;
 
     /// <summary>
-    /// The default a user SEES for an absent property on <paramref name="target"/> (spec §2.7). Every
-    /// reader of a default goes through here — the grid, the web Timer's <c>{Interval}</c>
-    /// placeholder — so the web can differ from WinForms in exactly one place.
+    /// The default a user SEES for an absent property on <paramref name="target"/> (spec ┬º2.7). Every
+    /// reader of a default goes through here ΓÇö the grid, the web Timer's <c>{Interval}</c>
+    /// placeholder ΓÇö so the web can differ from WinForms in exactly one place.
     /// </summary>
     public string? DefaultFor(FormTarget target) =>
         target == FormTarget.Web && WebDefault != null
@@ -331,7 +345,7 @@ public sealed record FormPropertyDef(
     /// <summary>
     /// The value in this row's canonical spelling: an Enum member as <see cref="AllowedValues"/>
     /// spells it, an <see cref="Aliases"/> key resolved to its member, a Bool in lower case. A value
-    /// the row does not know is returned UNCHANGED — Degraded values are preserved, never coerced.
+    /// the row does not know is returned UNCHANGED ΓÇö Degraded values are preserved, never coerced.
     /// </summary>
     public string Canonical(string value)
     {
@@ -356,8 +370,8 @@ public sealed record FormPropertyDef(
             return BoolWord(value);
         }
 
-        // ⛔ An Int is its parsed number in invariant text, so "007", " 5 " and "+7" compare equal to
-        // the number the editor pushes back — without this the grid's no-op rule saw the numeric
+        // Γ¢ö An Int is its parsed number in invariant text, so "007", " 5 " and "+7" compare equal to
+        // the number the editor pushes back ΓÇö without this the grid's no-op rule saw the numeric
         // editor's "7" as an EDIT of a document holding "007", and rewrote the user's text for a
         // selection click. A value TryParseInt refuses is Degraded and returned unchanged.
         if (Type == FormPropertyType.Int && TryParseInt(value, out var number))
@@ -366,8 +380,8 @@ public sealed record FormPropertyDef(
         }
 
         // A system or named colour in its table's spelling, so `control`/`Control` and `red`/`Red` compare
-        // equal wherever a caller asks "is this the same value?" (the grid's no-op rule). Other colours —
-        // #hex, and a name neither table knows — unchanged.
+        // equal wherever a caller asks "is this the same value?" (the grid's no-op rule). Other colours ΓÇö
+        // #hex, and a name neither table knows ΓÇö unchanged.
         if (Type == FormPropertyType.Color &&
             (FormSystemColors.TryCanonical(value, out var colour) || FormKnownColors.TryCanonical(value, out colour)))
         {
@@ -389,16 +403,16 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// A <see cref="FormPropertyType.Fraction"/> (the Form's Opacity) — read EXACTLY as Visual Studio's OpacityConverter
+    /// A <see cref="FormPropertyType.Fraction"/> (the Form's Opacity) ΓÇö read EXACTLY as Visual Studio's OpacityConverter
     /// reads it (owner decision 2026-09-29; measured on .NET Framework 4.8):
     /// <list type="bullet">
     /// <item>a trailing <c>%</c> (spaces allowed around it) means percent: <c>80%</c> is 0.8, <c>1%</c> is 0.01;</item>
-    /// <item>a bare number up to 1 is the FRACTION itself: <c>1</c> is 100%, <c>0.5</c> is 50% — which is also why every
+    /// <item>a bare number up to 1 is the FRACTION itself: <c>1</c> is 100%, <c>0.5</c> is 50% ΓÇö which is also why every
     /// stored document value (<c>0.85</c>) still reads as itself;</item>
     /// <item>a bare number above 1 is a percent: <c>80</c> is 0.8, <c>1.5</c> is 0.015;</item>
-    /// <item>anything outside 0%–100% is refused, as VS refuses it.</item>
+    /// <item>anything outside 0%ΓÇô100% is refused, as VS refuses it.</item>
     /// </list>
-    /// An invariant decimal — point, no grouping, no sign, and (beyond VS, approved) no exponent — with only ASCII spaces
+    /// An invariant decimal ΓÇö point, no grouping, no sign, and (beyond VS, approved) no exponent ΓÇö with only ASCII spaces
     /// around it, the TryParseInt rule for what may surround a number.
     /// </summary>
     public static bool TryParseFraction(string? value, out decimal fraction)
@@ -429,28 +443,28 @@ public sealed record FormPropertyDef(
     private static string FractionText(decimal fraction) => fraction.ToString("0.##########", CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// What the grid SHOWS for a fraction: a percentage, invariant, with up to two decimals — <c>85.5%</c>. (VS rounds to a
+    /// What the grid SHOWS for a fraction: a percentage, invariant, with up to two decimals ΓÇö <c>85.5%</c>. (VS rounds to a
     /// whole percent, hiding a stored 0.855 as 85%; showing it is an approved deviation.)
     /// </summary>
     private static string PercentText(decimal fraction) =>
         (fraction * 100).ToString("0.##", CultureInfo.InvariantCulture) + "%";
 
     /// <summary>
-    /// The DOCUMENT text a value typed into the grid is stored as. The typed text itself for every type — except one whose
+    /// The DOCUMENT text a value typed into the grid is stored as. The typed text itself for every type ΓÇö except one whose
     /// grid vocabulary is not its document's: a Fraction is typed and shown as a percentage (<c>80%</c>) and stored the way
-    /// WinForms stores it, the 0–1 Double (<c>0.8</c>). Call only for a value the row accepts.
+    /// WinForms stores it, the 0ΓÇô1 Double (<c>0.8</c>). Call only for a value the row accepts.
     /// </summary>
     public string ToDocument(string value) => Type switch
     {
         FormPropertyType.Fraction when TryParseFraction(value, out var fraction) => FractionText(fraction),
-        // ⛔ The grid's Bool drop-down offers "True"/"False" (VS's spelling); the document says "true"/"false" (slice 4 D-3).
+        // Γ¢ö The grid's Bool drop-down offers "True"/"False" (VS's spelling); the document says "true"/"false" (slice 4 D-3).
         FormPropertyType.Bool => BoolWord(value),
         _ => value
     };
 
     /// <summary>
-    /// A Bool in the DOCUMENT's vocabulary — <c>true</c>/<c>false</c>, lower case — or the text unchanged when it is not a
-    /// Bool at all (a Degraded value is preserved, never coerced). ⛔ THE one spelling rule: <see cref="Canonical"/>,
+    /// A Bool in the DOCUMENT's vocabulary ΓÇö <c>true</c>/<c>false</c>, lower case ΓÇö or the text unchanged when it is not a
+    /// Bool at all (a Degraded value is preserved, never coerced). Γ¢ö THE one spelling rule: <see cref="Canonical"/>,
     /// <see cref="ToDocument"/> and the property grid's catalog-less Bool rows (the Font's Bold/Italic/Underline parts)
     /// all ask it, so a drop-down pushing <c>True</c> over a stored <c>true</c> is the same value on every path.
     /// </summary>
@@ -459,30 +473,30 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// What an editor OFFERS for this row: an Enum's <see cref="AllowedValues"/>, a Cursor row's
-    /// <see cref="FormCursors.Names"/>, null for a free-text row. ⛔ The grid asks this, never the type itself.
+    /// <see cref="FormCursors.Names"/>, null for a free-text row. Γ¢ö The grid asks this, never the type itself.
     /// </summary>
     public IReadOnlyList<string>? Choices => Type == FormPropertyType.Cursor ? FormCursors.Names : AllowedValues;
 
     /// <summary>
     /// Equality in this row's own terms: <c>True</c> and <c>true</c> are one Bool; <c>Left</c> and
-    /// <c>MiddleLeft</c> are one TextAlign; <c>007</c> and <c>7</c> are one Int. ⛔ THE one answer —
+    /// <c>MiddleLeft</c> are one TextAlign; <c>007</c> and <c>7</c> are one Int. Γ¢ö THE one answer ΓÇö
     /// FormRetarget and the property grid's bold and no-op rules all ask it; a private copy in each
     /// would be a mirrored pair.
     ///
-    /// <para>⚠ An Enum or Color compares case-insensitively after canonicalising, so a case-only hex
-    /// edit (<c>#ff0000</c> → <c>#FF0000</c>) is the same colour. A String, Int or Size is ordinal:
+    /// <para>ΓÜá An Enum or Color compares case-insensitively after canonicalising, so a case-only hex
+    /// edit (<c>#ff0000</c> ΓåÆ <c>#FF0000</c>) is the same colour. A String, Int or Size is ordinal:
     /// a caption's case is the user's text.</para>
     /// </summary>
     public bool SameValue(string a, string b) =>
         string.Equals(Canonical(a), Canonical(b),
-            // ⚠ A Font's family is case-insensitive on Windows ("segoe ui" IS Segoe UI), and a Cursor canonicalises
-            // to its member — both compare like an Enum.
+            // ΓÜá A Font's family is case-insensitive on Windows ("segoe ui" IS Segoe UI), and a Cursor canonicalises
+            // to its member ΓÇö both compare like an Enum.
             Type is FormPropertyType.Enum or FormPropertyType.Color or FormPropertyType.Font or FormPropertyType.Cursor
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal);
 
     /// <summary>
-    /// What an editor SHOWS for this property on <paramref name="target"/> (spec §2.7): the document's
+    /// What an editor SHOWS for this property on <paramref name="target"/> (spec ┬º2.7): the document's
     /// value in its canonical spelling when present, the target's default when absent, "" when absent
     /// with no default. <paramref name="present"/> is the document's text, or null when it carries none.
     /// </summary>
@@ -494,15 +508,15 @@ public sealed record FormPropertyDef(
             return "";
         }
 
-        // ⚠ A Fraction is SHOWN in the grid's vocabulary, a percentage (owner decision 2026-09-29) — SameValue still
-        // compares it with the stored 0–1 text, because both canonicalise to the same fraction.
+        // ΓÜá A Fraction is SHOWN in the grid's vocabulary, a percentage (owner decision 2026-09-29) ΓÇö SameValue still
+        // compares it with the stored 0ΓÇô1 text, because both canonicalise to the same fraction.
         return Type == FormPropertyType.Fraction && TryParseFraction(shown, out var fraction)
             ? PercentText(fraction)
             : Canonical(shown);
     }
 
     /// <summary>
-    /// What a typed editor pushes back when it renders "" — a NumericUpDown cannot show empty, so it
+    /// What a typed editor pushes back when it renders "" ΓÇö a NumericUpDown cannot show empty, so it
     /// shows (and pushes) 0; a CheckBox shows unchecked. Every other editor pushes "" itself.
     /// </summary>
     private string EmptyEcho => Type switch
@@ -513,21 +527,21 @@ public sealed record FormPropertyDef(
     };
 
     /// <summary>
-    /// The property grid's decision about a value an editor pushed (spec §2.7, §7) — a PURE function of
+    /// The property grid's decision about a value an editor pushed (spec ┬º2.7, ┬º7) ΓÇö a PURE function of
     /// this row, so every rule is table-testable; the grid row only carries the verdict out.
     ///
     /// <list type="number">
-    /// <item><b>NoOp</b> — the value is what the row already DISPLAYS, in this row's own terms
+    /// <item><b>NoOp</b> ΓÇö the value is what the row already DISPLAYS, in this row's own terms
     /// (<see cref="SameValue"/>): an absent row's default coming back on LostFocus, an alias pushed back
-    /// as its member, <c>7</c> for a document holding <c>007</c>, the grid's re-push on selection. ⛔ Also
+    /// as its member, <c>7</c> for a document holding <c>007</c>, the grid's re-push on selection. Γ¢ö Also
     /// the typed editor's ECHO of an absent row with no default (<see cref="EmptyEcho"/>): a web
     /// TextBox's MaxLength displays "" (no limit), the NumericUpDown renders it as 0 and pushes 0 back,
-    /// and writing that made a text box that accepts no input — for a selection click.</item>
-    /// <item><b>Reset</b> — "" on a row whose type cannot hold "": the user emptied the box to get the
-    /// default back (spec §7). A String accepts "", so its empty caption is a real value.</item>
-    /// <item><b>Refuse</b> — a value this row does not accept on <paramref name="target"/> (spec §7):
+    /// and writing that made a text box that accepts no input ΓÇö for a selection click.</item>
+    /// <item><b>Reset</b> ΓÇö "" on a row whose type cannot hold "": the user emptied the box to get the
+    /// default back (spec ┬º7). A String accepts "", so its empty caption is a real value.</item>
+    /// <item><b>Refuse</b> ΓÇö a value this row does not accept on <paramref name="target"/> (spec ┬º7):
     /// never written, so the designer cannot manufacture a Degraded value of its own.</item>
-    /// <item><b>Write</b> — everything else.</item>
+    /// <item><b>Write</b> ΓÇö everything else.</item>
     /// </list>
     /// </summary>
     /// <param name="value">The pushed value.</param>
@@ -555,7 +569,7 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// The value as WinForms SOURCE — what the region writer splices after the <c>=</c>.
+    /// The value as WinForms SOURCE ΓÇö what the region writer splices after the <c>=</c>.
     ///
     /// <para>Returns null when this property has nothing special to say, leaving the caller's
     /// default formatting in charge.</para>
@@ -564,8 +578,8 @@ public sealed record FormPropertyDef(
     {
         if (Type == FormPropertyType.Enum && WinFormsEnumType != null)
         {
-            // ⛔ The CANONICAL member: an alias (Left) is emitted as its member (MiddleLeft), never
-            // verbatim — ContentAlignment has no Left, and csc would say CS0117.
+            // Γ¢ö The CANONICAL member: an alias (Left) is emitted as its member (MiddleLeft), never
+            // verbatim ΓÇö ContentAlignment has no Left, and csc would say CS0117.
             return $"{WinFormsEnumType}.{Canonical(value)}";
         }
 
@@ -574,7 +588,7 @@ public sealed record FormPropertyDef(
             return $"{WinFormsFactory}({StringLiteral(value)})";
         }
 
-        // ⛔ Re-emitted from the PARSED value, never the input text — whatever the parser tolerated around
+        // Γ¢ö Re-emitted from the PARSED value, never the input text ΓÇö whatever the parser tolerated around
         // the digits stays out of the user's file.
         return Type switch
         {
@@ -585,7 +599,7 @@ public sealed record FormPropertyDef(
             FormPropertyType.Padding => FormPaddingValue.TryParse(value, out var padding) ? padding.WinFormsLiteral : null,
             FormPropertyType.Cursor => FormCursors.TryCanonical(value, out var cursor) ? "Cursors." + cursor : null,
             FormPropertyType.Fraction => TryParseFraction(value, out var fraction) ? FractionText(fraction) : null,
-            // The field the Id names. ⚠ Whether such a field EXISTS is a document question — the region writer's (BL8034).
+            // The field the Id names. ΓÜá Whether such a field EXISTS is a document question ΓÇö the region writer's (BL8034).
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value) ? value : null,
             FormPropertyType.Image => AssetLiteral("System.Drawing.Image.FromFile", value),
             FormPropertyType.Icon => AssetLiteral("New System.Drawing.Icon", value),
@@ -595,10 +609,10 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// An image/icon as WinForms source (D-5b), FULLY QUALIFIED (a user's <c>Using</c> can make a bare <c>Image</c> or
-    /// <c>Icon</c> ambiguous — CS0104, BasicLang silent). A project path is anchored to the program's own folder,
-    /// <c>System.AppContext.BaseDirectory</c> — measured (pre-flight M8): a bare relative path resolves against the WORKING
+    /// <c>Icon</c> ambiguous ΓÇö CS0104, BasicLang silent). A project path is anchored to the program's own folder,
+    /// <c>System.AppContext.BaseDirectory</c> ΓÇö measured (pre-flight M8): a bare relative path resolves against the WORKING
     /// directory and threw FileNotFoundException under both launch shapes. A rooted path is written as it stands (and is
-    /// not copied — BL8036 says so at build). Null for anything else.
+    /// not copied ΓÇö BL8036 says so at build). Null for anything else.
     /// </summary>
     private static string? AssetLiteral(string call, string value)
     {
@@ -612,17 +626,17 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// Document text as a BasicLang string EXPRESSION — the ONE escape every generated string goes
+    /// Document text as a BasicLang string EXPRESSION ΓÇö the ONE escape every generated string goes
     /// through. Usually a single quoted literal; a value with a line break or tab becomes literals
     /// joined with <c>&amp;</c> to <c>vbCr</c> / <c>vbLf</c> / <c>vbCrLf</c> / <c>vbTab</c>, so every
     /// caller must splice it where an expression is allowed (all of them do).
     ///
-    /// <para>⛔ The lexer reads a literal as VB does: <c>""</c> is the only escape and a backslash
+    /// <para>Γ¢ö The lexer reads a literal as VB does: <c>""</c> is the only escape and a backslash
     /// is an ORDINARY character, so <c>a\b</c> is written raw. (It used to be a C-style escape, and
     /// this method wrote <c>\\</c>; since master 3cec5030 that reaches the running program as TWO
     /// backslashes, with the build green.)</para>
     ///
-    /// <para>⛔ A line break or tab must still never be written raw: it lands inside the generated
+    /// <para>Γ¢ö A line break or tab must still never be written raw: it lands inside the generated
     /// region, and a CR LF caption in an LF file makes the next write read the file's newline style
     /// from the caption and rewrite every line ending. With no escape left inside a literal, it is
     /// spelled with the VB constant (<c>SemanticAnalyzer.VbStringConstants</c>, lowered to a plain
@@ -672,12 +686,12 @@ public sealed record FormPropertyDef(
         return parts.Count == 0 ? "\"\"" : string.Join(" & ", parts);
     }
 
-    // ⛔ INVARIANT formatting, not interpolation: under sv-SE an int formats its minus as U+2212, and
-    // `New Size(−5, 10)` is CS1056 at csc.
+    // Γ¢ö INVARIANT formatting, not interpolation: under sv-SE an int formats its minus as U+2212, and
+    // `New Size(ΓêÆ5, 10)` is CS1056 at csc.
     private static string SizeLiteral(int width, int height) =>
         string.Create(CultureInfo.InvariantCulture, $"New Size({width}, {height})");
 
-    /// <summary><c>w, h</c> — WinForms' SizeConverter text, culture-invariant. Exactly two integers.</summary>
+    /// <summary><c>w, h</c> ΓÇö WinForms' SizeConverter text, culture-invariant. Exactly two integers.</summary>
     public static bool TryParseSize(string value, out int width, out int height)
     {
         width = height = 0;
@@ -689,10 +703,10 @@ public sealed record FormPropertyDef(
     /// One document integer: an optional ASCII sign and decimal digits, culture-invariant, with only
     /// ASCII SPACE allowed around it.
     ///
-    /// <para>⛔ Not <c>int.TryParse(value)</c>, which skips every character from U+0009 to U+000D — so
+    /// <para>Γ¢ö Not <c>int.TryParse(value)</c>, which skips every character from U+0009 to U+000D ΓÇö so
     /// <c>"5\r\n"</c> parsed, was Canon, and the writer spliced the raw text (a line break inside the
     /// generated region). Space is what a person types beside a number; a tab, a line break or an NBSP
-    /// there is never meant, and the one honest answer is Degraded — preserved, reported, not written.
+    /// there is never meant, and the one honest answer is Degraded ΓÇö preserved, reported, not written.
     /// Refusing rather than trimming also keeps every OTHER consumer of the raw value (the web's markup
     /// attributes, a script template) safe without each needing its own trim. Current culture is out
     /// for the U+2212 reason SizeLiteral states.</para>
@@ -700,21 +714,21 @@ public sealed record FormPropertyDef(
     public static bool TryParseInt(string value, out int result) =>
         int.TryParse(value.Trim(' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out result);
 
-    /// <summary>The individual items of an <see cref="IsItemCollection"/> MODEL value — one per line (ADR 0020, <see cref="FormItems.Split"/>).</summary>
+    /// <summary>The individual items of an <see cref="IsItemCollection"/> MODEL value ΓÇö one per line (ADR 0020, <see cref="FormItems.Split"/>).</summary>
     public static IEnumerable<string> SplitItems(string value) => FormItems.Split(value);
 
     /// <summary>
     /// A colour as WinForms source.
     ///
-    /// <para>⛔ <c>#RRGGBB</c> is a value the catalog ACCEPTS (so it is Canon in the document and
+    /// <para>Γ¢ö <c>#RRGGBB</c> is a value the catalog ACCEPTS (so it is Canon in the document and
     /// round-trips untouched) and which cannot be emitted verbatim: <c>#</c> starts a preprocessor
     /// directive, so <c>lbl.ForeColor = #FF0000</c> does not even LEX. It has to become a
     /// <c>Color.FromArgb</c> call. A named colour passes through as <c>Color.Name</c>.</para>
     /// </summary>
     private static string ColorLiteral(string value)
     {
-        // ⛔ A system colour is NOT a Color member: `Color.Control` does not exist (CS0117 at csc,
-        // BasicLang silent). It is SystemColors.Control — spec §2.2, and a live defect before this.
+        // Γ¢ö A system colour is NOT a Color member: `Color.Control` does not exist (CS0117 at csc,
+        // BasicLang silent). It is SystemColors.Control ΓÇö spec ┬º2.2, and a live defect before this.
         if (FormSystemColors.TryCanonical(value, out var system))
         {
             return "SystemColors." + system;
@@ -729,7 +743,7 @@ public sealed record FormPropertyDef(
         if (value.Length == 0 || value[0] != '#')
         {
             // A name neither table knows is refused on WinForms (IsRefusedOn), so this is reached only
-            // by a caller that skipped the Degraded check — kept as the document's text, never invented.
+            // by a caller that skipped the Degraded check ΓÇö kept as the document's text, never invented.
             return "Color." + value;
         }
 
@@ -762,12 +776,12 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// True when <paramref name="value"/> is already this property's WinForms SOURCE form rather
-    /// than a document value — the two conventions that share one <c>Properties</c> dictionary.
+    /// than a document value ΓÇö the two conventions that share one <c>Properties</c> dictionary.
     ///
-    /// <para>⛔⛔ <b>Ask the catalog, never the shape of the string.</b> A shape test
+    /// <para>Γ¢öΓ¢ö <b>Ask the catalog, never the shape of the string.</b> A shape test
     /// ("does it look like <c>Type.Member</c>?") was tried and was wrong in both directions: it
     /// made <c>Text="config.json"</c> emit as the bare identifier <c>config.json</c>, and it waved
-    /// <c>TextAlign="ContentAlignment.Bogus"</c> straight through the Degraded check into CS0117 —
+    /// <c>TextAlign="ContentAlignment.Bogus"</c> straight through the Degraded check into CS0117 ΓÇö
     /// the exact failure that check exists to stop. Only the row knows its own enum type and its
     /// own members, so only the row can tell a value it could have WRITTEN from one it must
     /// QUOTE.</para>
@@ -778,16 +792,16 @@ public sealed record FormPropertyDef(
     /// of truth, so the fix for a missing member is a catalog row, not a value spliced in
     /// unchecked.</para>
     ///
-    /// <para>⚠ A String row always answers false — see the String arm.</para>
+    /// <para>ΓÜá A String row always answers false ΓÇö see the String arm.</para>
     /// </summary>
     public bool IsSourceForm(string value) => SourceLiteral(value) != null;
 
     /// <summary>
-    /// The WinForms source to write for a value that <see cref="IsSourceForm"/> recognises — RE-EMITTED
-    /// from what was parsed, never the input text — or null when the value is not a source form.
+    /// The WinForms source to write for a value that <see cref="IsSourceForm"/> recognises ΓÇö RE-EMITTED
+    /// from what was parsed, never the input text ΓÇö or null when the value is not a source form.
     ///
-    /// <para>⛔ A table match is its own canonical text (it matched ORDINALLY). A parsed form —
-    /// <c>Color.FromArgb(…)</c>, <c>New Size(…)</c> — is rebuilt from its numbers, so the spacing, the
+    /// <para>Γ¢ö A table match is its own canonical text (it matched ORDINALLY). A parsed form ΓÇö
+    /// <c>Color.FromArgb(ΓÇª)</c>, <c>New Size(ΓÇª)</c> ΓÇö is rebuilt from its numbers, so the spacing, the
     /// leading zeros and anything else the parser tolerated can never reach the user's file.</para>
     /// </summary>
     public string? SourceLiteral(string value) => Type switch
@@ -798,14 +812,14 @@ public sealed record FormPropertyDef(
                 ? value
                 : null,
 
-        // ⛔⛔ Exactly the shapes ColorLiteral WRITES, each proved by a table or a full parse — never a
+        // Γ¢öΓ¢ö Exactly the shapes ColorLiteral WRITES, each proved by a table or a full parse ΓÇö never a
         // prefix. The grid's Color row is a free-text box, and the old arm (anything starting `Color.`
         // or `New `) spliced `New Foo`, `Color.Bogus` and `Color.Red + junk` verbatim into the user's
-        // file: csc errors, BasicLang silent. `New …` is gone entirely — ColorLiteral never emits it.
+        // file: csc errors, BasicLang silent. `New ΓÇª` is gone entirely ΓÇö ColorLiteral never emits it.
         FormPropertyType.Color =>
             IsSystemColorsSource(value) || IsNamedColorSource(value) ? value : FromArgbSource(value),
 
-        // Exactly `New Size(w, h)` around two integers — never a prefix match, which would pass
+        // Exactly `New Size(w, h)` around two integers ΓÇö never a prefix match, which would pass
         // `New Size(1, 2) + junk` straight into the generated source.
         FormPropertyType.Size =>
             value.StartsWith("New Size(", StringComparison.Ordinal) &&
@@ -814,9 +828,9 @@ public sealed record FormPropertyDef(
                 ? SizeLiteral(w, h)
                 : null,
 
-        // ⛔⛔ A String has NO source form in the document: `Properties` holds DOCUMENT text, one
-        // convention. The old arm (`"…` or `New …` is already source) was a SHAPE test — the thing this
-        // method exists to replace — and it spliced a caption `New Customer` unquoted (build broken) and
+        // Γ¢öΓ¢ö A String has NO source form in the document: `Properties` holds DOCUMENT text, one
+        // convention. The old arm (`"ΓÇª` or `New ΓÇª` is already source) was a SHAPE test ΓÇö the thing this
+        // method exists to replace ΓÇö and it spliced a caption `New Customer` unquoted (build broken) and
         // `"quoted"` without its quotes. It was added (525aa88b) for the D12 recognizer, which stores raw
         // source text; nothing feeds recognizer output into Properties, and when the importer is built it
         // must UNQUOTE string literals into document text at that boundary, never teach this method a shape.
@@ -858,7 +872,7 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// An image/icon value usable on SOME target: a URL, a rooted path, or a relative path inside the project — no control
+    /// An image/icon value usable on SOME target: a URL, a rooted path, or a relative path inside the project ΓÇö no control
     /// characters (it lands in a string literal and an HTML attribute). <c>..</c> out of the project is usable on neither
     /// (Degraded): nothing would copy it, and the program would look for it beside itself.
     /// </summary>
@@ -895,7 +909,7 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// One or more CSS class names separated by spaces: each starts with a letter, <c>_</c> or <c>-</c> (then not a digit)
-    /// and continues with letters, digits, <c>_</c>, <c>-</c>. ⛔ ASCII only — the value lands inside the element's
+    /// and continues with letters, digits, <c>_</c>, <c>-</c>. Γ¢ö ASCII only ΓÇö the value lands inside the element's
     /// <c>class</c> attribute, and a quote or an angle bracket there would be the page's problem, not the user's.
     /// </summary>
     private static bool IsCssClassList(string value)
@@ -912,33 +926,33 @@ public sealed record FormPropertyDef(
     /// <summary>
     /// True when <paramref name="value"/> is usable on <paramref name="target"/>. Stricter than
     /// <see cref="Accepts(string?)"/> in two places today, both colours (<see cref="IsRefusedOn"/>): a
-    /// Windows system colour with no CSS equivalent is WinForms-only as a VALUE (spec §2.2), and a
+    /// Windows system colour with no CSS equivalent is WinForms-only as a VALUE (spec ┬º2.2), and a
     /// colour NAME WinForms' tables do not know is web-only.
     /// </summary>
     public bool Accepts(string? value, FormTarget target) =>
         Accepts(value) && !IsRefusedOn(value!, target);
 
     /// <summary>
-    /// Why <paramref name="value"/> is not usable on <paramref name="target"/> — the Degraded reason.
+    /// Why <paramref name="value"/> is not usable on <paramref name="target"/> ΓÇö the Degraded reason.
     ///
-    /// <para>⛔ Asks the SAME predicate as <see cref="Accepts(string?, FormTarget)"/>, so the reason
+    /// <para>Γ¢ö Asks the SAME predicate as <see cref="Accepts(string?, FormTarget)"/>, so the reason
     /// can never describe a refusal that check did not make. Called for a value that IS usable there
-    /// is nothing to describe, and inventing a reason would put a false one in front of the user — so
+    /// is nothing to describe, and inventing a reason would put a false one in front of the user ΓÇö so
     /// it throws.</para>
     /// </summary>
     public string DescribeRefusal(string value, FormTarget target) =>
         RefusalReason(value, target) + " The value is preserved exactly as written.";
 
     /// <summary>
-    /// Why a value TYPED into the property grid was refused (spec §7 "refused in the editor, never
-    /// written") — the same reason as <see cref="DescribeRefusal"/>, with the ending an edit needs: the
+    /// Why a value TYPED into the property grid was refused (spec ┬º7 "refused in the editor, never
+    /// written") ΓÇö the same reason as <see cref="DescribeRefusal"/>, with the ending an edit needs: the
     /// Degraded ending ("preserved exactly as written") would be false here, because the typed value was
     /// never written anywhere. Throws for a usable value, as <see cref="DescribeRefusal"/> does.
     /// </summary>
     public string DescribeRefusedEdit(string value, FormTarget target) =>
         RefusalReason(value, target) + $" It was not applied; {Name} is unchanged.";
 
-    /// <summary>The reason alone, shared by both endings — ONE predicate, ONE set of texts.</summary>
+    /// <summary>The reason alone, shared by both endings ΓÇö ONE predicate, ONE set of texts.</summary>
     private string RefusalReason(string value, FormTarget target)
     {
         if (Accepts(value, target))
@@ -963,13 +977,13 @@ public sealed record FormPropertyDef(
 
         if (IsTranslucentRefusedOn(value, target))
         {
-            // ⚠ The Form's own row says what a see-through WINDOW is for: Opacity (OpaqueForm marks the FormRoot rows).
+            // ΓÜá The Form's own row says what a see-through WINDOW is for: Opacity (OpaqueForm marks the FormRoot rows).
             return OpaqueForm
-                ? $"'{value}' is a transparent colour, and a WinForms Form does not support a transparent {Name} — it " +
+                ? $"'{value}' is a transparent colour, and a WinForms Form does not support a transparent {Name} ΓÇö it " +
                   "throws ArgumentException when the form is created. For a see-through window set Opacity instead; " +
                   "use an opaque colour (alpha FF) here."
                 : $"'{value}' is a transparent colour, and this WinForms control does not support a transparent " +
-                  $"{Name} — it throws ArgumentException when the form is created. Use an opaque colour (alpha FF).";
+                  $"{Name} ΓÇö it throws ArgumentException when the form is created. Use an opaque colour (alpha FF).";
         }
 
         if (IsAssetRefusedOn(value, target))
@@ -1008,13 +1022,13 @@ public sealed record FormPropertyDef(
                Type switch
                {
                    FormPropertyType.Font => " (expected WinForms' font text: a family of letters, digits, spaces or " +
-                                            "hyphens, a size in points, optional styles — e.g. 'Segoe UI, 9pt, style=Bold')",
+                                            "hyphens, a size in points, optional styles ΓÇö e.g. 'Segoe UI, 9pt, style=Bold')",
                    FormPropertyType.Padding => " (expected one non-negative whole number, or four: Left, Top, Right, Bottom)",
-                   FormPropertyType.Fraction => " (expected a percentage from 0% to 100%, e.g. 85% — a bare number up " +
+                   FormPropertyType.Fraction => " (expected a percentage from 0% to 100%, e.g. 85% ΓÇö a bare number up " +
                                                 "to 1 is read as a fraction, as Visual Studio reads it, so 0.85 is also 85%)",
                    FormPropertyType.Reference => " (expected the Id of a control on this form)",
                    FormPropertyType.Image or FormPropertyType.Icon =>
-                       " (expected a file inside the project, e.g. Resources/logo.png — a path that climbs out of the " +
+                       " (expected a file inside the project, e.g. Resources/logo.png ΓÇö a path that climbs out of the " +
                        "project with '..' is never copied, and the program would not find it)",
                    _ => ""
                } +
@@ -1022,7 +1036,7 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// THE target-specific refusal — the one predicate <see cref="Accepts(string?, FormTarget)"/> and
+    /// THE target-specific refusal ΓÇö the one predicate <see cref="Accepts(string?, FormTarget)"/> and
     /// <see cref="DescribeRefusal"/> share, each arm of it also asked by DescribeRefusal for its reason.
     /// Only a COLOUR row refuses by target: a String caption reading "Window" is text, and an Enum
     /// member named "Menu" is that enum's business.
@@ -1033,24 +1047,24 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// A translucent colour (<c>#AARRGGBB</c> with AA below FF, or the named <c>Transparent</c>) on a WinForms row marked
-    /// <see cref="OpaqueOnWinForms"/>: the control's setter throws <c>ArgumentException</c> when the form is constructed —
+    /// <see cref="OpaqueOnWinForms"/>: the control's setter throws <c>ArgumentException</c> when the form is constructed ΓÇö
     /// a green build and a dead window. Measured by <c>WinFormsTranslucentBackColorRunTests</c>.
     /// </summary>
     private bool IsTranslucentRefusedOn(string value, FormTarget target) =>
         !AcceptsTranslucentOn(target) && IsTranslucent(value);
 
     /// <summary>
-    /// Whether this colour row takes a translucent value on <paramref name="target"/> — the colour editor turns its alpha
+    /// Whether this colour row takes a translucent value on <paramref name="target"/> ΓÇö the colour editor turns its alpha
     /// channel off where this is false (the same answer the refusal gives, never a second rule).
     /// </summary>
     public bool AcceptsTranslucentOn(FormTarget target) =>
         !(Type == FormPropertyType.Color && target == FormTarget.WinForms && OpaqueOnWinForms);
 
     /// <summary>
-    /// True for a colour whose alpha is below 255, in every spelling the writer would EMIT: an 8-digit hex with AA ≠ FF,
+    /// True for a colour whose alpha is below 255, in every spelling the writer would EMIT: an 8-digit hex with AA Γëá FF,
     /// the name <c>Transparent</c>, and the SOURCE forms <c>Color.Transparent</c> and <c>Color.FromArgb(a, r, g, b)</c> with
     /// a &lt; 255 (Part C review: a source form skipped the Accepts gate and reached the generated code). An unparseable
-    /// <c>Color.FromArgb(…)</c> is no source form at all, so it is Degraded and never emitted already.
+    /// <c>Color.FromArgb(ΓÇª)</c> is no source form at all, so it is Degraded and never emitted already.
     /// </summary>
     internal static bool IsTranslucent(string value)
     {
@@ -1074,15 +1088,15 @@ public sealed record FormPropertyDef(
 
     /// <summary>
     /// Whether the region writer may write <paramref name="value"/> on <paramref name="target"/>: a value the target
-    /// accepts, or a SOURCE form (<see cref="IsSourceForm"/>) the target does not refuse. ⛔ The ONE gate both of the
-    /// writer's property paths (controls and the Form's own rows) ask — a source form used to bypass the target's refusals
+    /// accepts, or a SOURCE form (<see cref="IsSourceForm"/>) the target does not refuse. Γ¢ö The ONE gate both of the
+    /// writer's property paths (controls and the Form's own rows) ask ΓÇö a source form used to bypass the target's refusals
     /// (<c>Color.Transparent</c> on a TextBox: green build, ArgumentException at run time).
     /// </summary>
     public bool IsWritableOn(string value, FormTarget target) =>
         Accepts(value, target) || (IsSourceForm(value) && !IsRefusedOn(value, target));
 
     /// <summary>
-    /// A Cursors member with no CSS equivalent (<see cref="FormCursors.CssFor"/> null — the up arrow, the pan cursors) on
+    /// A Cursors member with no CSS equivalent (<see cref="FormCursors.CssFor"/> null ΓÇö the up arrow, the pan cursors) on
     /// a web form: WinForms-only as a VALUE, the system-colour rule.
     /// </summary>
     private bool IsCursorRefusedOn(string value, FormTarget target) =>
@@ -1094,9 +1108,9 @@ public sealed record FormPropertyDef(
         FormSystemColors.TryCanonical(value, out var system) && FormSystemColors.CssFor(system) == null;
 
     /// <summary>
-    /// A bare colour NAME on WinForms that neither table knows — <c>Bogus</c>, or a CSS name such as
+    /// A bare colour NAME on WinForms that neither table knows ΓÇö <c>Bogus</c>, or a CSS name such as
     /// <c>RebeccaPurple</c> that System.Drawing.Color lacks. Written, it is <c>Color.Bogus</c>: CS0117 at
-    /// csc, BasicLang silent. The web keeps today's acceptance — CSS names are case-insensitive, include
+    /// csc, BasicLang silent. The web keeps today's acceptance ΓÇö CSS names are case-insensitive, include
     /// names WinForms lacks, and the browser is the judge.
     /// </summary>
     private bool IsUnknownColourNameRefusedOn(string value, FormTarget target) =>
@@ -1127,7 +1141,7 @@ public sealed record FormPropertyDef(
     }
 
     /// <summary>
-    /// <c>Color.FromArgb(a, r, g, b)</c> — the one call ColorLiteral emits — around exactly four
+    /// <c>Color.FromArgb(a, r, g, b)</c> ΓÇö the one call ColorLiteral emits ΓÇö around exactly four
     /// decimal integers 0-255 and nothing after the closing parenthesis, RE-EMITTED canonically from
     /// the parsed numbers (null when it does not parse). Only ASCII SPACE is allowed around the commas:
     /// <c>Trim()</c> would also strip CR, LF, NBSP and U+2028, and before re-emission that spliced a
@@ -1137,7 +1151,7 @@ public sealed record FormPropertyDef(
     private static string? FromArgbSource(string value) =>
         TryParseFromArgb(value, out var argb) ? FromArgbLiteral(argb[0], argb[1], argb[2], argb[3]) : null;
 
-    /// <summary>The four numbers of a <see cref="FromArgbSource"/> value — the ONE parser, for the literal and the alpha test.</summary>
+    /// <summary>The four numbers of a <see cref="FromArgbSource"/> value ΓÇö the ONE parser, for the literal and the alpha test.</summary>
     private static bool TryParseFromArgb(string value, out int[] argb)
     {
         argb = new int[4];
@@ -1170,7 +1184,7 @@ public sealed record FormPropertyDef(
     private static string FromArgbLiteral(int a, int r, int g, int b) =>
         string.Create(CultureInfo.InvariantCulture, $"Color.FromArgb({a}, {r}, {g}, {b})");
 
-    /// <summary>A bare colour name — IsColor's letters-only arm.</summary>
+    /// <summary>A bare colour name ΓÇö IsColor's letters-only arm.</summary>
     private static bool IsColorName(string value) => value.Length > 0 && value.All(char.IsLetter);
 
     private static bool IsColor(string value)
@@ -1187,7 +1201,7 @@ public sealed record FormPropertyDef(
                    digits.All(Uri.IsHexDigit);
         }
 
-        // A bare name — a KnownColor, a system colour or a CSS named colour. Usable on SOME target, so
+        // A bare name ΓÇö a KnownColor, a system colour or a CSS named colour. Usable on SOME target, so
         // accepted here; WinForms refuses a name its tables do not know (IsUnknownColourNameRefusedOn).
         return IsColorName(value);
     }
@@ -1201,7 +1215,7 @@ public sealed record FormPropertyDef(
 /// measured, not stylistic: the C# backend adds <c>using System.Threading;</c> whenever the
 /// generated body contains the substring <c>Thread</c>, which makes a bare <c>Timer</c> CS0104,
 /// and the scaffold never imports <c>System.ComponentModel</c>, which makes a bare
-/// <c>BackgroundWorker</c> CS0246 — BasicLang silent on both.
+/// <c>BackgroundWorker</c> CS0246 ΓÇö BasicLang silent on both.
 /// </param>
 /// <param name="HtmlTag">HTML element the web emitter produces, or null if WinForms-only.</param>
 /// <param name="HtmlInputType">
@@ -1215,13 +1229,13 @@ public sealed record FormPropertyDef(
 /// <summary>
 /// How the designer canvas DRAWS a control kind.
 ///
-/// <para>⛔ Still a schematic, never a preview (D-WYSIWYG): the IDE has no browser and no WinForms
+/// <para>Γ¢ö Still a schematic, never a preview (D-WYSIWYG): the IDE has no browser and no WinForms
 /// surface, so none of these shapes claims to be what the running program looks like. What they do
 /// is tell the kinds APART. Drawing every control as the same rectangle made a form of ten controls
-/// unreadable — the user could only identify one by reading its label, and a Button, a CheckBox and
+/// unreadable ΓÇö the user could only identify one by reading its label, and a Button, a CheckBox and
 /// a TextBox were pixel-identical.</para>
 ///
-/// <para>⛔ Declared HERE rather than switched on in the canvas, for the reason the whole catalog
+/// <para>Γ¢ö Declared HERE rather than switched on in the canvas, for the reason the whole catalog
 /// exists: a <c>switch</c> over kinds inside <c>FormCanvasControl</c> is a second list of controls,
 /// and it silently falls to its default the day someone adds a row. A new row picks its shape or
 /// gets <see cref="Input"/>; it can never go missing.</para>
@@ -1231,7 +1245,7 @@ public enum FormSchematic
     /// <summary>A plain bordered box. The fallback, and right for anything text-entry shaped.</summary>
     Input,
 
-    /// <summary>Text with no box at all — a Label is not a widget, it is words on the form.</summary>
+    /// <summary>Text with no box at all ΓÇö a Label is not a widget, it is words on the form.</summary>
     Text,
 
     /// <summary>A rounded box with a centred caption.</summary>
@@ -1249,7 +1263,7 @@ public enum FormSchematic
     /// <summary>A box with horizontal rules, suggesting rows.</summary>
     List,
 
-    /// <summary>A dashed border — it holds other controls and has no face of its own.</summary>
+    /// <summary>A dashed border ΓÇö it holds other controls and has no face of its own.</summary>
     Container,
 
     /// <summary>A border broken at the top left by its caption.</summary>
@@ -1259,13 +1273,13 @@ public enum FormSchematic
     Image,
 
     // ==================================================================
-    // Task 23's widening. ⛔ Each of these MUST draw differently from every other shape —
+    // Task 23's widening. Γ¢ö Each of these MUST draw differently from every other shape ΓÇö
     // FormCanvasRenderTests.EveryControlKindRendersDistinctly hashes a frame per kind over identical
     // geometry and an identical id, so two schematics that merely differ in intent collide and fail.
     // That guard is why adding a kind cannot quietly produce another plain box.
     // ==================================================================
 
-    /// <summary>Underlined text, no box — a LinkLabel is a Label that looks clickable.</summary>
+    /// <summary>Underlined text, no box ΓÇö a LinkLabel is a Label that looks clickable.</summary>
     Link,
 
     /// <summary>Rows, each with a small tick box at its left edge.</summary>
@@ -1298,14 +1312,14 @@ public enum FormSchematic
     /// <summary>Two panes divided by a raised splitter bar.</summary>
     Split,
 
-    /// <summary>A container whose contents flow — marked with chevrons along the top edge.</summary>
+    /// <summary>A container whose contents flow ΓÇö marked with chevrons along the top edge.</summary>
     FlowContainer,
 
     /// <summary>A container ruled into cells, so its layout is visible when it is empty.</summary>
     TableContainer,
 
     // ==================================================================
-    // Task 25's tray components. NEVER drawn on the canvas — a component has no position — so these
+    // Task 25's tray components. NEVER drawn on the canvas ΓÇö a component has no position ΓÇö so these
     // members name the tray and toolbox GLYPH only, one per kind, as every control kind has its own:
     // four Timers in a tray must not look like four of the same thing. FormCanvasRenderTests excludes
     // IsComponent rows and pins that Layout never yields bounds for one.
@@ -1324,14 +1338,14 @@ public enum FormSchematic
     Worker,
 
     // ==================================================================
-    // Task 24 — menus, toolbars and status bars. Declared in commit 24b, BEFORE any row uses one
+    // Task 24 ΓÇö menus, toolbars and status bars. Declared in commit 24b, BEFORE any row uses one
     // (spec Decision 12), so the per-VALUE pin exists before there is anything to draw: the canvas
     // routes every kind through ONE seam and FormSchematicPinTests hashes a frame per value at one
-    // bounds with one label, ALL PAIRWISE DISTINCT. The row-driven gate cannot give that — an item
-    // schematic has no document of its own to render (§7), so nothing else would notice a MenuItem
+    // bounds with one label, ALL PAIRWISE DISTINCT. The row-driven gate cannot give that ΓÇö an item
+    // schematic has no document of its own to render (┬º7), so nothing else would notice a MenuItem
     // and a Separator painting the same pixels.
     //
-    // ⛔ The three BAND values draw NO caption: a strip is chrome, and its id painted across the
+    // Γ¢ö The three BAND values draw NO caption: a strip is chrome, and its id painted across the
     //   band would be the only pixel a render gate ever sees.
     // ==================================================================
 
@@ -1344,7 +1358,7 @@ public enum FormSchematic
     /// <summary>A status strip: a band with a rule along its top edge and a sizing grip at its right.</summary>
     StatusBar,
 
-    /// <summary>A menu item: a client-coloured cell behind its caption, no border — a menu is not a widget.</summary>
+    /// <summary>A menu item: a client-coloured cell behind its caption, no border ΓÇö a menu is not a widget.</summary>
     MenuItem,
 
     /// <summary>A separator: one rule, across or down, whichever way its cell runs.</summary>
@@ -1358,8 +1372,8 @@ public enum FormSchematic
 }
 
 /// <summary>
-/// The SHAPE of a catalog row — what a control of this kind is, on the canvas and in the code (Task 24,
-/// spec §1). One enum rather than a third bool: every site that once asked <c>IsComponent</c> must
+/// The SHAPE of a catalog row ΓÇö what a control of this kind is, on the canvas and in the code (Task 24,
+/// spec ┬º1). One enum rather than a third bool: every site that once asked <c>IsComponent</c> must
 /// decide what a Docked strip and an Item are, and a switch without a default is what forces it.
 /// </summary>
 public enum FormPlace
@@ -1378,7 +1392,7 @@ public enum FormPlace
 }
 
 /// <summary>
-/// What a host row holds and how it adds one (spec §1). <paramref name="Kinds"/>[0] is the default kind
+/// What a host row holds and how it adds one (spec ┬º1). <paramref name="Kinds"/>[0] is the default kind
 /// Type Here creates; <paramref name="Add"/> is a template with <c>{parent}</c> and <c>{child}</c>,
 /// emitted in DOCUMENT order (items are ordered, not layered). On the PARENT's row, because the same
 /// ToolStripMenuItem is <c>Items.Add</c>ed under a strip and <c>DropDownItems.Add</c>ed under a menu item.
@@ -1389,41 +1403,43 @@ public sealed record FormItemRule(IReadOnlyList<string> Kinds, string Add)
 }
 
 /// <summary>
-/// How a script-backed component is built on the web — a kind that is not an element. A Timer is a
+/// How a script-backed component is built on the web ΓÇö a kind that is not an element. A Timer is a
 /// <c>setInterval</c> handle (measured 2026-09-19 under node), not a tag.
 /// </summary>
 /// <param name="FieldType">The BasicLang type of the generated field, e.g. <c>Integer</c> for a handle.</param>
 /// <param name="Construct">
 /// A template for the construct statement's right-hand side. Two placeholder kinds:
-/// <c>{handler}</c> — the default-event bind's Sub — and <c>{PropertyName}</c> — that property's
+/// <c>{handler}</c> ΓÇö the default-event bind's Sub ΓÇö and <c>{PropertyName}</c> ΓÇö that property's
 /// document value, or the catalog default when unset. It may name <c>w</c>, the typed
 /// <c>Window</c> the init region declares once whenever any script component exists.
 ///
-/// <para>⛔ Emitted only when the default-event bind exists: <c>setInterval</c> needs a callback,
+/// <para>Γ¢ö Emitted only when the default-event bind exists: <c>setInterval</c> needs a callback,
 /// and a component with no handler does nothing visible on either target. The field is declared
 /// regardless.</para>
 /// </param>
 /// <param name="Implies">
-/// What constructing this script MEANS in WinForms' vocabulary — a web Timer runs the moment it is
-/// wired, and WinForms says that with <c>Enabled=True</c>. Stated on the row so the retarget can
-/// cross "wired means running" by rule in both directions and name it (BL8027), rather than switch
-/// on the kind or let a Timer silently stop on the window or silently start on the page.
+/// What constructing this script MEANS in WinForms' vocabulary ΓÇö the legacy DOM web template
+/// runs a Timer the moment it is wired, and WinForms says that with <c>Enabled=True</c>. Stated on
+/// the row so the retarget can cross "wired means running" by rule in both directions and name it
+/// (BL8027), rather than switch on the kind or let a Timer silently stop on the window or silently
+/// start on the page. ΓÜá Task 39's portable Timer constructs with its properties and honors
+/// <c>Enabled</c>, so this rule describes the DOM template only.
 /// </param>
 public sealed record FormWebScript(string FieldType, string Construct, FormImpliedProperty? Implies = null);
 
-/// <summary>A property and the value the other target's construct implies for it — see <see cref="FormWebScript.Implies"/>.</summary>
+/// <summary>A property and the value the other target's construct implies for it ΓÇö see <see cref="FormWebScript.Implies"/>.</summary>
 public sealed record FormImpliedProperty(string Name, string Value);
 
 /// <param name="Events">
-/// The kind's events (spec §2.5) — since slice 5 a LIST per kind (pre-flight D-1: the default, the kind-specific
+/// The kind's events (spec ┬º2.5) ΓÇö since slice 5 a LIST per kind (pre-flight D-1: the default, the kind-specific
 /// events a VS user wires, and the Mouse/Key/Focus events WinForms browses on that kind; the Events tab, the emitter
 /// and the retarget all read it through <see cref="FormEvents.WiredOn"/>). The <see cref="FormEventDef.IsDefault"/>
-/// entry is what a double-click means and what the old single-event fields now DERIVE from — <see cref="WinFormsEvent"/>,
-/// <see cref="WebEvent"/>, <see cref="WinFormsEventArgs"/> — so every reader of those keeps its
-/// behaviour until it is migrated. ⚠ An event's <see cref="FormEventDef.WinFormsArgs"/> is qualified:
+/// entry is what a double-click means and what the old single-event fields now DERIVE from ΓÇö <see cref="WinFormsEvent"/>,
+/// <see cref="WebEvent"/>, <see cref="WinFormsEventArgs"/> ΓÇö so every reader of those keeps its
+/// behaviour until it is migrated. ΓÜá An event's <see cref="FormEventDef.WinFormsArgs"/> is qualified:
 /// a <c>BackgroundWorker.DoWork</c> handler declared with <c>EventArgs</c> compiles by contravariance
 /// but cannot reach <c>e.Argument</c>; the typed stub is the useful one.
-/// <para>⚠ NULL means "declares no events" — exactly what an empty list means, and every reader treats
+/// <para>ΓÜá NULL means "declares no events" ΓÇö exactly what an empty list means, and every reader treats
 /// the two alike (<c>?.</c>, or <see cref="FormEvents.WiredOn"/>, which returns empty for both). It
 /// stays nullable rather than defaulting to empty because a positional record parameter's default
 /// must be a compile-time constant (an empty array is not), and redeclaring the member non-null
@@ -1438,14 +1454,14 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// </param>
 /// <param name="WebScript">How a script-backed component is built on the web; null for elements.</param>
 /// <param name="Place">
-/// The row's SHAPE — see <see cref="FormPlace"/>. It replaces the old <c>IsComponent</c> bool, which
+/// The row's SHAPE ΓÇö see <see cref="FormPlace"/>. It replaces the old <c>IsComponent</c> bool, which
 /// survives as a derived property: a strip is "no geometry BUT children", which neither
 /// <see cref="IsContainer"/> nor a tray flag could express, and a third bool would have let every
 /// consumer keep two of the three answers.
 /// </param>
 /// <param name="Items">
 /// On a HOST row (a strip, or a menu item that drops down), which item kinds it holds and the verb
-/// that adds one. Null on every other row — <see cref="IsHost"/> is exactly this being non-null.
+/// that adds one. Null on every other row ΓÇö <see cref="IsHost"/> is exactly this being non-null.
 /// </param>
 /// <param name="FormProperty">
 /// A property of the FORM this row's first instance is assigned to, e.g. <c>MainMenuStrip</c> for a
@@ -1453,7 +1469,7 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// by rule rather than switching on the kind.
 /// </param>
 /// <param name="HtmlChildrenWrapper">
-/// An element wrapping this row's CHILDREN on the web, e.g. <c>ul</c> — the children are list items,
+/// An element wrapping this row's CHILDREN on the web, e.g. <c>ul</c> ΓÇö the children are list items,
 /// and the wrapper is not the control's own tag.
 /// </param>
 /// <param name="HtmlRole">
@@ -1461,20 +1477,20 @@ public sealed record FormImpliedProperty(string Name, string Value);
 /// <c>separator</c>. Chrome is the one part of a form whose meaning the DOM cannot infer from its tag.
 /// </param>
 /// <param name="WebCss">
-/// A stylesheet block appended ONCE per kind present on the page — the horizontal bar, the hidden
+/// A stylesheet block appended ONCE per kind present on the page ΓÇö the horizontal bar, the hidden
 /// submenu shown on hover. Per KIND, not per control: two menus must not emit the rules twice.
 /// </param>
 /// <param name="StretchesWhenStacked">
-/// Below a Canvas page's phone breakpoint (spec 2026-09-27 §5), the control spans the column instead of keeping its
-/// designed width — inputs and pictures (TextBox, which covers multi-line text, ComboBox, ListBox, PictureBox). Only
-/// on a Positioned row the web has (FormAssetEmitterTests pins it). ⛔ The emitter reads this; it never switches on
+/// Below a Canvas page's phone breakpoint (spec 2026-09-27 ┬º5), the control spans the column instead of keeping its
+/// designed width ΓÇö inputs and pictures (TextBox, which covers multi-line text, ComboBox, ListBox, PictureBox). Only
+/// on a Positioned row the web has (FormAssetEmitterTests pins it). Γ¢ö The emitter reads this; it never switches on
 /// the kind.
 /// </param>
 /// <param name="DropValues">
-/// What a control of this kind is given when it is DROPPED from the toolbox, beyond its caption — a designer
-/// PREFERENCE, which spec §2.7 says is written explicitly at placement, never encoded as a false default. Owner
-/// decision O1 (2026-09-29): a TableLayoutPanel drops 2×2, as Visual Studio drops one, while its WinForms default stays
-/// 0×0. ⛔ Read by <c>FormPlacement</c> and nothing else; <c>FormPlacementTests.EveryDropValue_…</c> requires each
+/// What a control of this kind is given when it is DROPPED from the toolbox, beyond its caption ΓÇö a designer
+/// PREFERENCE, which spec ┬º2.7 says is written explicitly at placement, never encoded as a false default. Owner
+/// decision O1 (2026-09-29): a TableLayoutPanel drops 2├ù2, as Visual Studio drops one, while its WinForms default stays
+/// 0├ù0. Γ¢ö Read by <c>FormPlacement</c> and nothing else; <c>FormPlacementTests.EveryDropValue_ΓÇª</c> requires each
 /// entry to be a row of the kind with a value that row accepts. Null for every other kind.
 /// </param>
 public sealed record FormControlDef(
@@ -1497,18 +1513,25 @@ public sealed record FormControlDef(
     string? HtmlRole = null,
     string? WebCss = null,
     bool StretchesWhenStacked = false,
-    IReadOnlyDictionary<string, string>? DropValues = null)
+    IReadOnlyDictionary<string, string>? DropValues = null,
+    string? CaptionWrapper = null,
+    string? CaptionTag = null,
+    string? MultilineTag = null,
+    string? PasswordProperty = null,
+    FormEnableTarget? EnableTarget = null,
+    FormClientRule? ClientArea = null,
+    string? PortableCss = null)
 {
     /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
     public bool IsComponent => Place == FormPlace.Tray;
 
-    /// <summary>A strip or a menu item — something whose children are items.</summary>
+    /// <summary>A strip or a menu item ΓÇö something whose children are items.</summary>
     public bool IsHost => Items != null;
 
-    /// <summary>The event a double-click means — the row's <see cref="FormEventDef.IsDefault"/> entry.</summary>
+    /// <summary>The event a double-click means ΓÇö the row's <see cref="FormEventDef.IsDefault"/> entry.</summary>
     public FormEventDef? DefaultEventDef => Events?.FirstOrDefault(e => e.IsDefault);
 
-    /// <summary>Derived (spec §2.5): the default entry's WinForms name.</summary>
+    /// <summary>Derived (spec ┬º2.5): the default entry's WinForms name.</summary>
     public string? WinFormsEvent => DefaultEventDef?.Name;
 
     /// <summary>Derived: the default entry's DOM event type.</summary>
@@ -1529,21 +1552,21 @@ public sealed record FormControlDef(
     };
 
     /// <summary>
-    /// The event a double-click on this control means, in the TARGET's vocabulary (D8) — the
+    /// The event a double-click on this control means, in the TARGET's vocabulary (D8) ΓÇö the
     /// WinForms <c>Click</c> against the DOM's <c>click</c>, and genuinely different events where the
     /// two platforms disagree: a <c>TextBox</c> raises <c>TextChanged</c> and an <c>&lt;input&gt;</c>
     /// fires <c>input</c>.
     ///
-    /// <para>⛔ Deliberately NOT defaulted to Click. A row that forgets to declare its event returns
+    /// <para>Γ¢ö Deliberately NOT defaulted to Click. A row that forgets to declare its event returns
     /// null here and the gesture refuses by name, which someone fixes; a silent default would give a
-    /// new control kind a Click handler that is wrong for most of the catalog and wrong invisibly —
+    /// new control kind a Click handler that is wrong for most of the catalog and wrong invisibly ΓÇö
     /// the same "widen the default" failure this table exists to prevent.</para>
     /// </summary>
     public string? DefaultEvent(FormTarget target) =>
         DefaultEventDefOn(target) is { } evt ? FormEvents.NameOn(evt, target) : null;
 
     /// <summary>
-    /// The EVENT a double-click opens on <paramref name="target"/> — the row's <see cref="FormEventDef.IsDefault"/>
+    /// The EVENT a double-click opens on <paramref name="target"/> ΓÇö the row's <see cref="FormEventDef.IsDefault"/>
     /// entry when it has a name there; on the web, else the row's declared <see cref="FormEventDef.IsWebDefault"/>
     /// (a Panel: Paint has no page equivalent, so Click); else null. Its <see cref="FormEventDef.Name"/> names the
     /// handler on both targets (owner decision 2026-09-29); <see cref="DefaultEvent"/> is what the bind listens to.
@@ -1567,8 +1590,8 @@ public sealed record FormControlDef(
 /// <summary>
 /// The single source of truth for "which controls exist and what can be set on them".
 ///
-/// <para>⛔ Everything that needs to enumerate controls — the toolbox, the property grid, the markup
-/// emitter, the region writer and above all the CI gate — MUST read this table rather than carry its
+/// <para>Γ¢ö Everything that needs to enumerate controls ΓÇö the toolbox, the property grid, the markup
+/// emitter, the region writer and above all the CI gate ΓÇö MUST read this table rather than carry its
 /// own list. That is not tidiness. A WinForms control catalog is otherwise <b>unfalsifiable</b> in
 /// this repo: <c>EnableNetResolution</c> returns early for <c>UseWindowsForms</c>
 /// (<c>Compiler.cs:145</c>), the resolver closure cannot reach <c>System.Windows.Forms.dll</c>
@@ -1576,7 +1599,7 @@ public sealed record FormControlDef(
 /// <c>Form</c>/<c>Button</c>/<c>Point</c> member access therefore types as <c>Object</c> with no
 /// diagnostic. A misspelled property name compiles green. The stand-in for the type system that does
 /// not exist is a gate that generates EVERY control with EVERY property and requires the real CLI to
-/// exit 0 — and that gate is only meaningful if it is driven from this table. Add a row; never
+/// exit 0 ΓÇö and that gate is only meaningful if it is driven from this table. Add a row; never
 /// hand-write a <c>[TestCase]</c> list beside it.</para>
 /// </summary>
 public static class FormControlCatalog
@@ -1584,34 +1607,35 @@ public static class FormControlCatalog
     // Shared property definitions. Declared once so a control kind cannot drift from its peers
     // in the spelling or the declared type of a property they both carry.
     //
-    // Description strings are reproduced verbatim from dotnet/winforms and dotnet/runtime (MIT, © .NET
-    // Foundation and Contributors) — see THIRD-PARTY-NOTICES.md at the repository root.
+    // Description strings are reproduced verbatim from dotnet/winforms and dotnet/runtime (MIT, ┬⌐ .NET
+    // Foundation and Contributors) ΓÇö see THIRD-PARTY-NOTICES.md at the repository root.
     //
-    // ⛔ Category and Description are WinForms' own (the parity test compares them with the
-    // snapshot). A row whose Description differs on one kind gets its OWN definition — the parity
+    // Γ¢ö Category and Description are WinForms' own (the parity test compares them with the
+    // snapshot). A row whose Description differs on one kind gets its OWN definition ΓÇö the parity
     // run is what finds those (Task 8), never a guess here.
-    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String,
+    private static readonly FormPropertyDef Text = new("Text", FormPropertyType.String, DomMember: "textContent",
         Category: FormPropertyCategory.Appearance, Description: "The text associated with the control.");
 
-    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true",
+    private static readonly FormPropertyDef Enabled = new("Enabled", FormPropertyType.Bool, "true", DomMember: "disabled",
         Category: FormPropertyCategory.Behavior, Description: "Indicates whether the control is enabled.");
 
-    // ⛔ Visible=false is CSS, not a missing element: the element must still exist for getElementById.
+    // Γ¢ö Visible=false is CSS, not a missing element: the element must still exist for getElementById.
     private static readonly FormPropertyDef Visible = new("Visible", FormPropertyType.Bool, "true",
         Category: FormPropertyCategory.Behavior, Description: "Determines whether the control is visible or hidden.",
-        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay);
+        CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay, DomMember: "hidden");
 
-    // ⚠ A ToolStripItem's own Visible — its description differs from Control's (output.txt:1159), and
+    // ΓÜá A ToolStripItem's own Visible ΓÇö its description differs from Control's (output.txt:1159), and
     // an UNPARENTED item reads Visible=False, which is the parent-dependent measurement the tool cannot
     // judge (spec claim 2 in the plan). The designer's absent-means-visible is WinForms' real default.
     private static readonly FormPropertyDef ItemVisible = new("Visible", FormPropertyType.Bool, "true",
+        DomMember: "hidden",
         Category: FormPropertyCategory.Behavior, Description: "Determines whether the item is visible or hidden.",
         CssProperty: "display", CssConverter: FormCssConverter.VisibleToDisplay,
         OracleExemption: "an unparented ToolStripItem reports Visible=False; the item's own visibility " +
                          "state defaults to true, which is what an absent attribute means at run time");
 
-    // ⛔ No static default: WinForms' ForeColor/BackColor are AMBIENT (ShouldSerialize, no
-    // [DefaultValue]) — spec §2.7. A kind whose colour is NOT ambient (TextBox's Window) gets its own.
+    // Γ¢ö No static default: WinForms' ForeColor/BackColor are AMBIENT (ShouldSerialize, no
+    // [DefaultValue]) ΓÇö spec ┬º2.7. A kind whose colour is NOT ambient (TextBox's Window) gets its own.
     private static readonly FormPropertyDef ForeColor = new("ForeColor", FormPropertyType.Color,
         Category: FormPropertyCategory.Appearance,
         Description: "The foreground color of this component, which is used to display text.",
@@ -1622,70 +1646,74 @@ public static class FormControlCatalog
         CssProperty: "background-color", CssConverter: FormCssConverter.Color);
 
     // ==================================================================
-    // Colours that are NOT ambient on some kinds — found by the parity run (Task 8), never guessed.
+    // Colours that are NOT ambient on some kinds ΓÇö found by the parity run (Task 8), never guessed.
     // An edit control or a list paints with the Window/WindowText system colours (WinForms 'reset'),
     // a ProgressBar fills with Highlight. Same CSS as the shared rows, so nothing loses its page
-    // declaration; WebDefault is EMPTY because the browser's user-agent sheet — not WinForms — decides
-    // what an <input>/<select>/<progress> looks like with no declaration (spec §2.7).
+    // declaration; WebDefault is EMPTY because the browser's user-agent sheet ΓÇö not WinForms ΓÇö decides
+    // what an <input>/<select>/<progress> looks like with no declaration (spec ┬º2.7).
     // ==================================================================
     private static readonly FormPropertyDef WindowTextForeColor = ForeColor with { Default = "WindowText", WebDefault = "" };
 
-    // ⛔ Every kind that uses WindowBackColor (TextBox, ComboBox, ListBox, NumericUpDown, CheckedListBox, ListView, TreeView)
-    // THROWS on a translucent BackColor — measured (WinFormsTranslucentBackColorRunTests), so the row says so.
+    // Γ¢ö Every kind that uses WindowBackColor (TextBox, ComboBox, ListBox, NumericUpDown, CheckedListBox, ListView, TreeView)
+    // THROWS on a translucent BackColor ΓÇö measured (WinFormsTranslucentBackColorRunTests), so the row says so.
     private static readonly FormPropertyDef WindowBackColor =
         BackColor with { Default = "Window", WebDefault = "", WinFormsTranslucency = FormTranslucency.ThrowsOnControl };
 
-    /// <summary>The plain BackColor of a kind whose WinForms control refuses a translucent one (TrackBar, ProgressBar — measured).</summary>
+    /// <summary>The plain BackColor of a kind whose WinForms control refuses a translucent one (TrackBar, ProgressBar ΓÇö measured).</summary>
     private static readonly FormPropertyDef OpaqueBackColor = BackColor with { WinFormsTranslucency = FormTranslucency.ThrowsOnControl };
 
     private static readonly FormPropertyDef HighlightForeColor = ForeColor with { Default = "Highlight", WebDefault = "" };
 
-    // ⛔ Owner decision O2 (2026-09-29): a colour WinForms marks [Browsable(false)] on a kind is NOT offered — the
+    // Γ¢ö Owner decision O2 (2026-09-29): a colour WinForms marks [Browsable(false)] on a kind is NOT offered ΓÇö the
     // grid shows what VS shows, on both targets (one vocabulary, D2). The slice-1 HiddenInWinForms rows (PictureBox's
     // ForeColor, DateTimePicker's two, TrackBar's ForeColor, DataGridView's and TabControl's two) were removed; those
-    // kinds pass NULL for the missing colour to CommonColoured. WinFormsCatalogParityTests.EveryWinFormsColourRow_…
+    // kinds pass NULL for the missing colour to CommonColoured. WinFormsCatalogParityTests.EveryWinFormsColourRow_ΓÇª
     // fails if one comes back. A document that still carries such an attribute keeps it as an unknown attribute
     // (preserved, round-tripped, no longer emitted).
 
-    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false",
+    private static readonly FormPropertyDef Checked = new("Checked", FormPropertyType.Bool, "false", DomMember: "checked",
         Category: FormPropertyCategory.Appearance, Description: "Indicates whether the component is in the checked state.");
 
-    // ⚠ RadioButton's own Checked: WinForms describes it differently from CheckBox's (the parity run).
+    // ΓÜá RadioButton's own Checked: WinForms describes it differently from CheckBox's (the parity run).
     private static readonly FormPropertyDef RadioChecked = Checked with
     {
         Description = "Indicates whether the radio button is checked or not."
     };
 
-    // ⛔ SelectedIndex is [Browsable(false)] on all four kinds that carry it (measured by reflection,
-    // Task 8) — the snapshot is browsable-only, so it reports "no such property". Two reasons, because
+    // Γ¢ö SelectedIndex is [Browsable(false)] on all four kinds that carry it (measured by reflection,
+    // Task 8) ΓÇö the snapshot is browsable-only, so it reports "no such property". Two reasons, because
     // the kinds offer it for two different reasons.
     private const string SelectedIndexForTheWeb =
-        "SelectedIndex is [Browsable(false)] in WinForms — VS does not list it; the designer offers it " +
+        "SelectedIndex is [Browsable(false)] in WinForms ΓÇö VS does not list it; the designer offers it " +
         "because the web <option selected> needs it (FormAssetEmitter) and WinForms sets it at startup; " +
         "csc gates the name";
 
     private const string SelectedIndexWinFormsOnly =
-        "SelectedIndex is [Browsable(false)] in WinForms — VS does not list it; the designer offers it so " +
+        "SelectedIndex is [Browsable(false)] in WinForms ΓÇö VS does not list it; the designer offers it so " +
         "the form can OPEN on a chosen item/tab, which VS users otherwise set in code after " +
         "InitializeComponent; csc gates the name";
 
-    private static FormPropertyDef SelectedIndex(string reason) => new("SelectedIndex", FormPropertyType.Int, "-1",
+    private static FormPropertyDef SelectedIndex(string reason) => new("SelectedIndex", FormPropertyType.Int, "-1", DomMember: "selectedIndex",
         Category: FormPropertyCategory.Behavior,
         Description: "The zero-based index of the item selected when the form opens; -1 selects nothing.",
         OracleExemption: reason);
 
     // ==================================================================
     // Strip and strip-item rows shared across kinds (Task 24's rows, WinForms' metadata from Task 8).
-    // ⛔ Enabled is WinForms-only on these: a browser ignores `disabled` on <nav>/<li>/<span> (spec §4).
+    // Γ¢ö Enabled is WinForms-only on these: a browser ignores `disabled` on <nav>/<li>/<span> (spec ┬º4).
     // ==================================================================
     private static readonly FormPropertyDef StripEnabled = Enabled with { Targets = new[] { FormTarget.WinForms } };
 
     private static FormPropertyDef StripDock(string placementDefault) => new(
-        "Dock", FormPropertyType.Enum, placementDefault, new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle",
+        "Dock", FormPropertyType.Enum, placementDefault, new[] { "Top", "Bottom" }, WinFormsEnumType: "DockStyle", DomMember: "getAttribute(\"data-vgs-dock\")",
         Category: FormPropertyCategory.Layout,
         Description: "Defines which borders of the control are bound to the container.");
 
-    private static FormPropertyDef ItemText() => new("Text", FormPropertyType.String,
+    private static IReadOnlyList<FormEventDef> StripItemClicked() =>
+        Ev("ItemClicked", "click", args: "ToolStripItemClickedEventArgs",
+            category: FormEventCategory.Action, description: ItemClickedDescription);
+
+    private static FormPropertyDef ItemText() => new("Text", FormPropertyType.String, DomMember: "textContent",
         Category: FormPropertyCategory.Appearance, Description: "The text to display on the item.");
 
     private static FormPropertyDef ItemToolTipText() => new("ToolTipText", FormPropertyType.String, HtmlAttribute: "title",
@@ -1696,25 +1724,25 @@ public static class FormControlCatalog
         Category: FormPropertyCategory.Behavior,
         Description: "Indicates whether the item should toggle its selected state when clicked.");
 
-    // ⚠ Timer/ToolTip/ErrorProvider-style tray rows are compared like any other; BackgroundWorker is not
+    // ΓÜá Timer/ToolTip/ErrorProvider-style tray rows are compared like any other; BackgroundWorker is not
     // (see its row): on .NET it carries no [DefaultValue], [Category] or [Description] at all.
-    // ⛔ Owner decision O4 (2026-09-29): its descriptions are WinForms' OWN text all the same — .NET Framework 4.8's
+    // Γ¢ö Owner decision O4 (2026-09-29): its descriptions are WinForms' OWN text all the same ΓÇö .NET Framework 4.8's
     // [Description]s, measured on the owner's machine with TypeDescriptor over System.dll (Windows PowerShell 5.1).
     private const string BackgroundWorkerHasNoMetadata =
         "System.ComponentModel.BackgroundWorker carries no [DefaultValue]/[Category]/[Description] on .NET " +
         "(measured by reflection), so the snapshot's 'serialized'/Misc/empty text records the ABSENCE of " +
-        "metadata, not a value. A fresh instance reads False (measured) — what an absent attribute means. The " +
+        "metadata, not a value. A fresh instance reads False (measured) ΓÇö what an absent attribute means. The " +
         "description is .NET Framework 4.8's own [Description] for the same property (owner decision O4).";
 
     // ==================================================================
-    // TextAlign — spec §2.8. ONE definition used to serve Label, Button and LinkLabel with default
+    // TextAlign ΓÇö spec ┬º2.8. ONE definition used to serve Label, Button and LinkLabel with default
     // Left and a Left/Center/Right vocabulary, while their WinForms defaults DIFFER (TopLeft,
-    // MiddleCenter, TopLeft) — so the grid would have shown a default the program does not run.
+    // MiddleCenter, TopLeft) ΓÇö so the grid would have shown a default the program does not run.
     // Now: per-row definitions over the full nine-member ContentAlignment vocabulary, each with its
     // type's WinForms default, and the old words kept as ACCEPTED-but-not-offered aliases so every
     // existing document stays Canon and round-trips byte-for-byte.
     //
-    // ⛔ These two fields MUST stay above the TextAlign fields that read them (textual init order).
+    // Γ¢ö These two fields MUST stay above the TextAlign fields that read them (textual init order).
     // ==================================================================
     private static readonly string[] ContentAlignments =
     {
@@ -1745,20 +1773,20 @@ public static class FormControlCatalog
     private static readonly FormPropertyDef ButtonTextAlign =
         TextAlignDefaulting("MiddleCenter", "The alignment of the text that will be displayed on the control.");
 
-    // ⚠ Identical to LabelTextAlign today (LinkLabel inherits Label.TextAlign) and kept SEPARATE on
+    // ΓÜá Identical to LabelTextAlign today (LinkLabel inherits Label.TextAlign) and kept SEPARATE on
     // purpose: parity is judged per row, and if Task 8's run finds LinkLabel's default or description
     // differs, the fix is this one line rather than splitting a shared field under a green suite.
     private static readonly FormPropertyDef LinkLabelTextAlign =
         TextAlignDefaulting("TopLeft", "Determines the position of the text within the label.");
 
     // ==================================================================
-    // Slice 3 — the shared Font / Cursor / Padding rows (spec §2.2, D1). WinForms' own metadata (the snapshot);
+    // Slice 3 ΓÇö the shared Font / Cursor / Padding rows (spec ┬º2.2, D1). WinForms' own metadata (the snapshot);
     // the web through the named converters in FormCss.
     //
-    // ⛔ Font and Cursor are AMBIENT on every kind that has them (no static default — spec §2.7), except where the
+    // Γ¢ö Font and Cursor are AMBIENT on every kind that has them (no static default ΓÇö spec ┬º2.7), except where the
     // snapshot says otherwise (TextBox's Cursor resets to IBeam). WinForms hides Font on PictureBox, TrackBar,
     // ProgressBar and DataGridView: those kinds pass NULL for it (ControlRows), exactly as a hidden colour is not
-    // offered (owner decision O2) — the parity test names a row the snapshot lacks.
+    // offered (owner decision O2) ΓÇö the parity test names a row the snapshot lacks.
     // ==================================================================
     private static readonly FormPropertyDef FontRow = new("Font", FormPropertyType.Font,
         Category: FormPropertyCategory.Appearance, Description: "The font used to display text in the control.",
@@ -1769,35 +1797,35 @@ public static class FormControlCatalog
         Description: "The cursor that appears when the pointer moves over the control.",
         CssProperty: "cursor", CssConverter: FormCssConverter.Cursor);
 
-    // ⚠ Not ambient on a TextBox (the snapshot's 'reset'); on the page an <input> already shows the text cursor, so the
-    // browser — not WinForms — decides what an absent value looks like (WebDefault empty).
+    // ΓÜá Not ambient on a TextBox (the snapshot's 'reset'); on the page an <input> already shows the text cursor, so the
+    // browser ΓÇö not WinForms ΓÇö decides what an absent value looks like (WebDefault empty).
     private static readonly FormPropertyDef IBeamCursorRow = CursorRow with { Default = "IBeam", WebDefault = "" };
 
-    // ⚠ Content controls only (slice 3 pre-flight §3): a CONTAINER's Padding moves its docked children in WinForms,
-    // and FormDockLayout does not model it — so no container carries this row until it does. WebDefault empty: the
+    // ΓÜá Content controls only (slice 3 pre-flight ┬º3): a CONTAINER's Padding moves its docked children in WinForms,
+    // and FormDockLayout does not model it ΓÇö so no container carries this row until it does. WebDefault empty: the
     // browser's own padding (a <button>'s is not 0) is what an absent value means on the page.
     private static readonly FormPropertyDef PaddingRow = new("Padding", FormPropertyType.Padding, "0",
         Category: FormPropertyCategory.Layout, Description: "Specifies the interior spacing of a control.",
         CssProperty: "padding", CssConverter: FormCssConverter.Padding, WebDefault: "");
 
     // ==================================================================
-    // D2's web-only extras (spec §1): on EVERY web element kind, added by rule (WithWebExtras) to each row of All that
-    // has an HtmlTag — never to a tray component (no element) or a WinForms-only kind.
+    // D2's web-only extras (spec ┬º1): on EVERY web element kind, added by rule (WithWebExtras) to each row of All that
+    // has an HtmlTag ΓÇö never to a tray component (no element) or a WinForms-only kind.
     // ==================================================================
-    private static readonly FormPropertyDef CssClassRow = new("CssClass", FormPropertyType.CssClasses,
+    private static readonly FormPropertyDef CssClassRow = new("CssClass", FormPropertyType.CssClasses, DomMember: "className",
         Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
         Description: "CSS class names added to the element on the page, separated by spaces.");
 
-    // ⚠ The element's style ATTRIBUTE (raw CSS the user wrote), escaped by the emitter as every attribute is — an inline
+    // ΓÜá The element's style ATTRIBUTE (raw CSS the user wrote), escaped by the emitter as every attribute is ΓÇö an inline
     // style is exactly "raw CSS" and cannot leave its attribute. It outranks the stylesheet, as inline styles do.
-    private static readonly FormPropertyDef StyleRow = new("Style", FormPropertyType.String, HtmlAttribute: "style",
+    private static readonly FormPropertyDef StyleRow = new("Style", FormPropertyType.String, HtmlAttribute: "style", DomMember: "style.cssText",
         Targets: new[] { FormTarget.Web }, Category: FormPropertyCategory.Appearance,
         Description: "Extra CSS declarations for the element on the page (its style attribute).");
 
     // ==================================================================
-    // Slice 3 Task 5 — shared D1 rows used by more than one kind. WinForms' own metadata (the snapshot); every one is
-    // WinForms-only unless it has a clean page meaning (D2) — the D2 sweep (FormWebVocabularyTests) keeps it that way.
-    // ⛔ Methods, not fields: immune to the textual-order initializer trap.
+    // Slice 3 Task 5 ΓÇö shared D1 rows used by more than one kind. WinForms' own metadata (the snapshot); every one is
+    // WinForms-only unless it has a clean page meaning (D2) ΓÇö the D2 sweep (FormWebVocabularyTests) keeps it that way.
+    // Γ¢ö Methods, not fields: immune to the textual-order initializer trap.
     // ==================================================================
     private static FormPropertyDef LabelAutoSize() => new("AutoSize", FormPropertyType.Bool, "false",
         Targets: new[] { FormTarget.WinForms }, Category: FormPropertyCategory.Layout,
@@ -1811,7 +1839,7 @@ public static class FormControlCatalog
         Targets: new[] { FormTarget.WinForms }, Category: FormPropertyCategory.Behavior,
         Description: "Controls whether the list is sorted.");
 
-    // ⚠ TextBox/NumericUpDown's own TextAlign — WinForms' HorizontalAlignment (Left/Right/Center), NOT ContentAlignment.
+    // ΓÜá TextBox/NumericUpDown's own TextAlign ΓÇö WinForms' HorizontalAlignment (Left/Right/Center), NOT ContentAlignment.
     // The page's text-align through the same horizontal converter (it reads the member's Left/Center/Right ending).
     private static FormPropertyDef HorizontalTextAlign(string description) => new("TextAlign", FormPropertyType.Enum, "Left",
         new[] { "Left", "Right", "Center" }, WinFormsEnumType: "HorizontalAlignment",
@@ -1819,7 +1847,7 @@ public static class FormControlCatalog
         CssProperty: "text-align", CssConverter: FormCssConverter.ContentAlignmentHorizontal);
 
     /// <summary>
-    /// ⚠ An extra is skipped on a kind that already has a row of that NAME: a row is found by name, never by target
+    /// ΓÜá An extra is skipped on a kind that already has a row of that NAME: a row is found by name, never by target
     /// (<see cref="FormControlDef.Property"/>), so a second "Style" beside ProgressBar's WinForms <c>ProgressBarStyle</c>
     /// row would make the reader judge the page's raw CSS as that enum. ProgressBar therefore has no raw Style on the web
     /// (<c>FormWebVocabularyTests</c> pins the exception and that no kind carries two rows of one name).
@@ -1829,8 +1857,20 @@ public static class FormControlCatalog
             ? definition
             : definition with
             {
+                EnableTarget = definition.EnableTarget ?? (definition.HtmlTag is "button" or "input" or "select" or "textarea" or "fieldset"
+                    ? FormEnableTarget.Native : FormEnableTarget.Aria),
                 Properties = definition.Properties
                     .Concat(new[] { CssClassRow, StyleRow }.Where(extra => definition.Property(extra.Name) == null))
+                    .Select(p => p.Name == "Text" && definition.CaptionTag != null
+                        ? p with { DomMember = "querySelector(\"" + definition.CaptionTag + "\").textContent" }
+                        : p.Name == "Text" && definition.HtmlTag == "input"
+                            ? p with { DomMember = "value" }
+                        : p.Name == "Checked" && definition.CaptionWrapper != null
+                            ? p with { DomMember = "querySelector(\"input\").checked" }
+                            : p.Name == "Enabled" && definition.EnableTarget == FormEnableTarget.InnerInput
+                                ? p with { DomMember = "querySelector(\"input\").disabled" }
+                                : p.Name == "Enabled" && definition.HtmlTag is "label" or "div" or "a" or "img" or "progress"
+                                    ? p with { DomMember = "getAttribute(\"aria-disabled\")" } : p)
                     .ToList()
             };
 
@@ -1838,8 +1878,8 @@ public static class FormControlCatalog
         CommonColoured(ForeColor, BackColor, own);
 
     /// <summary>
-    /// <see cref="Common"/> with a kind's OWN colour rows — where the parity run showed the colour is not
-    /// ambient on that kind (TextBox's Window) — or NULL where WinForms hides it (owner decision O2: not
+    /// <see cref="Common"/> with a kind's OWN colour rows ΓÇö where the parity run showed the colour is not
+    /// ambient on that kind (TextBox's Window) ΓÇö or NULL where WinForms hides it (owner decision O2: not
     /// offered). Same order as <see cref="Common"/>, so the grid does not reshuffle.
     /// </summary>
     private static IReadOnlyList<FormPropertyDef> CommonColoured(
@@ -1847,7 +1887,7 @@ public static class FormControlCatalog
         ControlRows(foreColor, backColor, FontRow, CursorRow, own);
 
     /// <summary>
-    /// Every shared row a positioned control carries, each chosen per kind — NULL where WinForms does not browse it
+    /// Every shared row a positioned control carries, each chosen per kind ΓÇö NULL where WinForms does not browse it
     /// (O2 for colours, the snapshot for Font). Order: the kind's own rows, then Enabled, Visible, the colours, Font,
     /// Cursor.
     /// </summary>
@@ -1856,7 +1896,7 @@ public static class FormControlCatalog
         params FormPropertyDef[] own) =>
         own.Concat(new[] { Enabled, Visible, foreColor, backColor, font, cursor }.OfType<FormPropertyDef>()).ToList();
 
-    // Control.Click's WinForms metadata — the most-shared default event (Task 8's parity run).
+    // Control.Click's WinForms metadata ΓÇö the most-shared default event (Task 8's parity run).
     private const string ClickedDescription = "Occurs when the component is clicked.";
 
     // A ToolStripItem's Click and a strip's ItemClicked share this text in WinForms.
@@ -1866,20 +1906,20 @@ public static class FormControlCatalog
     private const string ListBoxItemsDescription = "The items in the list box.";
 
     // ==================================================================
-    // Slice 5 D-1 — each kind's event list (pre-flight 2026-10-04 §2 D-1, ADR 0021). The default event comes first; the
+    // Slice 5 D-1 ΓÇö each kind's event list (pre-flight 2026-10-04 ┬º2 D-1, ADR 0021). The default event comes first; the
     // rest are the kind-specific events a VS user wires plus, from Mouse/Key/Focus, only those WinForms browses on that
     // kind. Name, args and web name were written by hand; Category and Description are WinForms' own (the snapshot,
-    // through the parity run). An args type outside System/System.Windows.Forms is written FULLY QUALIFIED — the WinForms
+    // through the parity run). An args type outside System/System.Windows.Forms is written FULLY QUALIFIED ΓÇö the WinForms
     // scaffold imports nothing else. A null web name means WinForms-only (a web form never shows it); on a kind that is
     // not on the page every web name is null. KeyPress and Enter/Leave carry the WebFilter their page wrapper needs.
-    // ⛔ Static METHODS, not fields: immune to the textual-order initializer trap below.
-    // ⛔ Panel's Paint is the default (owner decision 2026-09-29: VS opens it) and Click is its declared web default.
+    // Γ¢ö Static METHODS, not fields: immune to the textual-order initializer trap below.
+    // Γ¢ö Panel's Paint is the default (owner decision 2026-09-29: VS opens it) and Click is its declared web default.
     // ==================================================================
 
-    // ⛔ GroupBox.Click is [Browsable(false)]; kept so existing documents that bind it keep working.
+    // Γ¢ö GroupBox.Click is [Browsable(false)]; kept so existing documents that bind it keep working.
     private static FormEventDef GroupBoxClick() => new("Click", WebEvent: "click", Category: FormEventCategory.Action,
         Description: ClickedDescription,
-        OracleExemption: "GroupBox.Click is [Browsable(false)] in WinForms — VS does not list it — but a " +
+        OracleExemption: "GroupBox.Click is [Browsable(false)] in WinForms ΓÇö VS does not list it ΓÇö but a " +
                          "real click raises it (measured by reflection and a simulated WM_LBUTTONDOWN/UP, " +
                          "Task 8); kept as a non-default event so documents that bind it keep working; " +
                          "csc gates the name");
@@ -1893,9 +1933,9 @@ public static class FormControlCatalog
         "still WinForms'.";
 
     /// <summary>
-    /// KeyDown, KeyUp, KeyPress — WinForms' own text, the same on every kind that browses them (review fix 5: one copy,
+    /// KeyDown, KeyUp, KeyPress ΓÇö WinForms' own text, the same on every kind that browses them (review fix 5: one copy,
     /// not one per kind). <paramref name="web"/>: the kind exists on the page, so they carry their DOM names, and
-    /// KeyPress its <see cref="FormWebFilter.KeyPressKeys"/> wrapper (ADR 0021). ⛔ Order matters only for reading;
+    /// KeyPress its <see cref="FormWebFilter.KeyPressKeys"/> wrapper (ADR 0021). Γ¢ö Order matters only for reading;
     /// the raise order on the page is RegionWriter's.
     /// </summary>
     private static FormEventDef[] KeyEvents(bool web) =>
@@ -1907,7 +1947,7 @@ public static class FormControlCatalog
             WebFilter: web ? FormWebFilter.KeyPressKeys : FormWebFilter.None)
     ];
 
-    /// <summary>Enter, Leave — on the page the <see cref="FormWebFilter.FromOutside"/> <c>focusin</c>/<c>focusout</c>.</summary>
+    /// <summary>Enter, Leave ΓÇö on the page the <see cref="FormWebFilter.FromOutside"/> <c>focusin</c>/<c>focusout</c>.</summary>
     private static FormEventDef[] FocusEvents(bool web) =>
     [
         new FormEventDef("Enter", null, web ? "focusin" : null, FormEventCategory.Focus,
@@ -2336,7 +2376,7 @@ public static class FormControlCatalog
     /// <summary>
     /// The Form's events (slice 5 D-3). Default Load, as WinForms' <c>[DefaultEvent]</c>. On the page: Load is a call at the
     /// end of <c>InitializeComponent</c> (a <c>window</c> load can already have fired), Resize listens on the window, and
-    /// Click/KeyDown/KeyUp/KeyPress on <c>document.body</c> — so they see bubbled events, as if <c>KeyPreview=True</c>
+    /// Click/KeyDown/KeyUp/KeyPress on <c>document.body</c> ΓÇö so they see bubbled events, as if <c>KeyPreview=True</c>
     /// (a recorded divergence, ADR 0021). Shown, Activated and FormClosing/FormClosed have no honest page event.
     /// </summary>
     private static IReadOnlyList<FormEventDef> FormRootEvents() => new[]
@@ -2354,9 +2394,9 @@ public static class FormControlCatalog
     };
 
     /// <summary>
-    /// A row's events when it declares only its DEFAULT one — Timer, ErrorProvider and ToolStripSeparator, the kinds
+    /// A row's events when it declares only its DEFAULT one ΓÇö Timer, ErrorProvider and ToolStripSeparator, the kinds
     /// whose snapshot offers nothing more a VS user wires (D-1). Category and Description are WinForms' own.
-    /// ⛔ A static METHOD, not a field, so it is immune to the textual-order initializer trap below.
+    /// Γ¢ö A static METHOD, not a field, so it is immune to the textual-order initializer trap below.
     /// </summary>
     private static IReadOnlyList<FormEventDef> Ev(
         string winForms, string? web = null, string? args = null,
@@ -2365,12 +2405,12 @@ public static class FormControlCatalog
 
     /// <summary>
     /// The ten kinds of v1. Ten is a deliberate floor, not a ceiling: it is the smallest set that
-    /// covers a login form, a settings pane and a list-detail pane — the three shapes the designer
+    /// covers a login form, a settings pane and a list-detail pane ΓÇö the three shapes the designer
     /// has to handle before it is worth using at all.
     ///
-    /// <para>⛔ This field MUST stay below the shared <c>FormPropertyDef</c> fields it reads through
-    /// <c>Common(…)</c>. Static field initializers run in textual order, so moving it above them
-    /// leaves every shared property null inside the concat — with no compile error and no exception
+    /// <para>Γ¢ö This field MUST stay below the shared <c>FormPropertyDef</c> fields it reads through
+    /// <c>Common(ΓÇª)</c>. Static field initializers run in textual order, so moving it above them
+    /// leaves every shared property null inside the concat ΓÇö with no compile error and no exception
     /// at init, just a NullReferenceException later from <c>Property()</c> or <c>Accepts()</c>.</para>
     /// </summary>
     public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
@@ -2384,20 +2424,24 @@ public static class FormControlCatalog
             Events: LabelEvents()),
         new("TextBox",     "TextBox",     "input",    "text",     false, ControlRows(WindowTextForeColor, WindowBackColor,
             FontRow, IBeamCursorRow,
-            Text,
+            Text with { DomMember = "value" },
             new FormPropertyDef("Multiline", FormPropertyType.Bool, "false",
+                DomMember: "tagName",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls whether the text of the edit control can span more than one line."),
             new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false",
+                DomMember: "readOnly",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls whether the text in the edit control can be changed or not."),
-            // ⚠ WinForms caps an absent MaxLength at 32767; an <input> with no maxlength is unlimited.
+            // ΓÜá WinForms caps an absent MaxLength at 32767; an <input> with no maxlength is unlimited.
             new FormPropertyDef("MaxLength", FormPropertyType.Int, "32767", HtmlAttribute: "maxlength",
+                DomMember: "maxLength",
                 WebDefault: "",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Specifies the maximum number of characters that can be entered into the edit control."),
-            // WinForms PasswordChar is a char, not a string — assigning one is CS0029.
+            // WinForms PasswordChar is a char, not a string ΓÇö assigning one is CS0029.
             new FormPropertyDef("PasswordChar", FormPropertyType.String,
+                DomMember: "getAttribute(\"data-vgs-passwordchar\")",
                 WinFormsFactory: "Convert.ToChar",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates the character to display for password input for single-line edit controls."),
@@ -2411,13 +2455,13 @@ public static class FormControlCatalog
             new FormPropertyDef("WordWrap", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
                 Description: "Indicates if lines are automatically word-wrapped for multiline edit controls."),
-            // ⛔ Both targets (D2): the <input>'s own placeholder attribute.
+            // Γ¢ö Both targets (D2): the <input>'s own placeholder attribute.
             new FormPropertyDef("PlaceholderText", FormPropertyType.String, HtmlAttribute: "placeholder",
                 Category: FormPropertyCategory.Misc,
                 Description: "Specifies the PlaceholderText of the TextBox control. The PlaceholderText is displayed in the control when the Text property is null or empty and can be used to guide the user what input is expected by the control."),
             HorizontalTextAlign("Indicates how the text should be aligned for edit controls.")),
             DefaultWidth: 100, DefaultHeight: 23,
-            // ⚠ The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
+            // ΓÜá The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: TextBoxEvents(),
             StretchesWhenStacked: true),
@@ -2434,7 +2478,7 @@ public static class FormControlCatalog
             DefaultWidth: 75, DefaultHeight: 23, Schematic: FormSchematic.Button,
             Events: ButtonEvents()),
         new("CheckBox",    "CheckBox",    "input",    "checkbox", false, Common(Text, Checked, PaddingRow,
-            // ⚠ WinForms only: an HTML checkbox's indeterminate state exists only as a script property, never markup.
+            // ΓÜá WinForms only: an HTML checkbox's indeterminate state exists only as a script property, never markup.
             new FormPropertyDef("CheckState", FormPropertyType.Enum, "Unchecked", new[] { "Unchecked", "Checked", "Indeterminate" },
                 WinFormsEnumType: "CheckState", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance, Description: "Indicates the state of the component."),
@@ -2453,9 +2497,10 @@ public static class FormControlCatalog
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             RadioChecked,
-            // ⛔ WEB ONLY. The DOM groups radios by name=; WinForms groups them by CONTAINER and
-            // has no GroupName property at all — csc says CS1061, BasicLang says nothing.
+            // Γ¢ö WEB ONLY. The DOM groups radios by name=; WinForms groups them by CONTAINER and
+            // has no GroupName property at all ΓÇö csc says CS1061, BasicLang says nothing.
             new FormPropertyDef("GroupName", FormPropertyType.String,
+                DomMember: "querySelector(\"input\").name",
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
                 Description: "The radio group this button belongs to on the page: buttons sharing a name are mutually exclusive."),
@@ -2472,11 +2517,11 @@ public static class FormControlCatalog
             Events: RadioButtonEvents()),
         new("ComboBox",    "ComboBox",    "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             Text,
-            // Items is a get-only collection on WinForms — assigning it is CS0200.
+            // Items is a get-only collection on WinForms ΓÇö assigning it is CS0200.
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
                 Category: FormPropertyCategory.Data, Description: "The items in the combo box.", Mergeable: false),
             SelectedIndex(SelectedIndexForTheWeb),
-            // ⚠ WinForms only: a <select> is always a drop-down list — it has no editable text box to style.
+            // ΓÜá WinForms only: a <select> is always a drop-down list ΓÇö it has no editable text box to style.
             new FormPropertyDef("DropDownStyle", FormPropertyType.Enum, "DropDown", new[] { "Simple", "DropDown", "DropDownList" },
                 WinFormsEnumType: "ComboBoxStyle", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance,
@@ -2494,14 +2539,15 @@ public static class FormControlCatalog
             new FormPropertyDef("Items", FormPropertyType.String, IsItemCollection: true,
                 Category: FormPropertyCategory.Data, Description: ListBoxItemsDescription, Mergeable: false),
             SelectedIndex(SelectedIndexForTheWeb),
-            // ⛔ WEB ONLY. WinForms ListBox has no MultiSelect — it has SelectionMode, an enum.
+            // Γ¢ö WEB ONLY. WinForms ListBox has no MultiSelect ΓÇö it has SelectionMode, an enum.
             // Mapping a Bool onto it is a design decision v1 has not made, so the property stays
             // web-only rather than being silently approximated.
             new FormPropertyDef("MultiSelect", FormPropertyType.Bool, "false",
+                DomMember: "multiple",
                 Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Behavior,
                 Description: "Allows more than one item to be selected at a time on the page."),
-            // ⚠ WinForms' own selection vocabulary; the page keeps its web-only MultiSelect (above) — mapping one onto
+            // ΓÜá WinForms' own selection vocabulary; the page keeps its web-only MultiSelect (above) ΓÇö mapping one onto
             // the other is still the decision v1 has not made.
             new FormPropertyDef("SelectionMode", FormPropertyType.Enum, "One", new[] { "None", "One", "MultiSimple", "MultiExtended" },
                 WinFormsEnumType: "SelectionMode", Targets: new[] { FormTarget.WinForms },
@@ -2518,36 +2564,41 @@ public static class FormControlCatalog
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },
                 WinFormsEnumType: "BorderStyle",
+                CssProperty: "border", CssConverter: FormCssConverter.BorderStyle, PortableCssOnly: true,
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether the panel should have a border."),
-            // ⛔ Both targets (D2): on the page the <div> scrolls its overflow, as the WinForms Panel does.
+            // Γ¢ö Both targets (D2): on the page the <div> scrolls its overflow, as the WinForms Panel does.
             new FormPropertyDef("AutoScroll", FormPropertyType.Bool, "false",
                 Category: FormPropertyCategory.Layout,
                 Description: "Indicates whether scroll bars automatically appear when the control contents are larger than its visible area.",
                 CssProperty: "overflow", CssConverter: FormCssConverter.AutoScrollToOverflow)),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Container,
-            // ⛔ Owner decision (2026-09-29): a double-click opens what VS opens — Paint, with its PaintEventArgs. A page
+            // Γ¢ö Owner decision (2026-09-29): a double-click opens what VS opens ΓÇö Paint, with its PaintEventArgs. A page
             // has no Paint, so on the web the gesture opens the row's DECLARED web default, Click, and says so
             // (BL8035); a Paint bind is dropped-and-named by a retarget like any event with no web name.
-            Events: PanelEvents()),
+            Events: PanelEvents(), ClientArea: new FormClientRule("BorderStyle")),
         new("GroupBox",    "GroupBox",    "fieldset", null,       true,  Common(Text),
             DefaultWidth: 200, DefaultHeight: 100, Schematic: FormSchematic.Group,
-            // ⛔ Owner decision O3 (2026-09-29, checked in Visual Studio): a double-click creates an ENTER handler,
-            // as VS does — the snapshot's DefaultEvent agrees, so Enter needs no exemption. On the page Enter is the
+            CaptionTag: "legend", ClientArea: new FormClientRule(DockPadding: new FormInsets(3, 19, 3, 3)),
+            PortableCss: ".vgs-GroupBox { position: relative; border: 0; padding: 0; margin: 0; min-inline-size: 0; box-sizing: border-box; }\n.vgs-GroupBox::before { content: \"\"; position: absolute; inset: 7px 0 0; border: 1px solid #aaa; pointer-events: none; }\n.vgs-GroupBox > legend { position: absolute; left: 8px; top: 0; padding: 0 2px; background: Canvas; z-index: 1; }",
+            // Γ¢ö Owner decision O3 (2026-09-29, checked in Visual Studio): a double-click creates an ENTER handler,
+            // as VS does ΓÇö the snapshot's DefaultEvent agrees, so Enter needs no exemption. On the page Enter is the
             // fieldset's `focusin`: focus moving INTO the box, which bubbles from its children exactly as WinForms
             // raises Enter for a container when one of its children becomes active (a fieldset itself takes no focus).
-            // ⚠ Click stays, NON-default: existing documents bind it, and the retarget crosses any event wired on
-            // both targets (FormRetarget.CrossBinds through FormEvents.WiredOn — pre-flight B1, slice 5 D-6).
+            // ΓÜá Click stays, NON-default: existing documents bind it, and the retarget crosses any event wired on
+            // both targets (FormRetarget.CrossBinds through FormEvents.WiredOn ΓÇö pre-flight B1, slice 5 D-6).
             Events: GroupBoxEvents()),
         new("PictureBox",  "PictureBox",  "img",      null,       false, ControlRows(
             null, BackColor, null, CursorRow,
             // WinForms Image is a System.Drawing.Image, not a path string (CS0029): the Image TYPE owns its literal (D-5b).
-            new FormPropertyDef("Image", FormPropertyType.Image,
+            new FormPropertyDef("Image", FormPropertyType.Image, DomMember: "src", WinFormsFactory: "Image.FromFile",
                 Category: FormPropertyCategory.Appearance,
                 Description: "The image displayed in the PictureBox."),
             new FormPropertyDef("SizeMode", FormPropertyType.Enum, "Normal",
                 new[] { "Normal", "StretchImage", "AutoSize", "CenterImage", "Zoom" },
-                WinFormsEnumType: "PictureBoxSizeMode",
+                WinFormsEnumType: "PictureBoxSizeMode", DomMember: "style.objectFit",
+                CssProperty: "object-fit", CssConverter: FormCssConverter.PictureBoxSizeMode,
+                PortableCssOnly: true,
                 Category: FormPropertyCategory.Behavior,
                 Description: "Controls how the PictureBox will handle image placement and control sizing."),
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None", new[] { "None", "FixedSingle", "Fixed3D" },
@@ -2559,15 +2610,15 @@ public static class FormControlCatalog
             StretchesWhenStacked: true),
 
         // ==================================================================
-        // Task 23 — the rest of the common-controls tier.
+        // Task 23 ΓÇö the rest of the common-controls tier.
         //
-        // ⛔ Every property below is UNFALSIFIABLE except through csc. A misspelling types as
+        // Γ¢ö Every property below is UNFALSIFIABLE except through csc. A misspelling types as
         // Object and compiles green, so nothing here is trustworthy until
         // WinFormsCatalogSweepTests has generated it and the real compiler has accepted it.
         // ==================================================================
 
-        // ⚠ A LinkLabel IS a Label that looks clickable, and <a> is the honest tag. Slice 3 (D1) adds LinkColor — the
-        // designer writes it only when the user sets it (spec §2.7), so no theme is frozen into the form. ⚠ WinForms-only:
+        // ΓÜá A LinkLabel IS a Label that looks clickable, and <a> is the honest tag. Slice 3 (D1) adds LinkColor ΓÇö the
+        // designer writes it only when the user sets it (spec ┬º2.7), so no theme is frozen into the form. ΓÜá WinForms-only:
         // on the page the link's colour IS its ForeColor (`color`), and two rows writing one CSS property conflict.
         // ActiveLinkColor/DisabledLinkColor/VisitedLinkColor stay out (not D1).
         new("LinkLabel",   "LinkLabel",   "a",        null,       false, Common(Text, LinkLabelTextAlign, PaddingRow,
@@ -2580,12 +2631,12 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Behavior, Description: "Determines the underline behavior of the hyperlink."),
             LabelAutoSize()),
             DefaultWidth: 100, DefaultHeight: 23, Schematic: FormSchematic.Link,
-            // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Link.
+            // ΓÜá The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Link.
             Events: LinkLabelEvents()),
 
         new("NumericUpDown", "NumericUpDown", "input", "number",  false, CommonColoured(WindowTextForeColor, WindowBackColor,
-            // ⛔ These are DECIMAL on WinForms. An Int literal widens implicitly, so the catalog
-            // models them as Int and the emitted `n.Minimum = 0` compiles — but a decimal default
+            // Γ¢ö These are DECIMAL on WinForms. An Int literal widens implicitly, so the catalog
+            // models them as Int and the emitted `n.Minimum = 0` compiles ΓÇö but a decimal default
             // written as "0.00" would not round-trip through Int, which is why the defaults are
             // whole numbers.
             new FormPropertyDef("Minimum", FormPropertyType.Int, "0", HtmlAttribute: "min",
@@ -2600,7 +2651,7 @@ public static class FormControlCatalog
             new FormPropertyDef("Increment", FormPropertyType.Int, "1", HtmlAttribute: "step",
                 Category: FormPropertyCategory.Data,
                 Description: "Indicates the amount to increment or decrement on each button click."),
-            // ⛔ WinForms only: <input type="number"> has no decimal-places concept, it has step.
+            // Γ¢ö WinForms only: <input type="number"> has no decimal-places concept, it has step.
             new FormPropertyDef("DecimalPlaces", FormPropertyType.Int, "0",
                 Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Data,
@@ -2608,8 +2659,8 @@ public static class FormControlCatalog
             new FormPropertyDef("Hexadecimal", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether the numeric up-down should display its value in hexadecimal."),
-            // ⛔ Both targets (D2): the <input>'s readonly (the emitter's flag, through this row).
-            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false",
+            // Γ¢ö Both targets (D2): the <input>'s readonly (the emitter's flag, through this row).
+            new FormPropertyDef("ReadOnly", FormPropertyType.Bool, "false", DomMember: "readOnly",
                 Category: FormPropertyCategory.Behavior, Description: "Indicates whether the edit box is read-only."),
             HorizontalTextAlign("Indicates how the text should be aligned in the edit box.")),
             DefaultWidth: 120, DefaultHeight: 23, Schematic: FormSchematic.Spinner,
@@ -2617,7 +2668,7 @@ public static class FormControlCatalog
 
         new("DateTimePicker", "DateTimePicker", "input", "date",  false, CommonColoured(
             null, null,
-            // ⛔ All WinForms-only. <input type="date"> renders per the user's locale and has no
+            // Γ¢ö All WinForms-only. <input type="date"> renders per the user's locale and has no
             // format control at all, so emitting these to the web would be describing a behaviour
             // the page cannot have.
             new FormPropertyDef("Format", FormPropertyType.Enum, "Long",
@@ -2667,13 +2718,13 @@ public static class FormControlCatalog
             new FormPropertyDef("LargeChange", FormPropertyType.Int, "5", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
                 Description: "The number of positions the slider moves in response to mouse clicks or the PAGE UP and PAGE DOWN keys."),
-            // ⚠ WinForms only: the page's `step` constrains which VALUES are valid, not how far an arrow key moves.
+            // ΓÜá WinForms only: the page's `step` constrains which VALUES are valid, not how far an arrow key moves.
             new FormPropertyDef("SmallChange", FormPropertyType.Int, "1", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Behavior,
                 Description: "The number of positions the slider moves in response to keyboard input (arrow keys).")),
             DefaultWidth: 150, DefaultHeight: 45, Schematic: FormSchematic.Slider,
-            // ⛔ Owner decision (2026-09-29): VS opens a TrackBar on Scroll. On the page Scroll is the range input's
-            // `input` — it fires per step of a drag, as WinForms' Scroll does for a user's move — and ValueChanged is
+            // Γ¢ö Owner decision (2026-09-29): VS opens a TrackBar on Scroll. On the page Scroll is the range input's
+            // `input` ΓÇö it fires per step of a drag, as WinForms' Scroll does for a user's move ΓÇö and ValueChanged is
             // `change`. Two events cannot share one DOM name (a web bind is stored BY it), so an existing web `input`
             // bind now retargets to WinForms as Scroll; on the page it fires exactly as before.
             Events: TrackBarEvents()),
@@ -2696,12 +2747,12 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Behavior,
                 Description: "This property allows the user to set the style of the ProgressBar.")),
             DefaultWidth: 150, DefaultHeight: 23, Schematic: FormSchematic.Progress,
-            // ⚠ A ProgressBar reports; it does not notify. Click is what Control gives it and the
+            // ΓÜá A ProgressBar reports; it does not notify. Click is what Control gives it and the
             // only thing a double-click here can honestly stub.
             Events: ProgressBarEvents()),
 
         // ==================================================================
-        // ⛔⛔ WinForms-ONLY, by decision rather than omission. None of these has a single honest
+        // Γ¢öΓ¢ö WinForms-ONLY, by decision rather than omission. None of these has a single honest
         // HTML tag: a DataGridView is not a <table>, a TabControl needs script the designer does
         // not write, and a SplitContainer is a CSS layout rather than an element. Emitting a
         // <div> for them would produce a page that silently is not the control the user drew.
@@ -2754,7 +2805,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether check boxes are displayed beside nodes.")),
             DefaultWidth: 180, DefaultHeight: 140, Schematic: FormSchematic.Tree,
-            // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Node.
+            // ΓÜá The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.Node.
             Events: TreeViewEvents()),
 
         new("DataGridView", "DataGridView", null,     null,       false, ControlRows(
@@ -2775,8 +2826,8 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Indicates whether the column headers row is displayed.")),
             DefaultWidth: 280, DefaultHeight: 150, Schematic: FormSchematic.DataGrid,
-            // ⚠ The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.RowIndex.
-            // ⛔ Owner decision (2026-09-29): VS opens CellContentClick; CellClick stays, non-default.
+            // ΓÜá The typed args (Task 8's parity run): EventArgs compiled by contravariance but hid e.RowIndex.
+            // Γ¢ö Owner decision (2026-09-29): VS opens CellContentClick; CellClick stays, non-default.
             Events: DataGridViewEvents()),
 
         new("TabControl",  "TabControl",  null,       null,       true,  CommonColoured(
@@ -2803,8 +2854,8 @@ public static class FormControlCatalog
                 WinFormsEnumType: "Orientation",
                 Category: FormPropertyCategory.Behavior,
                 Description: "Determines if the splitter is vertical or horizontal."),
-            // ⚠ WinForms' [DefaultValue] is 50 (the parity run). The old "80" was a designer preference
-            // encoded as a default — the grid showed 80 while an absent value ran at 50 (spec §2.7).
+            // ΓÜá WinForms' [DefaultValue] is 50 (the parity run). The old "80" was a designer preference
+            // encoded as a default ΓÇö the grid showed 80 while an absent value ran at 50 (spec ┬º2.7).
             new FormPropertyDef("SplitterDistance", FormPropertyType.Int, "50",
                 Category: FormPropertyCategory.Layout,
                 Description: "Determines pixel distance of the splitter from the left or top edge."),
@@ -2819,7 +2870,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Layout,
                 Description: "Indicates that a particular SplitContainer's Panel should remain fixed in size during resize events.")),
             DefaultWidth: 260, DefaultHeight: 140, Schematic: FormSchematic.Split,
-            // ⚠ The typed args (Task 8's parity run).
+            // ΓÜá The typed args (Task 8's parity run).
             Events: SplitContainerEvents()),
 
         new("FlowLayoutPanel", "FlowLayoutPanel", null, null,     true,  Common(
@@ -2838,8 +2889,8 @@ public static class FormControlCatalog
             Events: FlowLayoutPanelEvents()),
 
         new("TableLayoutPanel", "TableLayoutPanel", null, null,   true,  Common(
-            // ⚠ WinForms' [DefaultValue] is 0 for both (the parity run). VS DROPS a TableLayoutPanel as
-            // 2×2 — a designer PREFERENCE, which spec §2.7 says is written at placement, never encoded as
+            // ΓÜá WinForms' [DefaultValue] is 0 for both (the parity run). VS DROPS a TableLayoutPanel as
+            // 2├ù2 ΓÇö a designer PREFERENCE, which spec ┬º2.7 says is written at placement, never encoded as
             // a false default: DropValues below (owner decision O1, 2026-09-29).
             new FormPropertyDef("ColumnCount", FormPropertyType.Int, "0",
                 Category: FormPropertyCategory.Layout,
@@ -2857,25 +2908,27 @@ public static class FormControlCatalog
             DropValues: new Dictionary<string, string> { ["ColumnCount"] = "2", ["RowCount"] = "2" }),
 
         // ==================================================================
-        // Task 25 — the component tray. Non-visual: no place on the canvas, no Controls.Add.
+        // Task 25 ΓÇö the component tray. Non-visual: no place on the canvas, no Controls.Add.
         //
-        // ⛔ No Common(): Visible, ForeColor and BackColor do not exist on a component; a row built
+        // Γ¢ö No Common(): Visible, ForeColor and BackColor do not exist on a component; a row built
         //   with the helper compiles green through BasicLang and fails only at csc.
-        // ⛔ QUALIFIED types — see the WinFormsType doc comment; both failures were measured
+        // Γ¢ö QUALIFIED types ΓÇö see the WinFormsType doc comment; both failures were measured
         //   2026-09-19 with BasicLang silent (spec M10, M11), the qualified shape ran (M13).
-        // ⚠ Every property and event name below is unfalsifiable except through csc:
+        // ΓÜá Every property and event name below is unfalsifiable except through csc:
         //   WinFormsCatalogSweepTests builds each component into Components and gates it.
         // ==================================================================
 
         new("Timer", "System.Windows.Forms.Timer", null, null, false, new List<FormPropertyDef>
             {
-                // ⚠ "Elapsed" is WinForms' own [Description] text for the Timer (sic — Tick is the event);
+                // ΓÜá "Elapsed" is WinForms' own [Description] text for the Timer (sic ΓÇö Tick is the event);
                 // parity copies it verbatim rather than correcting what VS shows.
                 new("Interval", FormPropertyType.Int, "100",
                     Category: FormPropertyCategory.Behavior,
                     Description: "The frequency of Elapsed events in milliseconds."),
-                // ⚠ WinForms only: a JS interval cannot exist disabled — wired means running.
-                new("Enabled", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
+                // Both targets: the portable Timer owns its interval handle, so it can start and
+                // stop on the page exactly as WinForms' Enabled does. (The legacy DOM page still
+                // treats a wired interval as running; that path is unchanged.)
+                new("Enabled", FormPropertyType.Bool, "false",
                     Category: FormPropertyCategory.Behavior,
                     Description: "Enables generation of Elapsed events.")
             },
@@ -2883,16 +2936,18 @@ public static class FormControlCatalog
             Events: Ev("Tick", "tick", category: FormEventCategory.Behavior,
                 description: "Occurs whenever the specified interval time elapses."),
             Place: FormPlace.Tray,
-            // ⛔ The TYPED call over the Window the init region declares, and a parameterless
+            // Γ¢ö The TYPED call over the Window the init region declares, and a parameterless
             // callback: Window.setInterval takes an Action and refuses Action(Of DomEvent) (M7).
             WebHandlerTakesEvent: false,
-            // ⚠ Wired means running here, and Enabled=True is how WinForms says the same thing: the
-            // retarget crosses that by this rule (BL8027) rather than losing it in either direction.
+            // ΓÜá The LEGACY DOM template treats wired as running, and Enabled=True is how WinForms
+            // says the same thing: the retarget crosses that by this rule (BL8027). The portable
+            // Timer (Task 39) constructs with Enabled and honors it, so this rule is not its runtime
+            // behaviour.
             WebScript: new FormWebScript("Integer", "w.setInterval(AddressOf {handler}, {Interval})",
                 Implies: new FormImpliedProperty("Enabled", "true"))),
 
-        // ⚠ A ToolTip's per-control text (SetToolTip / the web's title attribute) is an EXTENDER
-        // property the catalog cannot express yet — docs/form-designer-followups.md 19. Present,
+        // ΓÜá A ToolTip's per-control text (SetToolTip / the web's title attribute) is an EXTENDER
+        // property the catalog cannot express yet ΓÇö docs/form-designer-followups.md 19. Present,
         // inert, callable from code: what VS gives you before you set a tooltip on anything.
         new("ToolTip", "System.Windows.Forms.ToolTip", null, null, false, new List<FormPropertyDef>
             {
@@ -2935,7 +2990,7 @@ public static class FormControlCatalog
                 description: "Occurs when the value of the RightToLeft property changes."),
             Place: FormPlace.Tray),
 
-        // ⚠ Every row and the event carry an OracleExemption (BackgroundWorkerHasNoMetadata): on .NET the
+        // ΓÜá Every row and the event carry an OracleExemption (BackgroundWorkerHasNoMetadata): on .NET the
         // type has no designer metadata, so the snapshot records absence, not values. Category Misc is
         // what VS shows for it on .NET (Framework files it under Asynchronous); the descriptions are WinForms'
         // own .NET Framework text (owner decision O4), never the designer's invention.
@@ -2955,10 +3010,12 @@ public static class FormControlCatalog
             Place: FormPlace.Tray),
 
         // ==================================================================
-        // Task 24 — menus, toolbars and status bars. Strips are Docked (no geometry, a Dock
+        // Task 24 ΓÇö menus, toolbars and status bars. Strips are Docked (no geometry, a Dock
         // PROPERTY); items live in their host's Children and are added by the HOST row's verb in
-        // document order. ⛔ No Common(). ⛔ Enabled is WinForms-only except on the <input> —
-        // a browser ignores `disabled` on <nav>/<li>/<span> (spec §4).
+        // document order. Γ¢ö No Common(). Γ¢ö Item Enabled is WinForms-only except on the <input> ΓÇö
+        // a browser ignores `disabled` on <li>/<span> (spec ┬º4). The strip hosts inherit
+        // Control.Enabled on the web, so their catalog row is a known member collision, like
+        // ProgressBar.Style, not a WebUnavailableMember refusal.
         // ==================================================================
 
         new("MenuStrip", "MenuStrip", "nav", null, false, new List<FormPropertyDef>
@@ -2981,9 +3038,9 @@ public static class FormControlCatalog
         new("ToolStrip", "ToolStrip", "menu", null, false, new List<FormPropertyDef>
             {
                 StripDock("Top"),
-                // ⚠ WinForms' [DefaultValue] is Visible (spec §2.7's known disagreement, confirmed by the
+                // ΓÜá WinForms' [DefaultValue] is Visible (spec ┬º2.7's known disagreement, confirmed by the
                 // parity run). The old "Hidden" displayed a grip the program never hid: placement writes
-                // no GripStyle (only Dock), so an absent value always RAN Visible — and the canvas has
+                // no GripStyle (only Dock), so an absent value always RAN Visible ΓÇö and the canvas has
                 // always drawn the grip. Nothing a placed strip does changes.
                 new("GripStyle", FormPropertyType.Enum, "Visible", new[] { "Hidden", "Visible" },
                     WinFormsEnumType: "ToolStripGripStyle", Targets: new[] { FormTarget.WinForms },
@@ -3001,10 +3058,10 @@ public static class FormControlCatalog
 
         new("StatusStrip", "StatusStrip", "footer", null, false, new List<FormPropertyDef>
             {
-                // ⚠ Bottom is both WinForms' StatusStrip.Dock default (the parity run agrees) and the
+                // ΓÜá Bottom is both WinForms' StatusStrip.Dock default (the parity run agrees) and the
                 // placement seed FormPlacement writes.
                 StripDock("Bottom"),
-                // ⚠ WinForms' [DefaultValue] is true (spec §2.7's known disagreement, confirmed by the
+                // ΓÜá WinForms' [DefaultValue] is true (spec ┬º2.7's known disagreement, confirmed by the
                 // parity run). Placement writes no SizingGrip, so an absent value always RAN with the grip,
                 // and the canvas has always drawn it. Nothing a placed strip does changes.
                 new("SizingGrip", FormPropertyType.Bool, "true", Targets: new[] { FormTarget.WinForms },
@@ -3028,7 +3085,7 @@ public static class FormControlCatalog
                 Checked with { Targets = new[] { FormTarget.WinForms } },
                 ItemCheckOnClick(),
                 ItemToolTipText(),
-                // ⚠ WinForms only (D1): the text drawn beside a menu item for its shortcut; the page's <li> has none.
+                // ΓÜá WinForms only (D1): the text drawn beside a menu item for its shortcut; the page's <li> has none.
                 new("ShortcutKeyDisplayString", FormPropertyType.String, Targets: new[] { FormTarget.WinForms },
                     Category: FormPropertyCategory.Appearance, Description: "The string to be displayed as the shortcut key.")
             },
@@ -3052,15 +3109,15 @@ public static class FormControlCatalog
                 // Both targets here: the one strip item that IS an <input>, which honours `disabled`.
                 Enabled,
                 ItemVisible,
-                // ⚠ ToolStripButton's own Checked text (the parity run).
+                // ΓÜá ToolStripButton's own Checked text (the parity run).
                 new("Checked", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
                     Category: FormPropertyCategory.Appearance,
                     Description: "Indicates whether the ToolStripButton is pressed in or not pressed in."),
                 ItemCheckOnClick(),
                 ItemToolTipText(),
-                // ⚠ WinForms' default is ImageAndText (the parity run; 'reset'). The old "Text" displayed a
+                // ΓÜá WinForms' default is ImageAndText (the parity run; 'reset'). The old "Text" displayed a
                 // value the program never ran: placement writes no DisplayStyle, so an absent value always
-                // RAN ImageAndText — which, with no image, draws the text alone, as "Text" does.
+                // RAN ImageAndText ΓÇö which, with no image, draws the text alone, as "Text" does.
                 new("DisplayStyle", FormPropertyType.Enum, "ImageAndText", new[] { "None", "Text", "Image", "ImageAndText" },
                     WinFormsEnumType: "ToolStripItemDisplayStyle", Targets: new[] { FormTarget.WinForms },
                     Category: FormPropertyCategory.Appearance,
@@ -3086,7 +3143,7 @@ public static class FormControlCatalog
     }.Select(WithWebExtras).ToList();
 
     /// <summary>
-    /// The FORM's own definition (spec §2.3) — ⛔⛔ deliberately NOT in <see cref="All"/>.
+    /// The FORM's own definition (spec ┬º2.3) ΓÇö Γ¢öΓ¢ö deliberately NOT in <see cref="All"/>.
     ///
     /// <para>FormDocument is not a FormControl, and ~10 consumers enumerate <see cref="All"/> (the
     /// toolbox, FormCatalogShapes.Canonical and every gate on it, WinFormsCatalogSweepTests, the render
@@ -3095,12 +3152,12 @@ public static class FormControlCatalog
     /// control, and read as a control element. The grid and every root-aware writer ask for this one BY
     /// NAME instead; it gets its own csc sweep, parity rows and retarget sweep.</para>
     ///
-    /// <para>⚠ Its values do NOT live in an attribute dictionary: Text, the client size and the web
+    /// <para>ΓÜá Its values do NOT live in an attribute dictionary: Text, the client size and the web
     /// layout are typed FormDocument fields. <see cref="FormRootValues"/> is the ONE map from a row to
-    /// its storage. Every other root row (slice 3's FormBorderStyle…) is Properties-stored: the root attribute of its
+    /// its storage. Every other root row (slice 3's FormBorderStyleΓÇª) is Properties-stored: the root attribute of its
     /// own name, in <see cref="FormDocument.Properties"/>.</para>
     ///
-    /// <para>⚠ Below <see cref="All"/> is fine: it reads no shared field (textual init order).</para>
+    /// <para>ΓÜá Below <see cref="All"/> is fine: it reads no shared field (textual init order).</para>
     /// </summary>
     public static readonly FormControlDef FormRoot = new(
         Kind: "Form",
@@ -3110,23 +3167,23 @@ public static class FormControlCatalog
         IsContainer: true,
         Properties: new List<FormPropertyDef>
         {
-            // ⛔ Both targets (D2): the window caption, and the page <title> (Text ?? Name).
+            // Γ¢ö Both targets (D2): the window caption, and the page <title> (Text ?? Name).
             new("Text", FormPropertyType.String,
                 Category: FormPropertyCategory.Appearance, Description: "The text associated with the control."),
 
-            // ⚠ CLIENT size, emitted `Me.ClientSize = New Size(w, h)` exactly as before — the form shows
-            // ClientSize, never a second Size (spec §2.3). ⛔ Also a Canvas PAGE's design size (spec 2026-09-27
+            // ΓÜá CLIENT size, emitted `Me.ClientSize = New Size(w, h)` exactly as before ΓÇö the form shows
+            // ClientSize, never a second Size (spec ┬º2.3). Γ¢ö Also a Canvas PAGE's design size (spec 2026-09-27
             // D2): stored as the root's Width/Height exactly as a .blform stores them. The web code-behind
             // emits no geometry (RegionWriter emits root rows on the WinForms branch only).
             new("ClientSize", FormPropertyType.Size, Targets: new[] { FormTarget.WinForms, FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
                 Description: "The size of the client area of the form, in pixels.",
-                OracleExemption: "ClientSize is not browsable in WinForms — VS shows Size. The designer " +
+                OracleExemption: "ClientSize is not browsable in WinForms ΓÇö VS shows Size. The designer " +
                                  "shows the CLIENT size because that is what its surface draws and what the " +
-                                 "region writer emits (spec §2.3).",
+                                 "region writer emits (spec ┬º2.3).",
                 WebLayouts: new[] { FormLayoutKind.Canvas }),
 
-            // Web only — kept verbatim as CSS track lists; the browser is the renderer (FormGridLayout).
+            // Web only ΓÇö kept verbatim as CSS track lists; the browser is the renderer (FormGridLayout).
             new("Cols", FormPropertyType.String, Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
                 Description: "The page's column tracks, as a comma-separated CSS grid track list (e.g. 120px,1fr).",
@@ -3135,14 +3192,14 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Layout,
                 Description: "The page's row tracks, as a comma-separated CSS grid track list (e.g. auto,auto).",
                 WebLayouts: new[] { FormLayoutKind.Grid }),
-            // ⚠ Grid AND Flow: the emitter writes `gap` for both (FormAssetEmitter.Css).
+            // ΓÜá Grid AND Flow: the emitter writes `gap` for both (FormAssetEmitter.Css).
             new("Gap", FormPropertyType.String, Targets: new[] { FormTarget.Web },
                 Category: FormPropertyCategory.Layout,
                 Description: "The space between the page's grid cells or flow items, as a CSS length (e.g. 8px).",
                 WebLayouts: new[] { FormLayoutKind.Grid, FormLayoutKind.Flow }),
-            // ⛔ Web CANVAS only (spec 2026-09-27 §2.3, §5): below this page width the controls stack into one
+            // Γ¢ö Web CANVAS only (spec 2026-09-27 ┬º2.3, ┬º5): below this page width the controls stack into one
             // column. 0 = never stack. Stored on <Layout> as raw text (FormLayout.MobileBreakpoint);
-            // FormRootValues.StorageAttributes says so. ⚠ The default is FormLayout's constant, never a second copy.
+            // FormRootValues.StorageAttributes says so. ΓÜá The default is FormLayout's constant, never a second copy.
             new("MobileBreakpoint", FormPropertyType.Int,
                 FormLayout.DefaultMobileBreakpoint.ToString(CultureInfo.InvariantCulture),
                 Targets: new[] { FormTarget.Web },
@@ -3151,9 +3208,9 @@ public static class FormControlCatalog
                 WebLayouts: new[] { FormLayoutKind.Canvas }),
 
             // ==========================================================
-            // Slice 3 — the Form's D1 set (spec §2.3), PROPERTIES-STORED: each lives in FormDocument.Properties as the
+            // Slice 3 ΓÇö the Form's D1 set (spec ┬º2.3), PROPERTIES-STORED: each lives in FormDocument.Properties as the
             // root attribute of its own name (FormRootValues' default arm). WinForms' own metadata (the snapshot);
-            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font — and Icon
+            // WinForms-only unless it maps cleanly onto the page's body (D2): BackColor, ForeColor, Font ΓÇö and Icon
             // (slice 4 D-5f), the window's icon and the page's <link rel="icon">.
             // ==========================================================
             new("Icon", FormPropertyType.Icon,
@@ -3197,7 +3254,7 @@ public static class FormControlCatalog
             new("TopMost", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.WindowStyle,
                 Description: "Indicates whether the form always appears above all other forms that do not have this property set to true."),
-            // ⛔ References: emitted AFTER the controls (pre-flight B4) — before them the field is still Nothing.
+            // Γ¢ö References: emitted AFTER the controls (pre-flight B4) ΓÇö before them the field is still Nothing.
             new("AcceptButton", FormPropertyType.Reference, Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Misc,
                 Description: "The accept button of the form. If this is set, the button is 'clicked' whenever the user presses the 'ENTER' key.",
@@ -3209,8 +3266,8 @@ public static class FormControlCatalog
             new("KeyPreview", FormPropertyType.Bool, "false", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Misc,
                 Description: "Determines whether keyboard events for controls on the form are registered with the form."),
-            // ⛔ Both targets (D2): the page's BODY, so every control inherits them as WinForms' ambient properties
-            // inherit from the Form — the Docked strips included. WebDefault empty: with nothing written the browser's
+            // Γ¢ö Both targets (D2): the page's BODY, so every control inherits them as WinForms' ambient properties
+            // inherit from the Form ΓÇö the Docked strips included. WebDefault empty: with nothing written the browser's
             // own body colours and font stand, not WinForms' Control/ControlText/Segoe UI.
             // A Form throws on a translucent BackColor (measured; use Opacity for a see-through window).
             new("BackColor", FormPropertyType.Color, "Control", WebDefault: "",
@@ -3228,7 +3285,7 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.WindowStyle, Description: "The opacity percentage of the control."),
         },
         Schematic: FormSchematic.Container,
-        // Slice 5 D-3: the Form's events — Load (the default), and the web wiring each needs (ADR 0021).
+        // Slice 5 D-3: the Form's events ΓÇö Load (the default), and the web wiring each needs (ADR 0021).
         Events: FormRootEvents());
 
     public static FormControlDef? Find(string kind) =>
@@ -3238,7 +3295,7 @@ public static class FormControlCatalog
     /// The single kind that emits this HTML tag, or null when none does OR more than one does.
     ///
     /// <para>Ambiguity returns null deliberately. <c>select</c> is both ComboBox and ListBox, and
-    /// <c>input</c> is three kinds separated only by <c>type=</c> — which
+    /// <c>input</c> is three kinds separated only by <c>type=</c> ΓÇö which
     /// <c>document.createElement("input")</c> does not carry. Guessing would silently rewrite a
     /// multi-select as a dropdown on the next save; reporting "no catalog row" lets the caller say
     /// so instead.</para>
@@ -3281,15 +3338,15 @@ public static class FormControlCatalog
 
     /// <summary>
     /// Structural in the vocabulary a document of (<paramref name="target"/>, <paramref name="layout"/>)
-    /// speaks (spec 2026-09-27 §2.1).
+    /// speaks (spec 2026-09-27 ┬º2.1).
     ///
-    /// <para>⛔ The two vocabularies overlap in spelling and not in meaning, so "structural" is not a
+    /// <para>Γ¢ö The two vocabularies overlap in spelling and not in meaning, so "structural" is not a
     /// property of the attribute name alone. <c>Width</c> is a pixel control's width and is read into its
     /// geometry; on a Grid page's control nothing reads it, so calling it structural there would make it
-    /// neither a property nor an unknown attribute — absent from the model entirely, and silently dropped
+    /// neither a property nor an unknown attribute ΓÇö absent from the model entirely, and silently dropped
     /// by any path that rebuilds the document from the model.</para>
     ///
-    /// <para>⛔ By LAYOUT too, through <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>: a
+    /// <para>Γ¢ö By LAYOUT too, through <see cref="FormVocabulary.IsPixel(FormTarget, FormLayoutKind?)"/>: a
     /// Canvas page's control is laid out in pixels exactly as a .blform's is. Asking by target alone put its
     /// X/Width in UnknownAttributes, and the control had a position nothing read.</para>
     /// </summary>
