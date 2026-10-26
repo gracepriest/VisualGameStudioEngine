@@ -136,6 +136,8 @@ public static class DesignCodes
     /// </summary>
     public const string PlacementRefused = "BL8019";
 
+    /// <summary>A web form used a WinForms-only control, so its page cannot be built.</summary>
+    public const string DesktopOnlyKind = "BL8038";
     /// <summary>A DOM use outside the designer regions, reported by the code conversion.</summary>
     public const string DomUsage = "BL8036";
 

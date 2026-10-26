@@ -110,6 +110,23 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public string HeaderKind => SelectedControl?.Kind
         ?? (_file != null ? _file.Model.RootElementName : string.Empty);
 
+    /// <summary>
+    /// "desktop" when the selected control is a WinForms-only kind on a web form. The badge is
+    /// read from the grid's one selection store, never a second selection source.
+    /// </summary>
+    public string HeaderBadge
+    {
+        get
+        {
+            if (SelectedControl?.Definition is not { } definition) return string.Empty;
+            return _file?.Model.Target == FormTarget.Web && !definition.SupportsTarget(FormTarget.Web)
+                ? "desktop"
+                : string.Empty;
+        }
+    }
+
+    public bool HasHeaderBadge => HeaderBadge.Length > 0;
+
     /// <summary>True when there is nothing to show, so the view can say so rather than look broken.</summary>
     public bool IsEmpty => Rows.Count == 0;
 
@@ -290,6 +307,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
     public void Load(FormFile? file)
     {
         _file = file;
+        OnPropertyChanged(nameof(HeaderBadge));
+        OnPropertyChanged(nameof(HasHeaderBadge));
 
         // ⛔ Rebuild EXACTLY ONCE. Assigning null over null raises no change, so OnSelectedControlChanged
         // does not fire — which was harmless while an empty selection meant an empty grid, and stopped
@@ -305,7 +324,12 @@ public partial class FormPropertyGridViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedControlChanged(FormControl? value) => Rebuild();
+    partial void OnSelectedControlChanged(FormControl? value)
+    {
+        OnPropertyChanged(nameof(HeaderBadge));
+        OnPropertyChanged(nameof(HasHeaderBadge));
+        Rebuild();
+    }
 
     /// <summary>
     /// The rows VS shows for EVERY control, which this grid had none of: its name, where it is, how

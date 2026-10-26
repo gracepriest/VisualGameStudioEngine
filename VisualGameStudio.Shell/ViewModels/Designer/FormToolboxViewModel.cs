@@ -23,7 +23,10 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// splitting the list per group would give each group its own unwired ListBox.
 /// </param>
 public sealed record FormToolboxItem(
-    string Kind, string Description, string Glyph, string Category, bool StartsCategory);
+    string Kind, string Description, string Glyph, string Category, bool StartsCategory, bool DesktopOnly = false)
+{
+    public string Badge => DesktopOnly ? "desktop" : "";
+}
 
 /// <summary>
 /// The designer's toolbox — the control kinds available for the open document's target.
@@ -61,7 +64,8 @@ public partial class FormToolboxViewModel : ObservableObject
         // ⚠ Task 24 (commit 24c) adds the fourth rank: a DOCKED strip is neither a common control nor
         // a container, and VS gives it its own tab. Ranked on Place rather than on the kind's name,
         // so a strip row added later lands in the group without a second list to update.
-        var ordered = FormControlCatalog.For(Target)
+        var catalog = Target == FormTarget.Web ? FormControlCatalog.All : FormControlCatalog.For(Target);
+        var ordered = catalog
             .Where(c => c.Place != FormPlace.Item)
             .OrderBy(c => c.Place switch
             {
@@ -102,7 +106,8 @@ public partial class FormToolboxViewModel : ObservableObject
                 description,
                 GlyphFor(control.Schematic),
                 category,
-                StartsCategory: category != previousCategory));
+                StartsCategory: category != previousCategory,
+                DesktopOnly: Target == FormTarget.Web && !control.SupportsTarget(FormTarget.Web)));
 
             previousCategory = category;
         }
