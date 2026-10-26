@@ -6105,6 +6105,14 @@ namespace BasicLang.Compiler.CodeGen.MSIL
                 // contract the refusal message promises.
             };
 
+        private static readonly Dictionary<string, (string Token, string ReturnSpec)> NetStaticProperties =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DateTime.Now"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+                ["DateTime.Today"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+                ["DateTime.UtcNow"] = ("[mscorlib]System.DateTime", "valuetype [mscorlib]System.DateTime"),
+            };
+
         /// <summary>
         /// The .NET STATIC FIELDS this backend can read, keyed on the full dotted name as
         /// <see cref="NetStaticMembers"/> is, with the field's IL spec, its owner's token and the
@@ -7390,6 +7398,12 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
             if (type.Kind == TypeKind.Enum || type.Kind == TypeKind.Structure
                 || (type.Kind != TypeKind.Array && IsUserValueType(type.Name))) return IlTypeToken(type);
+
+            // .NET value types (DateTime, Decimal, TimeSpan, Guid, ...) arrive as TypeKind.Class
+            // from the semantic analyzer, but they are structs in the CLR and must be boxed to their
+            // OWN type for Console.WriteLine / concat / store-into-Object.
+            if (spec.StartsWith("valuetype ", StringComparison.Ordinal))
+                return spec.Substring("valuetype ".Length);
 
             return null;
         }
@@ -8706,6 +8720,20 @@ namespace BasicLang.Compiler.CodeGen.MSIL
 
         public override void Visit(IRFieldAccess fieldAccess)
         {
+            var staticTypeName = fieldAccess?.Object?.Name;
+            if (!string.IsNullOrEmpty(staticTypeName)
+                && !ResolvesAsValue(staticTypeName)
+                && IRBuilder.IsKnownNetStaticTypeName(staticTypeName))
+            {
+                var dotted = staticTypeName + "." + fieldAccess.FieldName;
+                if (NetStaticProperties.TryGetValue(dotted, out var prop))
+                {
+                    WriteLine($"    call {prop.ReturnSpec} {prop.Token}::get_{fieldAccess.FieldName}()");
+                    _currentStack++;
+                    EmitFieldAccessResult(fieldAccess, fieldAccess.Type);
+                    return;
+                }
+            }
             // ⭐ #192: an Enum MEMBER reached by its type name, `Color.Green`. The receiver is a TYPE,
             // and the member is a `literal` field with no storage: it is the number. This emitted
             // `// WARNING: Unknown local 'Color'` and `ldfld object 'Color'::'Green'` off an empty
