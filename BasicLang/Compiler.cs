@@ -911,7 +911,7 @@ namespace BasicLang.Compiler
                 // exports the real symbol itself (re-exporting the shell made a
                 // unit collide with its own declarations coming back through a
                 // sibling).
-                if (symbol.IsSiblingSignature)
+                if (symbol.IsSiblingSignature || symbol.IsImported)
                 {
                     continue;
                 }
@@ -972,7 +972,7 @@ namespace BasicLang.Compiler
             {
                 foreach (var symbol in childScope.Symbols.Values)
                 {
-                    if (symbol.IsSiblingSignature) continue;
+                    if (symbol.IsSiblingSignature || symbol.IsImported) continue;
                     if (symbol.Kind == SymbolKind.Type ||
                         symbol.Kind == SymbolKind.Class ||
                         symbol.Kind == SymbolKind.Structure ||

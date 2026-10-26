@@ -199,7 +199,7 @@ Namespace System.Windows.Forms
                 Return New Point(Me.VgsReadLeft(), Me.VgsReadTop())
             End Get
             Set(value As Point)
-                Me.VgsWriteGeometry(value.X, value.Y, Me.VgsReadWidth(), Me.VgsReadHeight())
+                Me.VgsWriteGeometry(CInt(value.X), CInt(value.Y), Me.VgsReadWidth(), Me.VgsReadHeight())
             End Set
         End Property
 
@@ -208,7 +208,7 @@ Namespace System.Windows.Forms
                 Return New Size(Me.VgsReadWidth(), Me.VgsReadHeight())
             End Get
             Set(value As Size)
-                Me.VgsWriteGeometry(Me.VgsReadLeft(), Me.VgsReadTop(), value.Width, value.Height)
+                Me.VgsWriteGeometry(Me.VgsReadLeft(), Me.VgsReadTop(), CInt(value.Width), CInt(value.Height))
             End Set
         End Property
 
@@ -270,7 +270,7 @@ Namespace System.Windows.Forms
             End Get
             Set(value As Color)
                 _foreColor = value
-                Me.VgsSetStyle("color", value.VgsCss())
+                Me.VgsSetStyle("color", CStr(value.VgsCss()))
             End Set
         End Property
         Public Overridable Property BackColor As Color
@@ -279,7 +279,7 @@ Namespace System.Windows.Forms
             End Get
             Set(value As Color)
                 _backColor = value
-                Me.VgsSetStyle("background-color", value.VgsCss())
+                Me.VgsSetStyle("background-color", CStr(value.VgsCss()))
             End Set
         End Property
         Public Overridable Property Font As Font
@@ -319,7 +319,7 @@ Namespace System.Windows.Forms
             End Get
             Set(value As Cursor)
                 _cursor = value
-                Me.VgsSetStyle("cursor", value.VgsCss())
+                Me.VgsSetStyle("cursor", CStr(value.VgsCss()))
             End Set
         End Property
         Public Overridable Property Padding As Padding
@@ -328,7 +328,7 @@ Namespace System.Windows.Forms
             End Get
             Set(value As Padding)
                 _padding = value
-                Me.VgsSetStyle("padding", value.VgsCss())
+                Me.VgsSetStyle("padding", CStr(value.VgsCss()))
             End Set
         End Property
         Public Sub Show()
@@ -428,18 +428,18 @@ Namespace System.Windows.Forms
         Private Sub VgsOnDomKeyDown(e As DomEvent)
             Dim args As New KeyEventArgs(Me.VgsKeyCode(e), e.shiftKey, e.ctrlKey, e.altKey)
             Me.OnKeyDown(args)
-            If args.Handled OrElse args.SuppressKeyPress Then e.preventDefault()
-            If Not e.ctrlKey AndAlso Not e.altKey AndAlso Not args.SuppressKeyPress AndAlso e.key.Length = 1 Then
+            If CBool(args.Handled) OrElse CBool(args.SuppressKeyPress) Then e.preventDefault()
+            If Not CBool(e.ctrlKey) AndAlso Not CBool(e.altKey) AndAlso Not CBool(args.SuppressKeyPress) AndAlso e.key.Length = 1 Then
                 Dim press As New KeyPressEventArgs(ChrW(AscW(e.key)))
                 Me.OnKeyPress(press)
-                If press.Handled Then e.preventDefault()
+                If CBool(press.Handled) Then e.preventDefault()
             End If
         End Sub
 
         Private Sub VgsOnDomKeyUp(e As DomEvent)
             Dim args As New KeyEventArgs(Me.VgsKeyCode(e), e.shiftKey, e.ctrlKey, e.altKey)
             Me.OnKeyUp(args)
-            If args.Handled Then e.preventDefault()
+            If CBool(args.Handled) Then e.preventDefault()
         End Sub
 
         Private Sub VgsOnDomFocusIn(e As DomEvent)
@@ -602,8 +602,8 @@ Namespace System.Windows.Forms
             For Each entry As String In _vgsDecls
                 If Strings.Left(entry, prefix.Length) = prefix Then
                     Dim value As String = Mid(entry, prefix.Length + 1, entry.Length - prefix.Length)
-                    If Mid(value, value.Length, 1) = ";" Then value = Strings.Left(value, value.Length - 1)
-                    If Strings.Left(value, 1) = " " Then value = Mid(value, 2, value.Length - 1)
+                    If CStr(Mid(value, value.Length, 1)) = ";" Then value = CStr(Strings.Left(value, value.Length - 1))
+                    If Strings.Left(value, 1) = " " Then value = CStr(Mid(value, 2, value.Length - 1))
                     Return value
                 End If
             Next
