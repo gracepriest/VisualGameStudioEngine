@@ -377,6 +377,7 @@ namespace BasicLang.Compiler.CodeGen.CPlusPlus
             // (CppBclRuntimeTests pins that), so the generator owns their std headers.
             // "limits": a NaN/Infinity Single or Double constant has no C++ literal spelling and
             // renders as std::numeric_limits<T>::… (CppFloatLiteral / CppDoubleLiteral).
+            // "limits": a NaN/Infinity Single or Double constant has no C++ literal spelling.
             // "charconv": BasicLang::FormatDouble/FormatSingle (the spliced BCL body) use std::to_chars.
             var includes = new HashSet<string> { "iostream", "vector", "string", "cstdint", "cmath", "algorithm", "cstdlib", "ctime", "functional", "cstdio", "cstring", "ostream", "stdexcept", "limits", "charconv" };
             if (hasIterators)
