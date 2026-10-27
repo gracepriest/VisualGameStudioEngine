@@ -1,6 +1,7 @@
 # Web form Grid and rows — draft plan (2026-10-27)
 
-**Status:** draft for owner decisions. Nothing here is implemented yet.
+**Status:** superseded by `2026-10-27-gridpanel.md`. Owner chose a web-first GridPanel container
+instead of extending the document-level Grid UX first.
 
 ## What already exists
 
