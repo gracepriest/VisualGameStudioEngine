@@ -261,6 +261,54 @@ public class FormGridPanelTests
     }
 
     [Test]
+    [Category("Integration")]
+    public async Task CliBuild_EmitsAGridPanelPage()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "bl-gridpanel-cli-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var scaffold = FormScaffolder.Create("GridDemo", FormTarget.Web, portable: true);
+            var form = CanvasForm();
+            form.Name = "GridDemo";
+            File.WriteAllText(Path.Combine(dir, scaffold.DocumentFileName), FormDocumentWriter.Create(form));
+            File.WriteAllText(Path.Combine(dir, scaffold.CodeFileName), scaffold.CodeText);
+            File.WriteAllText(Path.Combine(dir, "Main.bas"), "Sub Main()\nEnd Sub\n");
+            File.WriteAllText(Path.Combine(dir, "App.blproj"),
+                """
+                <BasicLangProject Version="1.0">
+                  <PropertyGroup>
+                    <ProjectName>App</ProjectName>
+                    <OutputType>Exe</OutputType>
+                    <TargetBackend>JavaScript</TargetBackend>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Main.bas" />
+                    <Compile Include="GridDemo.bas" />
+                    <Compile Include="GridDemo.blwebform" />
+                  </ItemGroup>
+                </BasicLangProject>
+                """);
+
+            var (exit, stdout, stderr) = await CliTestHarness.RunCli(
+                dir, "build", Path.Combine(dir, "App.blproj"));
+
+            var html = Directory.GetFiles(Path.Combine(dir, "bin"), "GridDemo.html", SearchOption.AllDirectories);
+            Assert.Multiple(() =>
+            {
+                Assert.That(exit, Is.Zero, $"{stdout}\n{stderr}");
+                Assert.That(html, Has.Length.EqualTo(1));
+                Assert.That(File.ReadAllText(html[0]), Does.Contain("class=\"vgs-GridPanel\""));
+                Assert.That(File.ReadAllText(Path.ChangeExtension(html[0], ".css")), Does.Contain("grid-template-columns"));
+            });
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Test]
     public void Retarget_ToWinForms_RemovesTheWholeGridPanel_AndNamesIt()
     {
         var result = FormRetarget.Convert(GridPage(CanvasForm()), FormTarget.WinForms);
