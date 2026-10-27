@@ -257,7 +257,7 @@
                             FontSize="10" Padding="5,0" MinHeight="0" VerticalAlignment="Center"
                             Content="&#x2212;" Command="{Binding RemoveGridTrackCommand}"
                             ToolTip.Tip="Remove the last track" AutomationProperties.Name="Remove the last track"/>
-                    <TextBox Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                              MinHeight="0" Padding="3,1" FontSize="11" VerticalAlignment="Center"/>
                   </DockPanel>
 

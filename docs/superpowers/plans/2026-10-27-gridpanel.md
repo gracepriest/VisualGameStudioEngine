@@ -267,3 +267,25 @@ GridPanel is web-only in this pass:
 - A GridPanel nested in a page-Grid cell works; a page-level Grid still works unchanged.
 - The same form survives save/reopen, undo/redo, copy/paste and a Canvas/page-Grid switch without losing a control or its cell.
 - The focused designer and build-route tests are green.
+
+## Implementation status (2026-10-27)
+
+Implemented in this slice:
+
+- the top-level track splitter shared by the emitter and canvas;
+- `GridPanel` catalog kind and `FormControl.GridCell`;
+- parent-aware reader/writer and clipboard round-trip;
+- CSS Grid emission on Canvas and page-Grid layouts, including child cell rules;
+- property-grid track editing with add/remove;
+- drop into a cell on Canvas and page-Grid layouts, including occupied-cell refusal;
+- dragging a child between cells;
+- collision/range validation (BL8043) through the reader and both build routes;
+- web-only retarget removal with a named loss.
+
+Deliberately not in this slice:
+
+- column/row header chrome and drag-resize (phase 2);
+- reordering tracks from the property editor (the text field is the escape hatch);
+- nested `Panel` containers inside a GridPanel (a nested `GridPanel` is allowed);
+- dropping a control from inside another container directly into a GridPanel;
+- Bootstrap or any theme.
