@@ -19,12 +19,15 @@
 
 Public Extern Class Document
     Public Property title As String
+    Public Property head As Element
     Public Property body As Element
     Public Property documentElement As Element
+    Public Property activeElement As Element
     Public Function getElementById(id As String) As Element
     Public Function querySelector(selectors As String) As Element
     Public Function createElement(tagName As String) As Element
     Public Function createTextNode(data As String) As Element
+    Public Property styleSheets As CSSStyleSheetList
     Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
     Public Sub removeEventListener(eventType As String, listener As Action(Of DomEvent))
 End Class
@@ -34,25 +37,49 @@ Public Extern Class Element
     Public Property tagName As String
     Public Property className As String
     Public Property textContent As String
+    ' Task 39: a menu item's caption is its own direct text node, before any nested submenu.
+    Public Property firstChild As Element
+    Public Property nodeValue As String
+    Public Property nodeType As Integer
     Public Property innerHTML As String
     Public Property innerText As String
     Public Property value As String
+    Public Property valueAsDate As DateTime
+    Public Property selectedIndex As Integer
+    Public Property multiple As Boolean
+    Public Property selectionStart As Integer
+    Public Property selectionEnd As Integer
+    Public Property type As String
+    Public Property readOnly As Boolean
+    Public Property maxLength As Integer
     Public Property checked As Boolean
     Public Property disabled As Boolean
     Public Property hidden As Boolean
     Public Property parentElement As Element
     Public Property firstElementChild As Element
     Public Property nextElementSibling As Element
+    Public Property childElementCount As Integer
     Public Property style As CSSStyleDeclaration
     Public Property classList As DOMTokenList
+    Public Property clientWidth As Integer
+    Public Property clientHeight As Integer
+    Public Property offsetWidth As Integer
+    Public Property offsetHeight As Integer
+    Public Function getBoundingClientRect() As DOMRect
     Public Function querySelector(selectors As String) As Element
+    Public Function closest(selectors As String) As Element
+    Public Function contains(other As Element) As Boolean
     Public Function getAttribute(name As String) As String
+    Public Function getAttributeNames() As String()
     Public Sub setAttribute(name As String, attributeValue As String)
     Public Sub removeAttribute(name As String)
     Public Function appendChild(child As Element) As Element
     Public Function removeChild(child As Element) As Element
+    Public Function replaceChild(child As Element, oldChild As Element) As Element
+    Public Function insertBefore(child As Element, reference As Element) As Element
     Public Sub remove()
     Public Sub focus()
+    Public Sub select()
     Public Sub click()
     Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
     Public Sub removeEventListener(eventType As String, listener As Action(Of DomEvent))
@@ -67,10 +94,21 @@ Public Extern Class CSSStyleDeclaration
     Public Property height As String
     Public Property fontSize As String
     Public Property fontWeight As String
+    Public Property fontFamily As String
+    Public Property fontStyle As String
+    Public Property cursor As String
     Public Property margin As String
     Public Property padding As String
     Public Property border As String
+    Public Property borderStyle As String
+    Public Property overflow As String
+    Public Property textAlign As String
     Public Property opacity As String
+    Public Property position As String
+    Public Property left As String
+    Public Property top As String
+    Public Property right As String
+    Public Property bottom As String
 End Class
 
 Public Extern Class DOMTokenList
@@ -88,8 +126,16 @@ Public Extern Class DomEvent
     Public Property target As Element
     Public Property currentTarget As Element
     Public Property key As String
+    Public Property code As String
     Public Property clientX As Integer
     Public Property clientY As Integer
+    Public Property button As Integer
+    Public Property buttons As Integer
+    Public Property detail As Integer
+    Public Property relatedTarget As Element
+    Public Property ctrlKey As Boolean
+    Public Property shiftKey As Boolean
+    Public Property altKey As Boolean
     Public Sub preventDefault()
     Public Sub stopPropagation()
 End Class
@@ -107,6 +153,7 @@ Public Extern Class Window
     Public Sub clearTimeout(handle As Integer)
     Public Sub clearInterval(handle As Integer)
     Public Function requestAnimationFrame(callback As Action) As Integer
+    Public Function getComputedStyle(element As Element) As CSSStyleDeclaration
     Public Sub addEventListener(eventType As String, listener As Action(Of DomEvent))
 End Class
 
@@ -116,4 +163,43 @@ Public Extern Class Location
     Public Property search As String
     Public Property hash As String
     Public Sub reload()
+End Class
+
+Public Extern Class DOMRect
+    Public Property left As Double
+    Public Property top As Double
+    Public Property right As Double
+    Public Property bottom As Double
+    Public Property width As Double
+    Public Property height As Double
+End Class
+
+Public Extern Class CSSStyleSheetList
+    Public Property length As Integer
+    Public Function item(index As Integer) As CSSStyleSheet
+End Class
+
+Public Extern Class CSSStyleSheet
+    Public Property cssRules As CSSRuleList
+    Public Function insertRule(rule As String, index As Integer) As Integer
+    Public Sub deleteRule(index As Integer)
+End Class
+
+Public Extern Class CSSRuleList
+    Public Property length As Integer
+    Public Function item(index As Integer) As CSSRule
+End Class
+
+Public Extern Class CSSRule
+    Public Property style As CSSStyleDeclaration
+End Class
+
+Public Extern Class CSSStyleRule
+    Public Property selectorText As String
+    Public Property style As CSSStyleDeclaration
+End Class
+
+Public Extern Class CSSMediaRule
+    Public Property conditionText As String
+    Public Property cssRules As CSSRuleList
 End Class

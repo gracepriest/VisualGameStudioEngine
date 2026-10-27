@@ -908,6 +908,13 @@ public class TypeInfo
             return type;
         }
         
+        /// <summary>Make a completed sibling unit's type visible to this unit's TypeManager.</summary>
+        public void ImportType(TypeInfo type)
+        {
+            if (type == null || string.IsNullOrEmpty(type.Name)) return;
+            if (!_types.ContainsKey(type.Name)) _types[type.Name] = type;
+        }
+
         public TypeInfo GetType(string name)
         {
             _types.TryGetValue(name, out var type);

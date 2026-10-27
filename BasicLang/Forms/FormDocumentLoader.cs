@@ -76,6 +76,17 @@ public static class FormDocumentLoader
                 continue;
             }
 
+            var desktopOnly = file.Model.AllControls().Concat(file.Model.AllComponents())
+                .FirstOrDefault(c => c.Definition is { } definition && !definition.SupportsTarget(FormTarget.Web));
+            if (desktopOnly != null)
+            {
+                warn?.Invoke(
+                    $"{DesignCodes.DesktopOnlyKind}: '{Path.GetFileName(path)}' uses desktop-only control " +
+                    $"'{desktopOnly.Kind}' ({desktopOnly.Id}); the page was not generated. " +
+                    "Remove it or target WinForms.");
+                continue;
+            }
+
             forms.Add(new LoadedForm(file.Model, path));
         }
 

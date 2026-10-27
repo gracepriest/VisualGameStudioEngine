@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using BasicLang.Forms;
 
@@ -6,29 +6,32 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 
 /// <summary>One toolbox entry: a control kind the current document can hold.</summary>
 /// <param name="Kind">The catalog kind, which is also the document element name.</param>
-/// <param name="Description">What it maps to on this target — the thing a user actually wonders.</param>
+/// <param name="Description">What it maps to on this target ΓÇö the thing a user actually wonders.</param>
 /// <param name="Glyph">
 /// A two-or-three character stand-in for VS's control icons. Derived from the catalog's
 /// <see cref="FormSchematic"/> rather than from the kind's name, so it is distinct for every row
-/// the same way the canvas drawing is — first letters collide (Label/ListBox, Panel/PictureBox,
+/// the same way the canvas drawing is ΓÇö first letters collide (Label/ListBox, Panel/PictureBox,
 /// CheckBox/ComboBox) and would put the same mark beside different controls.
 /// </param>
 /// <param name="Category">
-/// "Common Controls", "Containers", "Menus &amp; Toolbars" or "Components", as VS groups them — in
+/// "Common Controls", "Containers", "Menus &amp; Toolbars" or "Components", as VS groups them ΓÇö in
 /// that order, which <c>Rebuild</c>'s sort and this string have to agree on.
 /// </param>
 /// <param name="StartsCategory">
 /// True on the FIRST row of each category, which is how the single flat list draws group headers.
-/// ⛔ One ListBox, deliberately: the toolbox drag is wired to <c>ToolboxList</c> by name, and
+/// Γ¢ö One ListBox, deliberately: the toolbox drag is wired to <c>ToolboxList</c> by name, and
 /// splitting the list per group would give each group its own unwired ListBox.
 /// </param>
 public sealed record FormToolboxItem(
-    string Kind, string Description, string Glyph, string Category, bool StartsCategory);
+    string Kind, string Description, string Glyph, string Category, bool StartsCategory, bool DesktopOnly = false)
+{
+    public string Badge => DesktopOnly ? "desktop" : "";
+}
 
 /// <summary>
-/// The designer's toolbox — the control kinds available for the open document's target.
+/// The designer's toolbox ΓÇö the control kinds available for the open document's target.
 ///
-/// <para>⛔ Driven from <see cref="FormControlCatalog.For"/>, never a hand-written list. A hand
+/// <para>Γ¢ö Driven from <see cref="FormControlCatalog.For"/>, never a hand-written list. A hand
 /// list is how a catalog row ships with no way to place it, and how a kind that does not exist on
 /// the target gets offered anyway: <c>SupportsTarget</c> is the only thing that knows a control is
 /// web-only or WinForms-only, and it is checked HERE rather than after the user has dragged one
@@ -53,15 +56,16 @@ public partial class FormToolboxViewModel : ObservableObject
         // Forms tab. Ordered here rather than in the catalog because the catalog's order is the
         // order controls were SPECIFIED in, and changing it to suit one panel would move every row
         // of every other consumer.
-        // ⛔ An ITEM kind is never a toolbox row (spec Decision 7, and VS does not list one either):
+        // Γ¢ö An ITEM kind is never a toolbox row (spec Decision 7, and VS does not list one either):
         // a menu item is created from the "Type Here" slot on the strip that will hold it, never
-        // dragged onto the canvas — it has no place of its own to be dropped at. Filtered HERE, in
+        // dragged onto the canvas ΓÇö it has no place of its own to be dropped at. Filtered HERE, in
         // commit 24b, so the rule is in force before the first item row exists: today this excludes
         // nothing, and the two membership pins say the same thing from the other side.
-        // ⚠ Task 24 (commit 24c) adds the fourth rank: a DOCKED strip is neither a common control nor
+        // ΓÜá Task 24 (commit 24c) adds the fourth rank: a DOCKED strip is neither a common control nor
         // a container, and VS gives it its own tab. Ranked on Place rather than on the kind's name,
         // so a strip row added later lands in the group without a second list to update.
-        var ordered = FormControlCatalog.For(Target)
+        var catalog = Target == FormTarget.Web ? FormControlCatalog.All : FormControlCatalog.For(Target);
+        var ordered = catalog
             .Where(c => c.Place != FormPlace.Item)
             .OrderBy(c => c.Place switch
             {
@@ -76,7 +80,7 @@ public partial class FormToolboxViewModel : ObservableObject
         string? previousCategory = null;
         foreach (var control in ordered)
         {
-            // What this kind IS on the target the user is looking at — the WinForms type name or
+            // What this kind IS on the target the user is looking at ΓÇö the WinForms type name or
             // the HTML tag. A toolbox that only says "TextBox" leaves them guessing which of the
             // three <input> kinds they are about to place. A script-backed component is not an
             // element and must not read as one; a WinForms component shows its qualified type,
@@ -89,7 +93,7 @@ public partial class FormToolboxViewModel : ObservableObject
                         ? $"<{control.HtmlTag} type=\"{control.HtmlInputType}\">"
                         : $"<{control.HtmlTag}>";
 
-            // ⚠ The SAME rank the ordering above applies, said in words. Two spellings of one grouping
+            // ΓÜá The SAME rank the ordering above applies, said in words. Two spellings of one grouping
             // is how a category header ends up drawn twice: StartsCategory fires on every change of
             // this string, so a category that disagrees with the sort interleaves.
             var category = control.IsComponent ? "Components"
@@ -102,21 +106,22 @@ public partial class FormToolboxViewModel : ObservableObject
                 description,
                 GlyphFor(control.Schematic),
                 category,
-                StartsCategory: category != previousCategory));
+                StartsCategory: category != previousCategory,
+                DesktopOnly: Target == FormTarget.Web && !control.SupportsTarget(FormTarget.Web)));
 
             previousCategory = category;
         }
     }
 
     /// <summary>
-    /// A stand-in for VS's icons, keyed on the same catalog field the canvas draws from — so the
+    /// A stand-in for VS's icons, keyed on the same catalog field the canvas draws from ΓÇö so the
     /// mark beside a row and the shape it produces cannot drift apart.
     ///
-    /// <para>⛔ PUBLIC, not internal: <c>FormSchematicPinTests</c> drives this per ENUM VALUE, and
+    /// <para>Γ¢ö PUBLIC, not internal: <c>FormSchematicPinTests</c> drives this per ENUM VALUE, and
     /// the Shell grants no <c>InternalsVisibleTo</c> to the test project by convention (see
-    /// <c>CodeEditorDocumentView.axaml.cs:770</c> — public seams, never internal + IVT). The existing
+    /// <c>CodeEditorDocumentView.axaml.cs:770</c> ΓÇö public seams, never internal + IVT). The existing
     /// glyph gates iterate toolbox ROWS and read <see cref="FormToolboxItem.Glyph"/>, so they would
-    /// never see the missing arm of a schematic no row uses — which is every item schematic.</para>
+    /// never see the missing arm of a schematic no row uses ΓÇö which is every item schematic.</para>
     /// </summary>
     public static string GlyphFor(FormSchematic schematic) => schematic switch
     {
@@ -131,7 +136,7 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Group => "{ }",
         FormSchematic.Image => "/\\",
 
-        // Task 23's widening. ⚠ Each must be VISUALLY distinct from every other mark, not merely
+        // Task 23's widening. ΓÜá Each must be VISUALLY distinct from every other mark, not merely
         // different: FormToolboxGlyphTests fails on a repeat, because two controls wearing the same
         // mark are as unhelpful as thirteen wearing "?".
         FormSchematic.Link => "_A_",
@@ -148,7 +153,7 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.FlowContainer => ">>",
         FormSchematic.TableContainer => "#|#",
 
-        // Task 25: the tray. One mark per component kind, as VS gives each its own icon — a tray
+        // Task 25: the tray. One mark per component kind, as VS gives each its own icon ΓÇö a tray
         // with a Timer and a ToolTip in it must not show two of the same thing.
         FormSchematic.Clock => "(t)",
         FormSchematic.Hint => "(?)",
@@ -156,19 +161,19 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Worker => "(w)",
 
         // Task 24: menus, toolbars and status bars. The three strips are toolbox rows; the four item
-        // kinds are not (they are created from Type Here), but they still need a mark — the tray and
+        // kinds are not (they are created from Type Here), but they still need a mark ΓÇö the tray and
         // the property grid name a control by its schematic, and a missing arm here is a "?" beside
-        // a real control. ⚠ Each bar reads as its own band: the rule is under the menu bar, over the
+        // a real control. ΓÜá Each bar reads as its own band: the rule is under the menu bar, over the
         // status bar, and the tool bar wears its grip.
-        FormSchematic.MenuBar => "≡_",
-        FormSchematic.ToolBar => "[▸]",
-        FormSchematic.StatusBar => "_≡",
-        FormSchematic.MenuItem => "≡",
-        FormSchematic.Separator => "—",
-        FormSchematic.ToolButton => "[▸",
+        FormSchematic.MenuBar => "Γëí_",
+        FormSchematic.ToolBar => "[Γû╕]",
+        FormSchematic.StatusBar => "_Γëí",
+        FormSchematic.MenuItem => "Γëí",
+        FormSchematic.Separator => "ΓÇö",
+        FormSchematic.ToolButton => "[Γû╕",
         FormSchematic.StatusLabel => "_A",
 
-        // ⛔ Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
+        // Γ¢ö Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
         // Left as a visible "?" rather than something plausible precisely so it cannot pass for a
         // real icon if that test is ever removed.
         _ => "?"

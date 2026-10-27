@@ -31,6 +31,11 @@ public enum RegionState
 /// <param name="EndOffset">Offset just past the CLOSE marker line's last character (excluding its terminator).</param>
 /// <param name="Content">The generated text between the markers, exactly as it is in the file.</param>
 /// <param name="DeclaredHash">The hash the open marker claims.</param>
+/// <param name="Style">
+/// The raw <c>style</c> attribute from the open marker, or <see langword="null"/> when the marker
+/// carried none. It is deliberately raw here: <see cref="FormCodeStyle"/> is the only reader that
+/// decides whether a value is legal for the document's extension.
+/// </param>
 public sealed record FormRegion(
     string Name,
     RegionState State,
@@ -38,7 +43,8 @@ public sealed record FormRegion(
     int EndOffset,
     string Content,
     string DeclaredHash,
-    int Line);
+    int Line,
+    string? Style = null);
 
 /// <summary>
 /// Finds, classifies and formats the designer-owned regions D1 puts inside the user's own file.
@@ -57,16 +63,26 @@ public static class RegionMarkers
 
     public static readonly string[] All = { Controls, Init };
 
+    // The style attribute is accepted ONLY in its one legal position, between form and hash. The
+    // optional group keeps every pre-Task-30 marker matching byte-for-byte.
     private static readonly Regex OpenMarker = new(
-        """^\s*'\s*<vgs:designer\s+region="(?<region>[^"]*)"\s+form="(?<form>[^"]*)"\s+hash="(?<hash>[^"]*)"\s*>\s*$""",
+        """^\s*'\s*<vgs:designer\s+region="(?<region>[^"]*)"\s+form="(?<form>[^"]*)"(?:\s+style="(?<style>[^"]*)")?\s+hash="(?<hash>[^"]*)"\s*>\s*$""",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CloseMarker = new(
         @"^\s*'\s*</vgs:designer>\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static string FormatOpen(string region, string formFileName, string hash, string indent) =>
-        $"""{indent}' <vgs:designer region="{region}" form="{formFileName}" hash="{hash}">""";
+    public static string FormatOpen(
+        string region,
+        string formFileName,
+        string hash,
+        string indent,
+        string? style = null)
+    {
+        var attribute = string.IsNullOrEmpty(style) ? "" : " style=\"" + style + "\"";
+        return $"""{indent}' <vgs:designer region="{region}" form="{formFileName}"{attribute} hash="{hash}">""";
+    }
 
     public static string FormatClose(string indent) => $"{indent}' </vgs:designer>";
 
@@ -104,6 +120,7 @@ public static class RegionMarkers
 
         string? openRegion = null;
         string? openHash = null;
+        string? openStyle = null;
         var openLine = 0;
         var openStart = 0;
         var contentStart = 0;
@@ -124,6 +141,7 @@ public static class RegionMarkers
 
                 openRegion = open.Groups["region"].Value;
                 openHash = open.Groups["hash"].Value;
+                openStyle = open.Groups["style"].Success ? open.Groups["style"].Value : null;
                 openLine = line;
                 openStart = index.OffsetOf(line, 1);
                 contentStart = line < index.LineCount ? index.OffsetOf(line + 1, 1) : index.Length;
@@ -155,7 +173,8 @@ public static class RegionMarkers
                 index.EndOfLine(line),
                 content,
                 openHash ?? "",
-                openLine));
+                openLine,
+                openStyle));
 
             openRegion = null;
         }

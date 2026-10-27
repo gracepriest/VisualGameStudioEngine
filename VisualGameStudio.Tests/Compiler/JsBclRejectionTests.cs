@@ -104,14 +104,16 @@ public class JsBclRejectionTests
     public void ExceptionTypes_AreAccepted(string source) => Accept(source);
 
     /// <summary>
-    /// Long and Char must keep their OWN diagnostics. If BL7007 ran first they would draw a
-    /// generic "no JavaScript equivalent" message instead of "use Integer" / "use String",
-    /// which is the actionable part.
+    /// Long must keep its OWN diagnostic. If BL7007 ran first it would draw a generic "no
+    /// JavaScript equivalent" message instead of "use Integer", which is the actionable part.
+    /// (Char is supported since portable-controls Task 14.)
     /// </summary>
     [TestCase("Sub Main()\nDim n As Long\nEnd Sub", "BL7003", TestName = "Long_KeepsBL7003")]
-    [TestCase("Sub Main()\nDim c As Char\nEnd Sub", "BL7004", TestName = "Char_KeepsBL7004")]
     public void BannedPrimitives_KeepTheirSpecificDiagnostic(string source, string expected)
     {
         Assert.That(Reject(source), Does.Contain(expected));
     }
+
+    [Test]
+    public void Char_IsAccepted() => Accept("Sub Main()\nDim c As Char\nEnd Sub");
 }

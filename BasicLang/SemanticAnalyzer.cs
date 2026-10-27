@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler;
+using BasicLang.Forms;
 using BasicLang.Net;
 
 namespace BasicLang.Compiler.SemanticAnalysis
@@ -494,6 +495,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
         internal IReadOnlyDictionary<AST.ExpressionNode, Net.NetEnumConstant> NetEnumConstants =>
             _netAnnotations.NetEnumConstants;
 
+        // User enums whose member is known at compile time. IRBuilder folds these to constants;
+        // otherwise `HorizontalAlignment.Right` emits a bare JS identifier.
+        private readonly Dictionary<string, object> _userEnumMemberValues =
+            new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<AST.ExpressionNode, (object Value, TypeInfo Type)> _userEnumConstants =
+            new Dictionary<AST.ExpressionNode, (object Value, TypeInfo Type)>(ReferenceEqualityComparer.Instance);
+
+        internal IReadOnlyDictionary<AST.ExpressionNode, (object Value, TypeInfo Type)> UserEnumConstants =>
+            _userEnumConstants;
+
         /// <summary>
         /// P2a-2 Task 4 (§6.3): true when this compilation targets the NATIVE (C++) backend —
         /// which is where §6.5's REAL evidence bar applies (bare unclaimed names are probed
@@ -503,6 +514,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// closure (WinForms, WPF), so "not resolvable" is not evidence of anything there.
         /// </summary>
         private bool _netNativeBackend = true;
+
+        /// <summary>True when the program targets JavaScript (see <see cref="ConfigureTarget"/>).</summary>
+        private bool _isJavaScriptTarget;
+
+        /// <summary>True while a unit from the shipped portable library itself is analyzed.</summary>
+        private bool _inPortableLibrary;
+
+        /// <summary>Selects the web library's missing-member wording over the generic "no member" error.</summary>
+        public void ConfigureTarget(string? targetBackend, bool portableLibraryUnit = false)
+        {
+            _isJavaScriptTarget = string.Equals(targetBackend, "javascript", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(targetBackend, "js", StringComparison.OrdinalIgnoreCase);
+            _inPortableLibrary = portableLibraryUnit;
+        }
+
+        /// <summary>Task 34: the web library's missing-member wording (spec §5.11).</summary>
+        private void ReportWebUnavailableMember(string typeName, string memberName, int line, int column) =>
+            Error($"WebUnavailableMember: '{PortableLibraryTypes.SimpleName(typeName)}.{memberName}' is a " +
+                  "WinForms member that is not available on the web. Put desktop-only code inside " +
+                  "#If DESKTOP Then ... #End If.", line, column);
 
         /// <summary>
         /// P2a-2 Task 4 — receivers <see cref="ProbeNetMemberAccess"/> RESOLVED, keyed by the
@@ -680,6 +711,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     };
 
                     GlobalScope.Define(importedSymbol);
+                    if (importedSymbol.Type != null &&
+                        (symbol.Kind == SymbolKind.Class || symbol.Kind == SymbolKind.Structure ||
+                         symbol.Kind == SymbolKind.Interface || symbol.Kind == SymbolKind.Type))
+                    {
+                        _typeManager.ImportType(importedSymbol.Type);
+                    }
                 }
             }
 
@@ -721,6 +758,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
                         {
                             pendingClasses.Add((classNode, classType));
                         }
+                    }
+                    else if (decl is EnumNode enumNode)
+                    {
+                        RegisterSiblingEnumShell(enumNode, unit);
                     }
                 }
             }
@@ -840,8 +881,24 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     continue;
                 }
 
-                yield return decl;
+                foreach (var node in FlattenNamespace(decl))
+                    yield return node;
             }
+        }
+
+        /// <summary>Namespace blocks are transparent for sibling signatures: their classes and enums
+        /// are visible exactly as a top-level one is.</summary>
+        private static IEnumerable<ASTNode> FlattenNamespace(ASTNode node)
+        {
+            if (node is NamespaceNode ns)
+            {
+                foreach (var child in ns.Members)
+                    foreach (var nested in FlattenNamespace(child))
+                        yield return nested;
+                yield break;
+            }
+
+            yield return node;
         }
 
         /// <summary>
@@ -850,6 +907,37 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// second pass. Returns null when the name is already taken (stdlib,
         /// a completed sibling, or an earlier pending sibling wins).
         /// </summary>
+        private void RegisterSiblingEnumShell(EnumNode enumNode, CompilationUnit unit)
+        {
+            if (string.IsNullOrEmpty(enumNode.Name)) return;
+            if (GlobalScope.Resolve(enumNode.Name) != null) return;
+
+            var enumType = _typeManager.GetType(enumNode.Name)
+                           ?? _typeManager.DefineType(enumNode.Name, TypeKind.Enum);
+            if (enumType == null) return;
+
+            GlobalScope.Define(new Symbol(enumNode.Name, SymbolKind.Type, enumType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName
+            });
+
+            foreach (var member in enumNode.Members)
+            {
+                var name = enumNode.Name + "." + member.Name;
+                if (GlobalScope.Resolve(name) == null)
+                {
+                    GlobalScope.Define(new Symbol(name, SymbolKind.Constant, enumType, 0, 0)
+                    {
+                        IsImported = true,
+                        IsSiblingSignature = true,
+                        SourceModule = unit.ModuleName
+                    });
+                }
+            }
+        }
+
         private TypeInfo RegisterSiblingClassShell(ClassNode classNode, CompilationUnit unit)
         {
             if (string.IsNullOrEmpty(classNode.Name)) return null;
@@ -2529,7 +2617,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
             if (literal.Text is string text)
             {
-                var trimmed = text.TrimEnd('F', 'f', 'L', 'l');
+                var trimmed = text.TrimEnd('F', 'f', 'L', 'l', 'D', 'd');
                 if (decimal.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
                     return true;
             }
@@ -2542,6 +2630,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 case short s: value = s; return true;
                 case byte b: value = b; return true;
                 case sbyte sb: value = sb; return true;
+                case double dbl: value = (decimal)dbl; return true;
+                case float fl: value = (decimal)fl; return true;
                 case decimal d: value = d; return true;
             }
 
@@ -7027,7 +7117,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(EnumNode node)
         {
-            var enumType = _typeManager.DefineType(node.Name, TypeKind.Enum);
+            var enumType = _typeManager.GetType(node.Name)
+                           ?? _typeManager.DefineType(node.Name, TypeKind.Enum);
             if (enumType == null)
             {
                 Error($"Enum '{node.Name}' is already defined", node.Line, node.Column);
@@ -7035,22 +7126,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
 
             var symbol = new Symbol(node.Name, SymbolKind.Type, enumType, node.Line, node.Column);
-            if (!_currentScope.Define(symbol))
+            if (_currentScope.Resolve(node.Name) == null)
             {
-                Error($"Symbol '{node.Name}' is already defined in this scope", node.Line, node.Column);
+                _currentScope.Define(symbol);
             }
 
             // Define enum members as constants in current scope
             foreach (var member in node.Members)
             {
-                var memberSymbol = new Symbol(
-                    $"{node.Name}.{member.Name}",
-                    SymbolKind.Constant,
-                    enumType,
-                    member.Line,
-                    member.Column
-                );
-                _currentScope.Define(memberSymbol);
+                var memberName = $"{node.Name}.{member.Name}";
+                if (member.Value is LiteralExpressionNode { Value: { } literal })
+                    _userEnumMemberValues[memberName] = literal;
+                if (_currentScope.Resolve(memberName) == null)
+                {
+                    _currentScope.Define(new Symbol(
+                        memberName,
+                        SymbolKind.Constant,
+                        enumType,
+                        member.Line,
+                        member.Column));
+                }
 
                 // If member has explicit value, analyze it
                 if (member.Value != null)
@@ -10840,7 +10935,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else
             {
-                Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
+                if (_isJavaScriptTarget && PortableLibraryTypes.LibraryTypeName(withType) is { } libraryType)
+                    ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
+                else
+                    Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
         }
@@ -13140,6 +13238,25 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         private void BindMemberAccess(MemberAccessExpressionNode node)
         {
+            // A USER ENUM member: `DockStyle.Top`, `Keys.Enter`, `MouseButtons.Left`. The enum
+            // visitor defines the member as a `Type.Member` constant in the declaring scope; a
+            // member access must find that constant and present the enum type, or every library
+            // use of an enum member types as Object.
+            if (node.Object is IdentifierExpressionNode enumId
+                && ResolveTypeSymbol(enumId.Name) is { Kind: SymbolKind.Type, Type.Kind: TypeKind.Enum } enumSymbol)
+            {
+                var qualified = enumId.Name + "." + node.MemberName;
+                var member = _currentScope?.Resolve(qualified) ?? GlobalScope.Resolve(qualified);
+                if (member != null)
+                {
+                    SetNodeSymbol(node, member);
+                    SetNodeType(node, enumSymbol.Type);
+                    if (_userEnumMemberValues.TryGetValue(qualified, out var value))
+                        _userEnumConstants[node] = (value, enumSymbol.Type);
+                    return;
+                }
+            }
+
             // First, check if this is a module reference (ModuleName.Symbol).
             // Skip this when the identifier is a local variable/parameter: a
             // variable named like a module/file (e.g. "player" vs class "Player"
@@ -13283,6 +13400,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Task 34: `.Element` is the web escape hatch. On a desktop build the receiver's
+            // DECLARED type name decides; a receiver typed Object is left to csc.
+            if (!_isJavaScriptTarget
+                && string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
+                && PortableLibraryTypes.IsLibraryReceiver(objectType))
+            {
+                Error("ElementOnDesktop: '.Element' is web-only; wrap it in #If WEB Then ... #End If.",
+                    node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
             // `g.Length` on a rank-2 array is the row count natively and the FLATTENED count on
             // .NET — a silent wrong answer on one target or the other. Whole-array members are
             // refused for the same reason For Each is.
@@ -13341,6 +13470,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 SetNodeType(node, _typeManager.ObjectType);
             }
+            // A portable-library receiver's unknown member is the named web refusal, before the
+            // .NET fallback can accept a WinForms-only member (`Me.ShowDialog`, `btn.Nope`).
+            // `.Element` and Object's own members are the deliberate exceptions.
+            else if (_isJavaScriptTarget && !_inPortableLibrary
+                     && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryReceiver
+                     && !string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
+                     && !ObjectMemberNames.Contains(node.MemberName)
+                     && LacksDeclaredMember(objectType, node.MemberName))
+            {
+                ReportWebUnavailableMember(libraryReceiver, node.MemberName, node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
             // A BasicLang class whose members are all known is never a .NET type, whatever its name.
             else if (!LacksDeclaredMember(objectType, node.MemberName) && IsNetType(objectType.Name))
             {
@@ -13378,6 +13519,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error("Constructor chaining via Me.New is not supported. Move the shared initialization " +
                       "into a Private Sub and call it from each constructor", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
+            else if (_isJavaScriptTarget && !_inPortableLibrary
+                     && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryType)
+            {
+                ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
             else

@@ -259,14 +259,16 @@ public class NothingConversionTests
     /// Every value type the old refusal named is ADMITTED, and lowers to its default: a primitive to the zero LITERAL (exactly the constant a written
     /// <c>0</c> / <c>False</c> lowers to, so a field or module initializer stays a constant), any other value type to a null constant TYPED with it (which
     /// now means "default of T": C# <c>default(T)</c>, C++ <c>T{}</c>). The last column is where JavaScript still refuses the TYPE, with or without Nothing:
-    /// Decimal BL7007, Char BL7004, Structure BL7005 — a capability decision of that backend, not a Nothing rule. (The other JavaScript, C++ and MSIL limits of
-    /// an Enum, DateTime, TimeSpan or Guid are in the fixture header of <see cref="NothingIntoValueTypeExecutionTests"/>, with no test: asserting one pins a defect.)
+    /// Structure BL7005 — a capability decision of that backend, not a Nothing rule. (Char and Decimal are supported
+    /// since portable-controls Tasks 14 and 19; the other JavaScript, C++ and MSIL limits of an Enum, DateTime,
+    /// TimeSpan or Guid are in the fixture header of <see cref="NothingIntoValueTypeExecutionTests"/>, with no test:
+    /// asserting one pins a defect.)
     /// </summary>
     [TestCase("Sub Main()\nDim n As Integer = Nothing\nEnd Sub", "n", "Integer", "0", "")]
     [TestCase("Sub Main()\nDim n As Double = Nothing\nEnd Sub", "n", "Double", "0", "")]
-    [TestCase("Sub Main()\nDim n As Decimal = Nothing\nEnd Sub", "n", "Decimal", "0", "BL7007")]
+    [TestCase("Sub Main()\nDim n As Decimal = Nothing\nEnd Sub", "n", "Decimal", "0", "")]
     [TestCase("Sub Main()\nDim b As Boolean = Nothing\nEnd Sub", "b", "Boolean", "False", "")]
-    [TestCase("Sub Main()\nDim c As Char = Nothing\nEnd Sub", "c", "Char", "NUL", "BL7004")]
+    [TestCase("Sub Main()\nDim c As Char = Nothing\nEnd Sub", "c", "Char", "NUL", "")]
     [TestCase("Enum E\nA\nEnd Enum\nSub Main()\nDim e1 As E = Nothing\nEnd Sub", "e1", "E", "null", "")]
     [TestCase("Structure P\nPublic X As Integer\nEnd Structure\nSub Main()\nDim p As P = Nothing\nEnd Sub", "p", "P", "null", "BL7005")]
     [TestCase("Sub Main()\nDim d As DateTime = Nothing\nEnd Sub", "d", "DateTime", "null", "")]

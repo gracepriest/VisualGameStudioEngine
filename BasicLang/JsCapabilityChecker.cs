@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Forms;
 
 namespace BasicLang.Compiler.CodeGen.JavaScript
 {
@@ -301,8 +302,6 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 ["Int64"] = (LongCode, LongWhy),     // .NET spelling of the same type
                 ["ULong"] = (LongCode, LongWhy),     // 64-bit unsigned: identical 2^53 defect
                 ["UInt64"] = (LongCode, LongWhy),
-                ["Char"] = ("BL7004",
-                    "JavaScript has no character type. Use String."),
             };
 
         private const string LongCode = "BL7003";
@@ -403,10 +402,10 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         {
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                // Erased numerics and primitives. Long/ULong/Char are absent on purpose —
+                // Erased numerics and primitives. Long/ULong are absent on purpose; Char is a one-character String on JS —
                 // they have their own diagnostics and are rejected before this set is read.
                 "Integer", "Single", "Double", "Boolean", "String", "Byte", "SByte",
-                "Short", "UShort", "UInteger", "Void",
+                "Short", "UShort", "UInteger", "Void", "Char", "Decimal",
 
                 // .NET spellings of the same primitives. An Enum's UnderlyingType arrives as
                 // "Int32", not "Integer", so omitting these rejects every enum in the program.
@@ -581,8 +580,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 if (JsExceptionTypes.LooksLikeException(name))
                     throw UnknownExceptionRejection(name);
 
+                // Task 34: a WinForms/Drawing type the web library does not declare is not a
+                // generic BCL miss. Name it and point at the desktop escape hatch.
+                if (PortableLibraryTypes.IsKnownWinFormsKind(name)
+                    || PortableLibraryTypes.IsUnavailableDrawingType(name))
+                {
+                    throw new ForeignFeatureException(
+                        $"WebUnavailableMember: '{name}' is a WinForms type that is not available on the web. " +
+                        "Put desktop-only code inside #If DESKTOP Then ... #End If. " +
+                        $"(Found as {where}.)");
+                }
+
                 throw new ForeignFeatureException(
-                    $"BL7007: '{type.Name}' is not available on the JavaScript backend — there " +
+                    $"BL7007: '{type.Name}' is not available on the JavaScript backend - there " +
                     "is no .NET base class library in a browser. Supported types are the " +
                     "BasicLang primitives, List/Dictionary/HashSet, Task/Func/Action, " +
                     "Console/Math/Random/DateTime/Regex, exceptions, and the types this " +

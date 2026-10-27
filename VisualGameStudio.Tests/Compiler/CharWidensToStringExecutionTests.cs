@@ -540,16 +540,15 @@ public class CharWidensToStringCompileTests
     /// standard and the aggressive passes (the refusal is a capability check, not an optimizer rule). The shapes with no Char local run: the JavaScript group of the execution fixture.
     /// </summary>
     [Test]
-    public void JavaScript_AStringInitialisedFromACharLocal_IsStillRefused_BL7004()
+    public void JavaScript_AStringInitialisedFromACharLocal_Lowers()
     {
         const string source = "Sub Main()\n    Dim c As Char = \"A\"c\n    Dim s As String = c\n    Console.WriteLine(s)\nEnd Sub";
-        var standard = Assert.Throws<ForeignFeatureException>(() => JsTestSupport.Compile(source));
-        var aggressive = Assert.Throws<ForeignFeatureException>(() => JsTestSupport.CompileAggressive(source));
+        var standard = JsTestSupport.Compile(source);
+        var aggressive = JsTestSupport.CompileAggressive(source);
         Assert.Multiple(() =>
         {
-            Assert.That(standard!.Message, Does.StartWith("BL7004: 'Char' cannot be lowered to JavaScript"));
-            Assert.That(standard.Message, Does.Contain("local variable 'c'"));
-            Assert.That(aggressive!.Message, Does.StartWith("BL7004: 'Char' cannot be lowered to JavaScript"));
+            Assert.That(standard, Does.Contain("console.log"));
+            Assert.That(aggressive, Does.Contain("console.log"));
         });
     }
 

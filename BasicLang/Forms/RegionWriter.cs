@@ -17,16 +17,34 @@ public sealed record RegionWriteResult(
 }
 
 /// <summary>
+/// What sort of generated init line this is. Portable is the WinForms walk with four kinds removed;
+/// keeping the kind with the text is what makes that subset relation explicit instead of a guess
+/// about line shapes (and is the seam piece 3 uses for wrapped regions).
+/// </summary>
+internal enum InitLineKind
+{
+    Other,
+    Geometry,
+    Property,
+    ComponentProperty,
+    RootProperty,
+    Reference
+}
+
+/// <summary>One generated init line before the style chooses whether to emit it.</summary>
+internal sealed record InitLine(string Text, InitLineKind Kind);
+
+/// <summary>
 /// Generates the two designer-owned regions and writes them into the user's own file (D1).
 ///
-/// <para><b>This is the most dangerous code in the feature</b> ‚Äî it edits a file the user owns and
+/// <para><b>This is the most dangerous code in the feature</b> G«ˆ it edits a file the user owns and
 /// did not ask it to touch. Everything outside the two marked regions is never read, never parsed
 /// and never rewritten: the write is a pair of substring replacements at offsets, not a
 /// regeneration.</para>
 ///
 /// <para>The recovery policy is refuse-by-default. A region is regenerated only when both markers
-/// are present, balanced, and the content hash matches what the open marker claims. Anything else ‚Äî
-/// a hand edit inside the region, a missing or duplicated marker ‚Äî stops the write and reports.
+/// are present, balanced, and the content hash matches what the open marker claims. Anything else G«ˆ
+/// a hand edit inside the region, a missing or duplicated marker G«ˆ stops the write and reports.
 /// <b>The designer never silently discards hand-written code.</b></para>
 /// </summary>
 public static class RegionWriter
@@ -38,8 +56,23 @@ public static class RegionWriter
     public static RegionWriteResult Write(string filePath, string source, FormDocument form, string formFileName)
     {
         var diagnostics = new List<DesignDiagnostic>();
-        var regions = RegionMarkers.Scan(source);
+        var style = FormStyleReader.Of(source, formFileName);
+        var regions = style.Regions;
         var index = new SourceIndex(source);
+
+        if (style.Problem != null)
+        {
+            diagnostics.Add(Error(DesignCodes.RegionMalformed, style.Problem, filePath, style.Line));
+        }
+
+        if (PortableWebSourceChecks.HasMixedCodeStyle(source, style))
+        {
+            diagnostics.Add(Error(DesignCodes.MixedCodeStyle,
+                "MixedCodeStyle: this web form's designer regions are DOM-style, but its code uses " +
+                "System.Windows.Forms/Inherits Form. Convert the form to the portable style or remove " +
+                "the WinForms lines before building it for the web.",
+                filePath, style.Regions.Count > 0 ? style.Regions[0].Line : 1));
+        }
 
         foreach (var region in regions)
         {
@@ -86,7 +119,7 @@ public static class RegionWriter
 
         if (controls == null || init == null)
         {
-            // ‚ö† HALF-adopted is not the import case, and telling the user the file "has no designer
+            // G‹· HALF-adopted is not the import case, and telling the user the file "has no designer
             // regions" when it visibly has one is worse than saying nothing. A file with one region
             // is closer to Malformed: the designer cannot write a complete form into it, and
             // silently writing only the half that exists would leave the field declarations and the
@@ -96,36 +129,36 @@ public static class RegionWriter
 
             diagnostics.Add(Error(DesignCodes.RegionMalformed,
                 $"this file has a designer '{present}' region but no '{missing}' region. Both are " +
-                "required ‚Äî the declarations and the wiring must be regenerated together. Add the " +
+                "required G«ˆ the declarations and the wiring must be regenerated together. Add the " +
                 $"missing '{missing}' markers, or remove the '{present}' ones and re-import.",
                 filePath, (controls ?? init)!.Line));
             return new RegionWriteResult(Changed: false, source, diagnostics);
         }
 
-        // ‚õî The body is built with the line ending the FILE uses, not Environment.NewLine. Building
+        // G¢ˆ The body is built with the line ending the FILE uses, not Environment.NewLine. Building
         // it with AppendLine would emit LF bodies into a CRLF file when the designer runs on Linux
         // (or the reverse), leaving the user's file with mixed endings after a save it did not ask
-        // for. The hash normalises line endings, so it stays stable either way ‚Äî which means this
+        // for. The hash normalises line endings, so it stays stable either way G«ˆ which means this
         // would have gone unnoticed by every hash check.
         var newline = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 
-        var controlsBody = GenerateControls(form, IndentOf(index, controls), newline);
-        var initBody = GenerateInit(form, IndentOf(index, init), newline, filePath, diagnostics);
+        var controlsBody = GenerateControls(form, style.Style, IndentOf(index, controls), newline);
+        var initBody = GenerateInit(form, style.Style, IndentOf(index, init), newline, filePath, diagnostics);
 
         CheckAnchors(filePath, form, diagnostics);
         CheckDocks(filePath, form, diagnostics);
-        CheckTargetProperties(filePath, form, diagnostics);
-        CheckWebRefusedValues(filePath, form, diagnostics);
-        CheckComponentTargets(filePath, form, diagnostics);
-        CheckComponentBinds(filePath, form, diagnostics);
-        CheckControlBinds(filePath, form, diagnostics);
+        CheckTargetProperties(filePath, form, style.Style, diagnostics);
+        CheckWebRefusedValues(filePath, form, style.Style, diagnostics);
+        CheckComponentTargets(filePath, form, style.Style, diagnostics);
+        CheckComponentBinds(filePath, form, style.Style, diagnostics);
+        CheckControlBinds(filePath, form, style.Style, diagnostics);
         CheckRootBinds(filePath, form, diagnostics);
         // Slice 5 review fix 2: the reader refuses this too, but a model reaches here without a reader (the designer's
-        // own edits, the retarget, tests) ‚Äî and the wrapper names below would collide.
+        // own edits, the retarget, tests) G«ˆ and the wrapper names below would collide.
         diagnostics.AddRange(form.ControlsNamedLikeTheForm()
             .Select(c => Error(DesignCodes.DuplicateControlId, form.NamedLikeTheFormMessage(c), filePath, 0)));
         CheckWrapperNames(filePath, form, diagnostics);
-        CheckHandlerOrdering(filePath, source, index, form, init, diagnostics);
+        CheckHandlerOrdering(filePath, source, index, form, init, style.Style, diagnostics);
         if (diagnostics.Any(d => !d.IsWarning))
         {
             return new RegionWriteResult(Changed: false, source, diagnostics);
@@ -149,34 +182,34 @@ public static class RegionWriter
 
     /// <summary>
     /// Checks that every named anchor edge exists (through <see cref="FormAnchor.Parse"/>, the one
-    /// Anchor parser ‚Äî plan scope call S10). Multi-edge anchors are EMITTABLE.
+    /// Anchor parser G«ˆ plan scope call S10). Multi-edge anchors are EMITTABLE.
     ///
-    /// <para>‚õî‚õî <b>This used to refuse anything with more than one edge</b>, and
+    /// <para>G¢ˆG¢ˆ <b>This used to refuse anything with more than one edge</b>, and
     /// <c>docs/HANDOFF.md</c> carried that as an open decision: BasicLang had no way to write a
-    /// combined flags value, measured three ways ‚Äî <c>Or</c> demands Boolean operands,
+    /// combined flags value, measured three ways G«ˆ <c>Or</c> demands Boolean operands,
     /// <c>CType</c> was refused because <c>AnchorStyles</c> is unresolvable, and <c>|</c> lexes but
     /// does not parse. The choice on the table was a parser change or single-edge-only.</para>
     ///
-    /// <para>‚ö† Re-measured 2026-09-18: all three still fail, but a fourth route had never been
+    /// <para>G‹· Re-measured 2026-09-18: all three still fail, but a fourth route had never been
     /// tried. <c>btn.Anchor = 7</c> COMPILES in BasicLang and csc rejects it with CS0266, while
-    /// <c>(AnchorStyles)7</c> is ACCEPTED ‚Äî so the cast was the entire gap, and it was refused by
+    /// <c>(AnchorStyles)7</c> is ACCEPTED G«ˆ so the cast was the entire gap, and it was refused by
     /// one arm of <c>SemanticAnalyzer.RejectImpossibleConversion</c> rather than by the parser.
     /// That arm now exempts unresolvable .NET types, and this emits <c>CType(n, AnchorStyles)</c>.
     /// </para>
     ///
-    /// <para>‚õî An UNKNOWN edge name is still refused. Summing it as zero would silently anchor the
-    /// control to nothing ‚Äî the designer/runtime divergence D9 exists to prevent ‚Äî and the whole
+    /// <para>G¢ˆ An UNKNOWN edge name is still refused. Summing it as zero would silently anchor the
+    /// control to nothing G«ˆ the designer/runtime divergence D9 exists to prevent G«ˆ and the whole
     /// reason this check survives rather than being deleted.</para>
     ///
     /// <para>Asked of every PIXEL document (FormVocabulary.IsPixel): a .blform and a Canvas page.</para>
     /// </summary>
-    /// <remarks>‚õî The ONE anchor refusal: <see cref="AnchorRefusals"/> hands the same findings to a caller
+    /// <remarks>G¢ˆ The ONE anchor refusal: <see cref="AnchorRefusals"/> hands the same findings to a caller
     /// that must refuse BEFORE writing (the retarget, Task 11 review), so the two cannot disagree.</remarks>
     private static void CheckAnchors(
         string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
-        // ‚õî By VOCABULARY (spec 2026-09-27 ¬ß4): a Canvas page reads Anchor too (FormAnchorCss), and would otherwise
-        // anchor an unknown edge to less than written ‚Äî a misspelt "Rigth" alone CENTRES the control on the page.
+        // G¢ˆ By VOCABULARY (spec 2026-09-27 -∫4): a Canvas page reads Anchor too (FormAnchorCss), and would otherwise
+        // anchor an unknown edge to less than written G«ˆ a misspelt "Rigth" alone CENTRES the control on the page.
         if (!FormVocabulary.IsPixel(form))
         {
             return;
@@ -204,8 +237,8 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// The refusals <see cref="Write"/> would make for <paramref name="form"/>'s anchors ‚Äî an unknown edge on a
-    /// pixel document (BL8015) ‚Äî without writing anything. Empty for a Grid/Flow page.
+    /// The refusals <see cref="Write"/> would make for <paramref name="form"/>'s anchors G«ˆ an unknown edge on a
+    /// pixel document (BL8015) G«ˆ without writing anything. Empty for a Grid/Flow page.
     /// </summary>
     public static IReadOnlyList<DesignDiagnostic> AnchorRefusals(string filePath, FormDocument form)
     {
@@ -216,20 +249,20 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Refuses a POSITIONED control's <c>Dock</c> the designer cannot honour (BL8033) ‚Äî the sibling of
+    /// Refuses a POSITIONED control's <c>Dock</c> the designer cannot honour (BL8033) G«ˆ the sibling of
     /// <see cref="CheckAnchors"/>. Asked of every PIXEL document (FormVocabulary.IsPixel: a .blform and a Canvas page):
-    /// a <see cref="PixelGeometry.Dock"/> that is not a DockStyle member under <see cref="FormDock"/>'s rule ‚Äî trimmed,
+    /// a <see cref="PixelGeometry.Dock"/> that is not a DockStyle member under <see cref="FormDock"/>'s rule G«ˆ trimmed,
     /// any case. <see cref="AppendPixelGeometry"/> emits exactly <see cref="FormDock.Canonical"/> and
     /// <see cref="FormDockLayout.EdgeOf"/> resolves by the same rule, so the three can never disagree about what a
     /// spelling means. A Grid/Flow page has no pixel geometry, so it has no such Dock.
     ///
-    /// <para>‚õî A STRIP's Dock is deliberately NOT here. It is a catalog property, so a value its row does not accept
-    /// is Degraded (D9: one bad value costs one row, never the document) ‚Äî the reader freezes the row, this writer
+    /// <para>G¢ˆ A STRIP's Dock is deliberately NOT here. It is a catalog property, so a value its row does not accept
+    /// is Degraded (D9: one bad value costs one row, never the document) G«ˆ the reader freezes the row, this writer
     /// never emits it (BL8009), and <see cref="FormControl.IsDockedToBottom"/> falls back to the row default, which is
     /// exactly where WinForms then runs it. Refusing it here would make every save fail on a row the grid will not let
     /// the user edit.</para>
     /// </summary>
-    /// <remarks>‚õî The ONE dock refusal: <see cref="DockRefusals"/> hands the same findings to the retarget, which must
+    /// <remarks>G¢ˆ The ONE dock refusal: <see cref="DockRefusals"/> hands the same findings to the retarget, which must
     /// refuse BEFORE writing, so the two cannot disagree.</remarks>
     private static void CheckDocks(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
@@ -272,13 +305,20 @@ public static class RegionWriter
     /// <summary>
     /// Warns about properties the document carries that the target does not have, which
     /// <see cref="AppendControlInit"/> skips. A warning, never a refusal: the value is valid in
-    /// the other format and round-trips untouched, so the document is not wrong ‚Äî only unusable
+    /// the other format and round-trips untouched, so the document is not wrong G«ˆ only unusable
     /// here. Reporting it is what stops the skip from being silent.
     /// </summary>
     private static void CheckTargetProperties(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        // Components too (Task 25): a Timer's Enabled is WinForms-only and is skipped on the web.
+        // A portable file generates the WinForms shape (component property lines included), so its
+        // effective vocabulary is WinForms even though the document target is Web. Judging it as Web
+        // would say a retained Timer.Enabled line "is not written" while it is.
+        var target = style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+
+        // Components too (Task 25). A DOM component writes only the properties its WebScript
+        // template names; Task 39's Timer.Enabled is a both-target catalog row but not part of the
+        // legacy setInterval template, so the loop below reports it as unwritten rather than silent.
         foreach (var control in form.AllControls().Concat(form.AllComponents()))
         {
             var definition = control.Definition;
@@ -290,13 +330,29 @@ public static class RegionWriter
             foreach (var name in control.Properties.Keys)
             {
                 var property = definition.Property(name);
-                if (property != null && !property.AppliesTo(form.Target))
+                if (property == null)
                 {
+                    continue;
+                }
+
+                // A DOM script component is built from its WebScript template: a property the
+                // template does not mention never reaches the generated code, even when the
+                // catalog says the portable library supports it. Timer.Enabled is the live case
+                // (Task 39): the portable Timer honors it, the legacy setInterval template does
+                // not, so a DOM page must still be told the value is not written.
+                var templateSkips = style == FormStyle.Dom &&
+                                    definition is { IsComponent: true, WebScript: { } script } &&
+                                    !script.Construct.Contains("{" + name + "}", StringComparison.Ordinal);
+
+                if (!property.AppliesTo(target) || templateSkips)
+                {
+                    var why = templateSkips
+                        ? $"is not written by the {target} {definition.Kind} template"
+                        : $"does not exist on {target}";
                     diagnostics.Add(new DesignDiagnostic(
                         DesignCodes.PropertyNotOnTarget,
-                        $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' does not exist " +
-                        $"on {form.Target}, so it is not written into the generated code. The " +
-                        "value is preserved in the document.",
+                        $"{DesignCodes.PropertyNotOnTarget}: '{control.Id}.{name}' {why}, so it is not " +
+                        "written into the generated code. The value is preserved in the document.",
                         filePath, 0, 0, IsWarning: true));
                 }
             }
@@ -305,19 +361,22 @@ public static class RegionWriter
 
     /// <summary>
     /// The web counterpart of <see cref="AppendProperties"/>' BL8009 (slice 3, carried from slice 1's Task 5
-    /// review): a CONTROL property whose row exists on the web but whose value the web refuses ‚Äî a system colour
-    /// with no CSS equivalent, an unparseable number ‚Äî is left out of the page by the markup emitter and the
+    /// review): a CONTROL property whose row exists on the web but whose value the web refuses G«ˆ a system colour
+    /// with no CSS equivalent, an unparseable number G«ˆ is left out of the page by the markup emitter and the
     /// stylesheet walk (<see cref="FormCss"/> gates on <c>Accepts(value, Web)</c>). It used to be left out
     /// SILENTLY, so one document's Error List differed by target.
     ///
-    /// <para>‚õî Controls only: a tray component's properties reach the page only through its script template,
-    /// and <see cref="ExpandWebScript"/> already reports a refused one there. ‚õî The reason is the catalog's own
-    /// (<see cref="FormPropertyDef.DescribeRefusal"/>), reached only for a value truly refused ‚Äî it throws otherwise.</para>
+    /// <para>G¢ˆ Controls only: a tray component's properties reach the page only through its script template,
+    /// and <see cref="ExpandWebScript"/> already reports a refused one there. G¢ˆ The reason is the catalog's own
+    /// (<see cref="FormPropertyDef.DescribeRefusal"/>), reached only for a value truly refused G«ˆ it throws otherwise.</para>
     /// </summary>
     private static void CheckWebRefusedValues(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // This warning is about values the PAGE/stylesheet emitter refuses. Portable code has no DOM
+        // page: its control property lines are deliberately absent, so a web refusal would be a
+        // second, misleading complaint about a line this style never intended to write.
+        if (style != FormStyle.Dom || form.Target != FormTarget.Web)
         {
             return;
         }
@@ -348,18 +407,22 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Warns about a component whose kind the target does not have ‚Äî a ToolTip in a
+    /// Warns about a component whose kind the target does not have G«ˆ a ToolTip in a
     /// <c>.blwebform</c>. The toolbox never offers one, but a hand edit can carry one, and it used to
     /// be modelled, declared as an <c>Element</c>, then constructed by nothing and reported by
     /// nothing (review, 2026-09-19). The field stays declared so code naming it still builds.
     /// </summary>
     private static void CheckComponentTargets(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
+        // Portable constructs the WinForms component type, so WinForms is the effective target for
+        // this warning too. (The portable library's own support is a later task's question.)
+        var target = style == FormStyle.Portable ? FormTarget.WinForms : form.Target;
+
         foreach (var component in form.AllComponents())
         {
             var definition = component.Definition;
-            if (definition == null || definition.SupportsTarget(form.Target))
+            if (definition == null || definition.SupportsTarget(target))
             {
                 continue;
             }
@@ -367,7 +430,7 @@ public static class RegionWriter
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.KindNotOnTarget,
                 $"{DesignCodes.KindNotOnTarget}: '{component.Id}' is a {definition.Kind}, which has no " +
-                $"{form.Target} form. Its field is declared so code naming it still builds, but " +
+                $"{target} form. Its field is declared so code naming it still builds, but " +
                 "nothing constructs or wires it here. Retarget the form to see what crosses, or " +
                 "remove it.",
                 filePath, 0, 0, IsWarning: true));
@@ -381,9 +444,11 @@ public static class RegionWriter
     /// 2026-09-19); now it is named, and <see cref="CheckHandlerOrdering"/> ignores it.
     /// </summary>
     private static void CheckComponentBinds(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // Portable components are constructed and wired through the WinForms shape, not the web
+        // template, so the DOM-only "one default event" warning does not apply.
+        if (style != FormStyle.Dom)
         {
             return;
         }
@@ -400,7 +465,7 @@ public static class RegionWriter
             foreach (var bind in component.Binds)
             {
                 if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
-                    IsEmittedBind(form, component, bind))
+                    IsEmittedBind(form, style, component, bind))
                 {
                     continue;
                 }
@@ -422,13 +487,13 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Every event name a catalog row WIRES on <paramref name="target"/> ‚Äî the whole vocabulary the
+    /// Every event name a catalog row WIRES on <paramref name="target"/> G«ˆ the whole vocabulary the
     /// emitter is allowed to write, the whole vocabulary <see cref="CheckControlBinds"/> accepts, and
     /// (for a tray component) the whole of what <see cref="IsEmittedBind"/> and the BL8028 warning in
     /// <see cref="CheckComponentBinds"/> accept.
     ///
-    /// <para>‚õî Delegates to <see cref="FormEvents.WiredOn"/>, the public seam (spec ¬ß5), rather than
-    /// reading the row itself ‚Äî including the web tray rule (template, default event only), which
+    /// <para>G¢ˆ Delegates to <see cref="FormEvents.WiredOn"/>, the public seam (spec -∫5), rather than
+    /// reading the row itself G«ˆ including the web tray rule (template, default event only), which
     /// lives inside the seam. Every caller here and the grid's Events tab (slice 5) therefore ask the
     /// same question of the same code, and none restates a rule another could drift from. Followup
     /// 18's widening happens in the ROWS.</para>
@@ -437,7 +502,7 @@ public static class RegionWriter
         FormEvents.WiredOn(definition, target).Select(e => FormEvents.NameOn(e, target)!);
 
     /// <summary>
-    /// The CATALOG's spelling of the web event <paramref name="bind"/> names, matched ignoring case ‚Äî
+    /// The CATALOG's spelling of the web event <paramref name="bind"/> names, matched ignoring case G«ˆ
     /// or null when the row does not declare that event at all.
     ///
     /// <para>This is the ONE answer to "what does this bind mean on the web", shared by the emitter
@@ -450,43 +515,45 @@ public static class RegionWriter
     /// <summary>
     /// The catalog EVENT a web bind names (matched ignoring case, through <see cref="FormEvents.WiredOn"/>), or null when
     /// the row does not wire it on the page. What the emitter reads <see cref="FormEventDef.WebWiring"/> and
-    /// <see cref="FormEventDef.WebFilter"/> from ‚Äî never the event's name.
+    /// <see cref="FormEventDef.WebFilter"/> from G«ˆ never the event's name.
     /// </summary>
     private static FormEventDef? WebEventOf(FormControlDef definition, FormBind bind) =>
         FormEvents.WiredOn(definition, FormTarget.Web)
             .FirstOrDefault(e => string.Equals(e.WebEvent, bind.Event, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>"'a', 'b', 'c'" ‚Äî a declared-event list a person can read at twelve events (BL8032).</summary>
+    /// <summary>"'a', 'b', 'c'" G«ˆ a declared-event list a person can read at twelve events (BL8032).</summary>
     private static string QuotedList(IEnumerable<string> names) => string.Join(", ", names.Select(e => $"'{e}'"));
 
     /// <summary>
     /// Refuses a CONTROL's web bind on an event its catalog row does not declare (BL8032).
     ///
-    /// <para>‚õî‚õî The gap this closes: <see cref="CheckComponentBinds"/> (BL8028) iterates
+    /// <para>G¢ˆG¢ˆ The gap this closes: <see cref="CheckComponentBinds"/> (BL8028) iterates
     /// <c>component.Binds</c> only, so a control's binds were never checked against the row's
-    /// <c>WebEvent</c> by anything at all ‚Äî and the emitter wrote whatever the document said
+    /// <c>WebEvent</c> by anything at all G«ˆ and the emitter wrote whatever the document said
     /// straight into <c>addEventListener</c>. A typo (<c>clik</c>), the DOM's own <c>on</c> prefix
     /// (<c>onclick</c>) and the WinForms spelling (<c>Click</c>) all behaved identically: accepted,
     /// built, shipped, never called. Refused rather than warned for the reason BL8010 and BL8020
-    /// are ‚Äî the designer would otherwise report a document clean and then generate code whose
+    /// are G«ˆ the designer would otherwise report a document clean and then generate code whose
     /// behaviour silently contradicts it, which is the divergence D9 exists to prevent.</para>
     ///
-    /// <para>‚ö† WinForms is deliberately NOT checked here. There a wrong name reaches csc as a member
-    /// (<c>AddHandler btn.Clik</c> ‚Üí CS1061), so it fails loudly on its own; and refusing a
+    /// <para>G‹· WinForms is deliberately NOT checked here. There a wrong name reaches csc as a member
+    /// (<c>AddHandler btn.Clik</c> GÂ∆ CS1061), so it fails loudly on its own; and refusing a
     /// non-default WinForms event would break <c>MouseEnter</c> on a Button, which compiles and runs
     /// today. This is only for the target where the failure is silent.</para>
     /// </summary>
     private static void CheckControlBinds(
-        string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
+        string filePath, FormDocument form, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // The DOM's string event vocabulary is not the portable library's. Portable emits
+        // AddHandler with the WinForms spelling, where csc catches a wrong member loudly.
+        if (style != FormStyle.Dom)
         {
             return;
         }
 
         foreach (var control in form.AllControls())
         {
-            // No row is no truth to check against ‚Äî that control is already BL8004's finding, and
+            // No row is no truth to check against G«ˆ that control is already BL8004's finding, and
             // inventing a vocabulary for a kind the catalog does not know would be worse than quiet.
             if (control.Definition is not { } definition)
             {
@@ -496,7 +563,7 @@ public static class RegionWriter
             foreach (var bind in control.Binds)
             {
                 // A reserved data-binding attribute is BL8021's refusal, and a bind with no handler
-                // wires nothing ‚Äî neither is this check's business.
+                // wires nothing G«ˆ neither is this check's business.
                 if (bind.UsesReservedDataBinding || string.IsNullOrEmpty(bind.Handler) ||
                     CanonicalWebEvent(definition, bind) != null)
                 {
@@ -515,7 +582,7 @@ public static class RegionWriter
 
         return Error(DesignCodes.UnknownWebEvent,
             $"'{owner}' wires its '{bind.Event}' event to {bind.Handler}, but a web " +
-            $"{definition.Kind} does not have that event ‚Äî it has " +
+            $"{definition.Kind} does not have that event G«ˆ it has " +
             (declared.Count > 0 ? $"{QuotedList(declared)}. " : "no web event at all. ") +
             "DOM event names are case-sensitive and addEventListener takes a string, so " +
             "emitting this would register a listener that is never called: the build would " +
@@ -524,7 +591,7 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Refuses a FORM bind on the web that names an event the Form does not wire there (slice 5 D-7) ‚Äî BL8032, the
+    /// Refuses a FORM bind on the web that names an event the Form does not wire there (slice 5 D-7) G«ˆ BL8032, the
     /// controls' rule through the same seam (<c>Shown</c>, <c>FormClosing</c>, a typo). It replaced slice 1's
     /// "not generated yet" BL8028 warning when root binds started being emitted. WinForms is not checked, for the
     /// reason <see cref="CheckControlBinds"/> gives: a wrong name there is csc's CS1061, loud on its own.
@@ -549,10 +616,10 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// Refuses (BL8017) two generated wrappers whose names differ only in CASE ‚Äî a control <c>f</c> and the form <c>F</c>
+    /// Refuses (BL8017) two generated wrappers whose names differ only in CASE G«ˆ a control <c>f</c> and the form <c>F</c>
     /// both wrapping KeyPress get <c>VgsOn_f_KeyPress</c> and <c>VgsOn_F_KeyPress</c>, one member to BasicLang, which
-    /// ignores case. Asked of the wrappers the page will really get (D-12), so a case-variant Id with no colliding wrapper ‚Äî
-    /// a form <c>Pic</c> holding a control <c>pic</c>, which builds and runs ‚Äî is never refused for it.
+    /// ignores case. Asked of the wrappers the page will really get (D-12), so a case-variant Id with no colliding wrapper G«ˆ
+    /// a form <c>Pic</c> holding a control <c>pic</c>, which builds and runs G«ˆ is never refused for it.
     /// </summary>
     private static void CheckWrapperNames(string filePath, FormDocument form, List<DesignDiagnostic> diagnostics)
     {
@@ -572,7 +639,7 @@ public static class RegionWriter
             var involvesForm = owners.Any(o => o.Control == null);
             diagnostics.Add(Error(DesignCodes.DuplicateControlId,
                 $"{string.Join(" and ", owners.Select(o => o.Control == null ? $"the form '{o.Prefix}'" : $"'{o.Prefix}'"))} " +
-                $"would each get a generated wrapper named '{group.First().Name}' ‚Äî one name to BasicLang, which ignores case. " +
+                $"would each get a generated wrapper named '{group.First().Name}' G«ˆ one name to BasicLang, which ignores case. " +
                 (involvesForm
                     ? "Rename the control so it differs from the form's name by more than case."
                     : "Rename one so the two Ids differ by more than case."),
@@ -581,7 +648,7 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// ‚õî THE one list of wrappers the page gets (D-12; review ruling 7 ‚Äî <see cref="AppendWrappers"/> and
+    /// G¢ˆ THE one list of wrappers the page gets (D-12; review ruling 7 G«ˆ <see cref="AppendWrappers"/> and
     /// <see cref="CheckWrapperNames"/> both consume it, never a mirrored copy): every owner with filtered web binds, controls
     /// first in tree order, then the Form; per owner each filtered event once, with every handler bound to it in document
     /// order.
@@ -603,43 +670,46 @@ public static class RegionWriter
             .Select(o => (o.Owner, (IReadOnlyList<(FormEventDef Event, IReadOnlyList<string> Handlers)>)o.Groups))
             .ToList();
 
-    /// <summary>The Form's binds the init region EMITS ‚Äî every bind with a handler, minus reserved data binding.</summary>
+    /// <summary>The Form's binds the init region EMITS G«ˆ every bind with a handler, minus reserved data binding.</summary>
     private static IEnumerable<FormBind> EmittedRootBinds(FormDocument form) =>
         form.Binds.Where(b => !b.UsesReservedDataBinding && !string.IsNullOrEmpty(b.Handler));
 
     /// <summary>
-    /// Whether the init region will actually wire this bind ‚Äî the ONE answer the emitter, the
+    /// Whether the init region will actually wire this bind G«ˆ the ONE answer the emitter, the
     /// ordering check and the bind warning share, so a bind cannot be refused over in one place and
     /// never emitted in another. A control's binds all reach <c>addEventListener</c> or
     /// <c>AddHandler</c>; a component's do on WinForms; on the web a component is wired only through
     /// its template, on its default event.
     /// </summary>
-    private static bool IsEmittedBind(FormDocument form, FormControl control, FormBind bind)
+    private static bool IsEmittedBind(
+        FormDocument form, FormStyle style, FormControl control, FormBind bind)
     {
         if (string.IsNullOrEmpty(bind.Handler))
         {
             return false;
         }
 
-        if (form.Target != FormTarget.Web || control.Definition is not { IsComponent: true } definition)
+        // WinForms and portable emit every handler-bearing bind; only the DOM's script-backed
+        // components are restricted to the single event their construct template accepts.
+        if (style != FormStyle.Dom || control.Definition is not { IsComponent: true } definition)
         {
             return true;
         }
 
-        // ‚õî The template-and-default-event rule is the seam's (FormEvents.WiredOn), not restated here.
+        // G¢ˆ The template-and-default-event rule is the seam's (FormEvents.WiredOn), not restated here.
         return DeclaredEvents(definition, FormTarget.Web)
             .Any(e => string.Equals(e, bind.Event, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
-    /// Refuses a handler declared AFTER the region that wires it ‚Äî <b>on the web only</b>.
+    /// Refuses a handler declared AFTER the region that wires it G«ˆ <b>on the web only</b>.
     ///
-    /// <para>‚õî‚õî MEASURED 2026-09-13, because applying it to both targets refuses the very shape
+    /// <para>G¢ˆG¢ˆ MEASURED 2026-09-13, because applying it to both targets refuses the very shape
     /// Owner decision 3 makes canonical. The erasure is real but narrow:</para>
     ///
     /// <list type="table">
     ///   <item><term>Web, <c>addEventListener("click", AddressOf H)</c>, H declared after</term>
-    ///     <description><b>FAILS</b> ‚Äî "cannot convert from 'Action&lt;Object&gt;' to
+    ///     <description><b>FAILS</b> G«ˆ "cannot convert from 'Action&lt;Object&gt;' to
     ///     'Action&lt;DomEvent&gt;'". The DOM signature declares the parameter type, so the erased
     ///     <c>Action&lt;Object&gt;</c> has something concrete to fail against.</description></item>
     ///   <item><term>WinForms, <c>AddHandler btn.Click, AddressOf H</c>, H declared after</term>
@@ -650,33 +720,35 @@ public static class RegionWriter
     ///     <description><b>Compiles.</b></description></item>
     /// </list>
     ///
-    /// <para>The shipped VSIX template ‚Äî canonical per Owner decision 3 ‚Äî declares
+    /// <para>The shipped VSIX template G«ˆ canonical per Owner decision 3 G«ˆ declares
     /// <c>btnClick_Click</c> below the <c>InitializeComponent</c> that wires it. Refusing that on
     /// WinForms would make the designer reject the template it is supposed to generate, and would
     /// block the D12 import route for every existing WinForms file.</para>
     /// </summary>
     private static void CheckHandlerOrdering(
         string filePath, string source, SourceIndex index, FormDocument form,
-        FormRegion init, List<DesignDiagnostic> diagnostics)
+        FormRegion init, FormStyle style, List<DesignDiagnostic> diagnostics)
     {
-        if (form.Target != FormTarget.Web)
+        // Portable uses AddHandler with the WinForms signature, where a later declaration is legal
+        // (measured and documented above). BL8013 is a DOM-only refusal.
+        if (style != FormStyle.Dom)
         {
             return;
         }
 
-        // ‚õî Slice 5 D-11: the ONE scanner (case-insensitive, declarations only, region Subs excluded), never a second copy.
+        // G¢ˆ Slice 5 D-11: the ONE scanner (case-insensitive, declarations only, region Subs excluded), never a second copy.
         var declared = FormCodeScan.DeclaredSubs(source, form.Name);
 
         // Components too (Task 25). A Timer's parameterless callback is not bitten by the erasure
-        // (measured), so for it this check is stricter than the compiler ‚Äî the safe side.
-        // ‚õî Only binds the region EMITS: refusing over a wiring that is never written told the user
+        // (measured), so for it this check is stricter than the compiler G«ˆ the safe side.
+        // G¢ˆ Only binds the region EMITS: refusing over a wiring that is never written told the user
         // to move a handler above a region that did not reference it (review, 2026-09-19).
-        // ‚õî Slice 5 (D-7, D-12): only handlers an AddressOf NAMES. A WRAPPED bind's AddressOf names the generated
+        // G¢ˆ Slice 5 (D-7, D-12): only handlers an AddressOf NAMES. A WRAPPED bind's AddressOf names the generated
         // VgsOn_ Sub (always above InitializeComponent, by construction), which reaches the user's handler by a
-        // DIRECT call ‚Äî not bitten (M2); so is the Form's Load (AfterInit). The Form's LISTENER binds (body, window)
+        // DIRECT call G«ˆ not bitten (M2); so is the Form's Load (AfterInit). The Form's LISTENER binds (body, window)
         // are AddressOf like any control's, so they are checked.
         var controlHandlers = form.AllControls().Concat(form.AllComponents())
-            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, c, b) && !IsWrapped(c.Definition, b)));
+            .SelectMany(c => c.Binds.Where(b => IsEmittedBind(form, style, c, b) && !IsWrapped(c.Definition, b)));
         var rootHandlers = EmittedRootBinds(form)
             .Where(b => WebEventOf(FormControlCatalog.FormRoot, b) is { } evt &&
                         evt.WebWiring != FormWebWiring.AfterInit && evt.WebFilter == FormWebFilter.None);
@@ -700,7 +772,7 @@ public static class RegionWriter
                 diagnostics.Add(Error(DesignCodes.HandlerDeclaredAfterWiring,
                     $"'{handler}' is declared on line {declaration}, AFTER the designer's init " +
                     "region that wires it. On the web an AddressOf naming a Sub declared later " +
-                    "erases its parameter types, and addEventListener then rejects it ‚Äî " +
+                    "erases its parameter types, and addEventListener then rejects it G«ˆ " +
                     "'cannot convert from Action(Of Object) to Action(Of DomEvent)'. Move the " +
                     "handler above the init region.",
                     filePath, declaration));
@@ -714,7 +786,7 @@ public static class RegionWriter
         var hash = RegionMarkers.HashContent(body);
 
         var replacement = new StringBuilder()
-            .Append(RegionMarkers.FormatOpen(region.Name, formFileName, hash, indent)).Append(newline)
+            .Append(RegionMarkers.FormatOpen(region.Name, formFileName, hash, indent, region.Style)).Append(newline)
             .Append(body)
             .Append(RegionMarkers.FormatClose(indent))
             .ToString();
@@ -735,129 +807,166 @@ public static class RegionWriter
     /// <summary>
     /// The field declarations.
     ///
-    /// <para>‚ÑπÔ∏è <c>Private</c> is correct: the region and the user's handlers are the same class in
+    /// <para>G‰¶n+≈ <c>Private</c> is correct: the region and the user's handlers are the same class in
     /// the same file, so nothing outside needs to see these. (D1's worked example shows
     /// <c>Protected</c>; either compiles here, and the plan's note that Private is right is the more
     /// considered statement. Recorded because the two documents differ.)</para>
     /// </summary>
-    private static string GenerateControls(FormDocument form, string indent, string newline)
+    private static string GenerateControls(
+        FormDocument form, FormStyle style, string indent, string newline)
     {
         var body = new StringBuilder();
         var inner = indent;
 
         // Components first, as VS declares them (Task 25). A component's field is declared even
-        // when nothing constructs it ‚Äî a web Timer with no handler yet ‚Äî so the user's own
-        // clearInterval compiles before the handler is wired.
+        // when nothing constructs it G«ˆ a web Timer with no handler yet G«ˆ so the user's own
+        // clearInterval compiles before the handler is wired. Portable declares the same WinForms
+        // types as the desktop; only the DOM style uses Element/web-script types.
         foreach (var component in form.Components)
         {
-            body.Append($"{inner}Private {component.Id} As {DeclaredType(form, component)}").Append(newline);
+            body.Append($"{inner}Private {component.Id} As {DeclaredType(component, style)}").Append(newline);
         }
 
         foreach (var control in form.AllControls())
         {
-            body.Append($"{inner}Private {control.Id} As {DeclaredType(form, control)}").Append(newline);
+            body.Append($"{inner}Private {control.Id} As {DeclaredType(control, style)}").Append(newline);
         }
 
         return body.ToString();
     }
 
     private static string GenerateInit(
-        FormDocument form, string indent, string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        FormDocument form, FormStyle style, string indent, string newline, string filePath,
+        List<DesignDiagnostic> diagnostics)
     {
+        var lines = GenerateInitLines(form, style, indent, newline, filePath, diagnostics);
         var body = new StringBuilder();
-        var inner = indent + "    ";
 
-        // ‚õî Slice 5 D-12: the generated wrapper Subs for FILTERED web events go ABOVE InitializeComponent ‚Äî an AddressOf
+        foreach (var line in lines.Where(l => EmitLine(l.Kind, style)))
+        {
+            body.Append(line.Text).Append(newline);
+        }
+
+        return body.ToString();
+    }
+
+    /// <summary>
+    /// The init region as tagged lines. The style filters this list; nothing downstream classifies
+    /// line TEXT to decide what is portable.
+    /// </summary>
+    internal static IReadOnlyList<InitLine> GenerateInitLines(
+        FormDocument form, FormStyle style, string indent, string newline, string filePath,
+        List<DesignDiagnostic> diagnostics)
+    {
+        var body = new List<InitLine>();
+        var inner = indent + "    ";
+        var dom = style == FormStyle.Dom;
+
+        // G¢ˆ Slice 5 D-12: the generated wrapper Subs for FILTERED web events go ABOVE InitializeComponent G«ˆ an AddressOf
         // naming a Sub declared later erases its parameter types (BL8013's measured rule). Nothing at all is emitted on a
         // page with no filtered bind, so every existing region stays byte-identical.
         if (form.Target == FormTarget.Web)
         {
-            AppendWrappers(body, form, indent, newline);
+            var wrappers = new StringBuilder();
+            AppendWrappers(wrappers, form, indent, newline);
+            if (wrappers.Length > 0)
+            {
+                body.Add(new InitLine(wrappers.ToString().TrimEnd('\r', '\n'), InitLineKind.Other));
+            }
         }
 
-        body.Append($"{indent}Private Sub InitializeComponent()").Append(newline);
+        body.Add(new InitLine($"{indent}Private Sub InitializeComponent()", InitLineKind.Other));
 
-        if (form.Target == FormTarget.Web)
+        if (dom)
         {
-            // Declared locally so the region is self-contained ‚Äî it must not depend on a field the
+            // Declared locally so the region is self-contained G«ˆ it must not depend on a field the
             // user could rename or remove.
-            body.Append($"{inner}Dim doc As Document = ::document").Append(newline);
+            Add(body, $"{inner}Dim doc As Document = ::document", InitLineKind.Other);
 
-            // ‚õî The TYPED Window, and only when a script component exists (Task 25) or a Form bind listens on the window
-            // (slice 5: Resize). Typed rather than the ::window hatch so that the compiler ‚Äî not a runtime TypeError ‚Äî
+            // G¢ˆ The TYPED Window, and only when a script component exists (Task 25) or a Form bind listens on the window
+            // (slice 5: Resize). Typed rather than the ::window hatch so that the compiler G«ˆ not a runtime TypeError G«ˆ
             // rejects a wrong callback: Window.setInterval takes an Action and refuses Action(Of DomEvent), which the
             // hatch would have let through (measured 2026-09-19). Keyed on a script component EXISTING, not on one being
-            // wired ‚Äî an unused local is the cheaper wrong. A page with neither declares no `w` (byte-identical).
+            // wired G«ˆ an unused local is the cheaper wrong. A page with neither declares no `w` (byte-identical).
             if (form.Components.Any(c => c.Definition?.WebScript != null) ||
                 EmittedRootBinds(form).Any(b => WebEventOf(FormControlCatalog.FormRoot, b)?.WebWiring == FormWebWiring.Window))
             {
-                body.Append($"{inner}Dim w As Window = ::window").Append(newline);
+                Add(body, $"{inner}Dim w As Window = ::window", InitLineKind.Other);
             }
         }
         else
         {
-            // The form's own properties, from FormRoot (spec ¬ß2.3), before any control ‚Äî the order the
-            // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. ‚õî ONE
-            // `Me.X = ‚Ä¶` statement per row: ClientSize fans in exactly as a control's Size does, for
+            // The form's own properties, from FormRoot (spec -∫2.3), before any control G«ˆ the order the
+            // shipped VSIX template uses, and the shape Owner decision 3 makes canonical. G¢ˆ ONE
+            // `Me.X = G«™` statement per row: ClientSize fans in exactly as a control's Size does, for
             // the same CS1612 reason.
-            // ‚ö† A REFERENCE row (AcceptButton) is NOT emitted here: its control is constructed below, and until then the
-            // field is Nothing (pre-flight B4) ‚Äî it follows the add run, beside the FormProperty line.
+            // G‹· A REFERENCE row (AcceptButton) is NOT emitted here: its control is constructed below, and until then the
+            // field is Nothing (pre-flight B4) G«ˆ it follows the add run, beside the FormProperty line.
+            // Portable generates these tagged lines and filters them, so the remove-list stays explicit.
             foreach (var row in RootRows(form).Where(r => r.Type != FormPropertyType.Reference))
             {
-                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
+                AppendRootRow(body, form, row, inner, filePath, diagnostics, InitLineKind.RootProperty);
             }
         }
 
         // Components before controls, as VS constructs them (Task 25).
         foreach (var component in form.Components)
         {
-            AppendComponentInit(body, form, component, inner, newline, filePath, diagnostics);
+            AppendComponentInit(body, form, component, style, inner, filePath, diagnostics);
         }
 
         // Resolved ONCE per write: a docked control's Size is the size it docks at (AppendPixelGeometry).
-        var docks = form.Target == FormTarget.WinForms ? FormDockLayout.Resolve(form, FormDockMode.Designer) : null;
+        // Portable generates the WinForms geometry (and filters it), so it resolves the same way.
+        var docks = style is FormStyle.WinForms or FormStyle.Dual
+            ? FormDockLayout.Resolve(form, FormDockMode.Designer)
+            : null;
 
         AppendSiblings(
-            body, form, form.Controls, parent: "Me", parentControl: null, inner, newline, filePath, diagnostics, docks);
+            body, form, form.Controls, parent: "Me", parentControl: null, style, inner, filePath, diagnostics, docks);
 
-        if (form.Target == FormTarget.WinForms)
+        if (!dom)
         {
-            // The form property a row claims ‚Äî MainMenuStrip for a MenuStrip ‚Äî for the FIRST control
+            // The form property a row claims G«ˆ MainMenuStrip for a MenuStrip G«ˆ for the FIRST control
             // in document order whose row declares one, AFTER the whole add run (the strip must be
             // populated and parented before the form points at it). By rule from the catalog, never
             // by switching on the kind, and exactly one such line.
             var main = form.Controls.FirstOrDefault(c => c.Definition?.FormProperty != null);
             if (main != null)
             {
-                body.Append($"{inner}Me.{main.Definition!.FormProperty} = {main.Id}").Append(newline);
+                Add(body, $"{inner}Me.{main.Definition!.FormProperty} = {main.Id}", InitLineKind.Reference);
             }
 
-            // The form's REFERENCE rows (AcceptButton, CancelButton), after every control exists ‚Äî VS's own place for them.
+            // The form's REFERENCE rows (AcceptButton, CancelButton), after every control exists G«ˆ VS's own place for them.
             foreach (var row in RootRows(form).Where(r => r.Type == FormPropertyType.Reference))
             {
-                AppendRootRow(body, form, row, inner, newline, filePath, diagnostics);
+                AppendRootRow(body, form, row, inner, filePath, diagnostics, InitLineKind.Reference);
             }
 
-            // Slice 5 D-3: the Form's own binds, LAST ‚Äî VS's place for `this.Load += ‚Ä¶`. The document's spelling, as a
-            // control's: a wrong name is csc's CS1061. ‚õî NEVER `Handles` (lexed, never parsed).
+            // Slice 5 D-3: the Form's own binds, LAST G«ˆ VS's place for `this.Load += G«™`. The document's spelling, as a
+            // control's: a wrong name is csc's CS1061. G¢ˆ NEVER `Handles` (lexed, never parsed).
             foreach (var bind in EmittedRootBinds(form))
             {
-                body.Append($"{inner}AddHandler Me.{bind.Event}, AddressOf {bind.Handler}").Append(newline);
+                Add(body, $"{inner}AddHandler Me.{bind.Event}, AddressOf {bind.Handler}", InitLineKind.Other);
             }
         }
         else
         {
-            AppendRootWebBinds(body, form, inner, newline);
+            var rootWeb = new StringBuilder();
+            AppendRootWebBinds(rootWeb, form, inner, newline);
+            if (rootWeb.Length > 0)
+            {
+                body.Add(new InitLine(rootWeb.ToString().TrimEnd('\r', '\n'), InitLineKind.Other));
+            }
         }
 
-        body.Append($"{indent}End Sub").Append(newline);
-        return body.ToString();
+        Add(body, $"{indent}End Sub", InitLineKind.Other);
+        return body;
     }
 
     /// <summary>
     /// The Form's web binds (slice 5 D-3), after the controls so every element exists: a listener on
-    /// <c>document.body</c> (Element) or <c>window</c> (Window) ‚Äî through its wrapper when filtered (D-12) ‚Äî and then,
-    /// as the VERY LAST statement, <c>Me.&lt;handler&gt;()</c> for the AfterInit event (Load). ‚õî <c>Me.</c>-qualified: an
+    /// <c>document.body</c> (Element) or <c>window</c> (Window) G«ˆ through its wrapper when filtered (D-12) G«ˆ and then,
+    /// as the VERY LAST statement, <c>Me.&lt;handler&gt;()</c> for the AfterInit event (Load). G¢ˆ <c>Me.</c>-qualified: an
     /// unqualified self-call is a runtime ReferenceError on the JavaScript backend (CLAUDE.md). A bind on an event the
     /// Form does not wire is <see cref="CheckRootBinds"/>' BL8032, and this body is then thrown away.
     /// </summary>
@@ -895,7 +1004,7 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// One web listener ‚Äî <c>&lt;target&gt;.addEventListener("&lt;type&gt;", AddressOf &lt;handler&gt;)</c> ‚Äî with the
+    /// One web listener G«ˆ <c>&lt;target&gt;.addEventListener("&lt;type&gt;", AddressOf &lt;handler&gt;)</c> G«ˆ with the
     /// CATALOG's type (<see cref="FormEvents.ListenType"/>: a KeyPress listens to <c>keydown</c>). For a FILTERED event
     /// (D-12) the AddressOf names the generated wrapper instead of the handler, and only the FIRST bind of that event on
     /// this owner emits it: one wrapper calls every handler bound to the event, so a second listener would run them twice.
@@ -921,9 +1030,9 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// ‚õî One owner's web binds in the order their LISTENERS must be added (review fix 1): every plain listener first,
+    /// G¢ˆ One owner's web binds in the order their LISTENERS must be added (review fix 1): every plain listener first,
     /// then every wrapper's, each run in document order (a stable sort). Two events share a DOM type only when one is a
-    /// filtered event derived from the other's raw DOM event ‚Äî KeyPress is a filtered <c>keydown</c> ‚Äî and the DOM runs
+    /// filtered event derived from the other's raw DOM event G«ˆ KeyPress is a filtered <c>keydown</c> G«ˆ and the DOM runs
     /// one target's listeners for one type in the order they were ADDED. WinForms raises the raw event first (KeyDown
     /// before KeyPress, always; suppressing a KeyPress from KeyDown depends on it), so its listener must come first
     /// whatever order the document stores the binds in. Events of different DOM types are ordered by the browser, not
@@ -935,12 +1044,12 @@ public static class RegionWriter
     /// <summary>The reserved name of a generated wrapper (D-12): <c>VgsOn_&lt;control Id or form name&gt;_&lt;WinForms event&gt;</c>.</summary>
     private static string WrapperName(string prefix, FormEventDef evt) => $"VgsOn_{prefix}_{evt.Name}";
 
-    /// <summary>Whether a web bind reaches its handler through a generated wrapper (D-12) ‚Äî its event carries a filter.</summary>
+    /// <summary>Whether a web bind reaches its handler through a generated wrapper (D-12) G«ˆ its event carries a filter.</summary>
     private static bool IsWrapped(FormControlDef? definition, FormBind bind) =>
         definition != null && WebEventOf(definition, bind) is { WebFilter: not FormWebFilter.None };
 
     /// <summary>
-    /// Every generated wrapper the page needs (D-12), controls first in tree order, then the Form ‚Äî one per owner and
+    /// Every generated wrapper the page needs (D-12), controls first in tree order, then the Form G«ˆ one per owner and
     /// filtered event, calling each handler bound to it in document order. Preceded by one comment line saying the
     /// <c>VgsOn_</c> prefix is reserved; nothing at all when there is none.
     /// </summary>
@@ -964,12 +1073,12 @@ public static class RegionWriter
     }
 
     /// <summary>
-    /// ‚õî THE one place a wrapper's body is built (D-12), from <see cref="FormEventDef.WebFilter"/> ‚Äî never from the event's
-    /// name. A NAMED Sub, never a lambda (ADR 0021 ¬ß3 ‚Äî the pre-flight measured <c>Me.</c> inside a lambda hard-erroring
+    /// G¢ˆ THE one place a wrapper's body is built (D-12), from <see cref="FormEventDef.WebFilter"/> G«ˆ never from the event's
+    /// name. A NAMED Sub, never a lambda (ADR 0021 -∫3 G«ˆ the pre-flight measured <c>Me.</c> inside a lambda hard-erroring
     /// on the JavaScript backend; re-measured 2026-10-04 on this tree it compiles to <c>this.</c>, but the named Sub is the
     /// shape every tier proves); it calls each handler through <see cref="FormHandlerShape.Call"/>, a direct call the
     /// AddressOf erasure does not bite (M2). Measured exactly as written
-    /// on the branch CLI (pre-flight M7). ‚ö† <c>relatedTarget</c> and <c>contains</c> are not declared in
+    /// on the branch CLI (pre-flight M7). G‹· <c>relatedTarget</c> and <c>contains</c> are not declared in
     /// <c>dom-core.bli</c> and compile untyped (M7): the node/Edge run tiers are the gate for this text.
     /// </summary>
     private static void Wrapper(
@@ -977,21 +1086,21 @@ public static class RegionWriter
     {
         var inner = indent + "    ";
         // The wrapper's OWN signature is the listener's (it is what addEventListener takes); the handler CALLS below come
-        // from the handler's shape ‚Äî FormHandlers' one rule (review ruling 3).
+        // from the handler's shape G«ˆ FormHandlers' one rule (review ruling 3).
         body.Append($"{indent}Private Sub {WrapperName(owner.Prefix, evt)}(e As DomEvent)").Append(newline);
 
         switch (evt.WebFilter)
         {
             case FormWebFilter.KeyPressKeys:
-                // WinForms raises KeyPress for a character, Enter ('\r'), Backspace ('\b') and Escape ‚Äî never for
+                // WinForms raises KeyPress for a character, Enter ('\r'), Backspace ('\b') and Escape G«ˆ never for
                 // Shift, arrows or F-keys (coordinator ruling 1, ADR 0021).
-                // ‚ö† CODE POINTS, not UTF-16 units (review fix 3): an emoji key (U+1F600) is one character and two
+                // G‹· CODE POINTS, not UTF-16 units (review fix 3): an emoji key (U+1F600) is one character and two
                 // units. `::Array.from(vgsKey).length` is the measured BasicLang spelling (branch CLI + node: 1 for
                 // U+1F600, 2 for "F1"); `.Length` emits `.length` and would count 2.
-                // ‚ö† Review ruling 6: the locals carry the reserved vgs prefix (a control named `k` is a field), and a
+                // G‹· Review ruling 6: the locals carry the reserved vgs prefix (a control named `k` is a field), and a
                 // keydown while an IME composes raises no KeyPress. `Not e.isComposing` is refused by BasicLang (an untyped
                 // member is Object) and `As Boolean = e.isComposing` too; `::Boolean(e.isComposing)` is the measured
-                // spelling (absent ‚Üí false, true ‚Üí skipped, branch CLI + node).
+                // spelling (absent GÂ∆ false, true GÂ∆ skipped, branch CLI + node).
                 body.Append($"{inner}Dim vgsKey As String = e.key").Append(newline);
                 body.Append($"{inner}Dim vgsLen As Integer = ::Array.from(vgsKey).length").Append(newline);
                 body.Append($"{inner}Dim vgsComposing As Boolean = ::Boolean(e.isComposing)").Append(newline);
@@ -1020,17 +1129,17 @@ public static class RegionWriter
         body.Append($"{indent}End Sub").Append(newline);
     }
 
-    /// <summary>The FormRoot rows that exist on a WinForms form ‚Äî the ones its InitializeComponent sets on <c>Me</c>.</summary>
+    /// <summary>The FormRoot rows that exist on a WinForms form G«ˆ the ones its InitializeComponent sets on <c>Me</c>.</summary>
     private static IEnumerable<FormPropertyDef> RootRows(FormDocument form) =>
         FormControlCatalog.FormRoot.Properties.Where(p => FormRootValues.Applies(p, FormTarget.WinForms, null));
 
     /// <summary>
-    /// One FormRoot row as ONE <c>Me.X = ‚Ä¶</c> statement (spec ¬ß2.3; the fan-in rule ‚Äî ClientSize, MinimumSize and Font
+    /// One FormRoot row as ONE <c>Me.X = G«™</c> statement (spec -∫2.3; the fan-in rule G«ˆ ClientSize, MinimumSize and Font
     /// are one statement each), or a warning and nothing.
     /// </summary>
     private static void AppendRootRow(
-        StringBuilder body, FormDocument form, FormPropertyDef row, string inner, string newline,
-        string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormDocument form, FormPropertyDef row, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics, InitLineKind kind)
     {
         var value = FormRootValues.Get(form, row);
         if (value == null)
@@ -1038,14 +1147,14 @@ public static class RegionWriter
             return;
         }
 
-        // ‚õî A Degraded root value never reaches generated source ‚Äî the control rule, at the root. DescribeRefusal is
+        // G¢ˆ A Degraded root value never reaches generated source G«ˆ the control rule, at the root. DescribeRefusal is
         // reached only for a value truly refused (it throws otherwise). Reachable since slice 3's Properties-stored rows
         // (FormRootTests.ADegradedRootProperty_IsFrozen_Preserved_AndNeverEmitted).
         if (!row.IsWritableOn(value, FormTarget.WinForms))
         {
             diagnostics.Add(new DesignDiagnostic(
                 DesignCodes.DegradedProperty,
-                // Composed from the ONE refusal text, exactly as AppendProperties' control site is ‚Äî never a
+                // Composed from the ONE refusal text, exactly as AppendProperties' control site is G«ˆ never a
                 // hand-written "is not a valid" copy.
                 $"{DesignCodes.DegradedProperty}: 'form.{row.Name}': " +
                 row.DescribeRefusal(value, FormTarget.WinForms) +
@@ -1054,9 +1163,9 @@ public static class RegionWriter
             return;
         }
 
-        // ‚õî A reference must name a control of a kind the row allows (BL8034): csc rejects `Me.AcceptButton = lblTitle`
+        // G¢ˆ A reference must name a control of a kind the row allows (BL8034): csc rejects `Me.AcceptButton = lblTitle`
         // (CS0029) and `= btnGone` (CS0103), and BasicLang types both as Object and says nothing.
-        // ‚õî FormReferences.IsAllowed is the SAME list the property grid's drop-down offers (slice 4 D-7) ‚Äî one function,
+        // G¢ˆ FormReferences.IsAllowed is the SAME list the property grid's drop-down offers (slice 4 D-7) G«ˆ one function,
         // so the grid can never offer an Id this line then refuses.
         if (row.Type == FormPropertyType.Reference && !FormReferences.IsAllowed(form, row, value))
         {
@@ -1070,51 +1179,51 @@ public static class RegionWriter
             return;
         }
 
-        body.Append($"{inner}Me.{row.Name} = {Literal(row, value)}").Append(newline);
+        Add(body, $"{inner}Me.{row.Name} = {Literal(row, value)}", kind);
     }
 
     /// <summary>
-    /// Emits a run of siblings: each control's initialization in DOCUMENT order, then ‚Äî on WinForms ‚Äî
+    /// Emits a run of siblings: each control's initialization in DOCUMENT order, then G«ˆ on WinForms G«ˆ
     /// their <c>Controls.Add</c> calls in REVERSE.
     ///
-    /// <para>‚õî‚õî <b>The reversal is the z-order, and it is not a stylistic choice.</b> The two
+    /// <para>G¢ˆG¢ˆ <b>The reversal is the z-order, and it is not a stylistic choice.</b> The two
     /// targets number z-order in opposite directions and neither can be changed:</para>
     /// <list type="bullet">
     ///   <item><description>the DOM paints in document order, so the LAST element is on top;</description></item>
-    ///   <item><description>WinForms' <c>Controls</c> index 0 is the TOP of the z-order ‚Äî the official
+    ///   <item><description>WinForms' <c>Controls</c> index 0 is the TOP of the z-order G«ˆ the official
     ///     API docs for <c>GetChildIndex</c>, <c>SetChildIndex</c> and <c>BringToFront</c> each state
-    ///     it ‚Äî and <c>Controls.Add</c> APPENDS, so the first control added ends up in front.</description></item>
+    ///     it G«ˆ and <c>Controls.Add</c> APPENDS, so the first control added ends up in front.</description></item>
     /// </list>
     /// <para>The document takes the web's meaning, because the web's cannot be negotiated, and the
     /// canvas draws and hit-tests to match: <b>last in the document is in front</b>. Adding siblings
     /// in reverse is what makes the WinForms program agree. Emitting them in document order instead
-    /// puts the front-most control at the highest index ‚Äî the very back ‚Äî so the designer's
+    /// puts the front-most control at the highest index G«ˆ the very back G«ˆ so the designer's
     /// "Bring to Front" would visibly send it behind everything, and only when controls overlap.</para>
     ///
-    /// <para>‚ö† Initialization stays in document order; only the ADD calls reverse. The properties a
+    /// <para>G‹· Initialization stays in document order; only the ADD calls reverse. The properties a
     /// control is given have nothing to do with its layering, and generating the whole region
     /// backwards would make it needlessly hard to read against the document it came from.</para>
     ///
-    /// <para>‚õî <b>None of that applies to a HOST's items</b> (spec ¬ß5). <c>parentControl</c> is the
-    /// control these siblings belong to ‚Äî null at the form root ‚Äî and it is the ROW, not the id in
+    /// <para>G¢ˆ <b>None of that applies to a HOST's items</b> (spec -∫5). <c>parentControl</c> is the
+    /// control these siblings belong to G«ˆ null at the form root G«ˆ and it is the ROW, not the id in
     /// <c>parent</c>, that says how a child is added. When that row carries a
-    /// <see cref="FormItemRule"/>, the children are added with THAT row's verb ‚Äî <c>Items.Add</c>
-    /// under a strip, <c>DropDownItems.Add</c> under a menu item ‚Äî in DOCUMENT order, because a
+    /// <see cref="FormItemRule"/>, the children are added with THAT row's verb G«ˆ <c>Items.Add</c>
+    /// under a strip, <c>DropDownItems.Add</c> under a menu item G«ˆ in DOCUMENT order, because a
     /// menu's items are ordered, not layered. Reversing them would run File/Edit/Help as
     /// Help/Edit/File, and <c>Controls.Add</c> would not compile at all (a
     /// <c>ToolStripMenuItem</c> is not a <c>Control</c>: csc CS1503).</para>
     /// </summary>
     private static void AppendSiblings(
-        StringBuilder body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
-        FormControl? parentControl, string inner, string newline, string filePath,
+        List<InitLine> body, FormDocument form, IReadOnlyList<FormControl> controls, string parent,
+        FormControl? parentControl, FormStyle style, string inner, string filePath,
         List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
         foreach (var control in controls)
         {
-            AppendControlInit(body, form, control, parent, inner, newline, filePath, diagnostics, docks);
+            AppendControlInit(body, form, control, parent, style, inner, filePath, diagnostics, docks);
         }
 
-        if (form.Target != FormTarget.WinForms)
+        if (style == FormStyle.Dom)
         {
             return;
         }
@@ -1122,15 +1231,15 @@ public static class RegionWriter
         var rule = parentControl?.Definition?.Items;
         if (rule != null)
         {
-            // A host's items: the HOST row's verb, in DOCUMENT order ‚Äî items are ORDERED, not
-            // layered. ‚õî Reversing them here would run File/Edit/Help as Help/Edit/File from a
+            // A host's items: the HOST row's verb, in DOCUMENT order G«ˆ items are ORDERED, not
+            // layered. G¢ˆ Reversing them here would run File/Edit/Help as Help/Edit/File from a
             // green build. The verb is on the PARENT's row because the same ToolStripMenuItem is
             // Items.Added under a strip and DropDownItems.Added under a menu item.
             foreach (var child in controls)
             {
-                body.Append(inner)
-                    .Append(rule.Add.Replace("{parent}", parent).Replace("{child}", child.Id))
-                    .Append(newline);
+                Add(body,
+                    inner + rule.Add.Replace("{parent}", parent).Replace("{child}", child.Id),
+                    InitLineKind.Other);
             }
 
             return;
@@ -1138,67 +1247,71 @@ public static class RegionWriter
 
         for (var i = controls.Count - 1; i >= 0; i--)
         {
-            body.Append($"{inner}{parent}.Controls.Add({controls[i].Id})").Append(newline);
+            Add(body, $"{inner}{parent}.Controls.Add({controls[i].Id})", InitLineKind.Other);
         }
     }
 
     /// <summary>
     /// Emits one control and then its children, parenting each child to <b>its own container</b>.
     ///
-    /// <para>‚ö† This used to walk the flat <c>AllControls()</c> list and emit
-    /// <c>Me.Controls.Add(x)</c> for every control including nested ones ‚Äî so a Button inside a
+    /// <para>G‹· This used to walk the flat <c>AllControls()</c> list and emit
+    /// <c>Me.Controls.Add(x)</c> for every control including nested ones G«ˆ so a Button inside a
     /// Panel was added to the FORM, and a nested layout rendered flat at run time. That is a silent
     /// divergence between the designer view and the running program, which is the whole class of
     /// bug D9 exists to prevent. The catalog ships Panel and GroupBox as containers, so this is
     /// reachable from ordinary use.</para>
     /// </summary>
     private static void AppendControlInit(
-        StringBuilder body, FormDocument form, FormControl control, string parent, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
+        List<InitLine> body, FormDocument form, FormControl control, string parent, FormStyle style,
+        string inner, string filePath, List<DesignDiagnostic> diagnostics, FormDockLayoutResult? docks)
     {
-        if (form.Target == FormTarget.Web)
+        if (style == FormStyle.Dom)
         {
-            body.Append($"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")").Append(newline);
+            Add(body, $"{inner}{control.Id} = doc.getElementById(\"{control.Id}\")", InitLineKind.Other);
         }
         else
         {
-            body.Append($"{inner}{control.Id} = New {DeclaredType(form, control)}()").Append(newline);
+            Add(body, $"{inner}{control.Id} = New {DeclaredType(control, style)}()", InitLineKind.Other);
 
-            AppendPixelGeometry(body, control, inner, newline, docks);
-            AppendProperties(body, control, inner, newline, filePath, diagnostics);
+            // `Name` is what the portable Forms library keys by, and what VS writes on the desktop.
+            // It is intentionally NOT emitted for a DOM element: that handle already IS the element.
+            Add(body, $"{inner}{control.Id}.Name = \"{control.Id}\"", InitLineKind.Other);
+
+            AppendPixelGeometry(body, control, inner, docks);
+            AppendProperties(body, control, inner, filePath, diagnostics, InitLineKind.Property);
         }
 
-        AppendBinds(body, form, control, inner, newline);
+        AppendBinds(body, form, control, style, inner);
 
-        // ‚ö† The container's own children, parented to IT ‚Äî and their adds happen here, so a
+        // G‹· The container's own children, parented to IT G«ˆ and their adds happen here, so a
         // container is fully populated before the caller adds it to its own parent, which is the
         // order the shipped template uses.
-        AppendSiblings(body, form, control.Children, control.Id, control, inner, newline, filePath, diagnostics, docks);
+        AppendSiblings(body, form, control.Children, control.Id, control, style, inner, filePath, diagnostics, docks);
     }
 
     /// <summary>
-    /// A tray component (Task 25): the same declare ‚Üí construct ‚Üí set ‚Üí wire shape as a control,
-    /// minus the geometry and the <c>Controls.Add</c> ‚Äî a component is not a control.
+    /// A tray component (Task 25): the same declare GÂ∆ construct GÂ∆ set GÂ∆ wire shape as a control,
+    /// minus the geometry and the <c>Controls.Add</c> G«ˆ a component is not a control.
     ///
     /// <para><b>Web:</b> a script-backed component is built from the catalog's template, and its
     /// one bind IS the constructor argument: <c>tmr = w.setInterval(AddressOf tmr_Tick, 100)</c>.
     /// Emitted only when that bind exists (setInterval needs a callback), and never followed by
-    /// <c>addEventListener</c> ‚Äî the field is an Integer handle. A component with no
+    /// <c>addEventListener</c> G«ˆ the field is an Integer handle. A component with no
     /// <see cref="FormWebScript"/> has no web form at all and emits nothing here; the catalog says
     /// it does not support the target, so the toolbox never offered it.</para>
     /// </summary>
     private static void AppendComponentInit(
-        StringBuilder body, FormDocument form, FormControl component, string inner,
-        string newline, string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormDocument form, FormControl component, FormStyle style, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics)
     {
         var definition = component.Definition;
 
-        if (form.Target == FormTarget.Web)
+        if (style == FormStyle.Dom)
         {
-            // The same predicate the ordering check and the bind warning use ‚Äî one definition of
+            // The same predicate the ordering check and the bind warning use G«ˆ one definition of
             // "this bind is wired", so the three cannot disagree about a document.
             var script = definition?.WebScript;
-            var bind = component.Binds.FirstOrDefault(b => IsEmittedBind(form, component, b));
+            var bind = component.Binds.FirstOrDefault(b => IsEmittedBind(form, style, component, b));
 
             if (script == null || bind == null)
             {
@@ -1206,22 +1319,22 @@ public static class RegionWriter
             }
 
             var construct = ExpandWebScript(script.Construct, definition!, component, bind.Handler, filePath, diagnostics);
-            body.Append($"{inner}{component.Id} = {construct}").Append(newline);
+            Add(body, $"{inner}{component.Id} = {construct}", InitLineKind.Other);
             return;
         }
 
-        body.Append($"{inner}{component.Id} = New {DeclaredType(form, component)}()").Append(newline);
-        AppendProperties(body, component, inner, newline, filePath, diagnostics);
-        AppendBinds(body, form, component, inner, newline);
+        Add(body, $"{inner}{component.Id} = New {DeclaredType(component, style)}()", InitLineKind.Other);
+        AppendProperties(body, component, inner, filePath, diagnostics, InitLineKind.ComponentProperty);
+        AppendBinds(body, form, component, style, inner);
     }
 
     /// <summary>
     /// Fills a <see cref="FormWebScript.Construct"/> template: <c>{handler}</c> is the bind's Sub,
     /// and <c>{Name}</c> is that catalog property's document value when set and valid, else the
-    /// row's default. A placeholder the row does not declare is left in place, visibly ‚Äî a catalog
+    /// row's default. A placeholder the row does not declare is left in place, visibly G«ˆ a catalog
     /// typo must not become a silently empty argument.
     ///
-    /// <para>‚ö† A Degraded value falls back to the default AND is reported (BL8009), as
+    /// <para>G‹· A Degraded value falls back to the default AND is reported (BL8009), as
     /// <see cref="AppendProperties"/> reports the same document on WinForms. The number was always
     /// right; the silence meant one document's Error List differed by target (review, 2026-09-19).</para>
     /// </summary>
@@ -1248,15 +1361,15 @@ public static class RegionWriter
                 // This template is WEB code, so the value is judged as the web would judge it.
                 if (property.Accepts(value, FormTarget.Web))
                 {
-                    // ‚õî Re-emitted from the PARSED number (slice 3 backlog (2)), as every Int the writer emits is:
+                    // G¢ˆ Re-emitted from the PARSED number (slice 3 backlog (2)), as every Int the writer emits is:
                     // " 250" and "0250" are accepted by TryParseInt, and whatever it tolerated stays out of the file.
                     return property.Type == FormPropertyType.Int && FormPropertyDef.TryParseInt(value, out var number)
                         ? number.ToString(CultureInfo.InvariantCulture)
                         : value;
                 }
 
-                // ‚õî The reason comes from the catalog (DescribeRefusal) ‚Äî the same text the reader
-                // freezes the grid row with ‚Äî so a target refusal is never mislabelled "not a valid X".
+                // G¢ˆ The reason comes from the catalog (DescribeRefusal) G«ˆ the same text the reader
+                // freezes the grid row with G«ˆ so a target refusal is never mislabelled "not a valid X".
                 diagnostics.Add(new DesignDiagnostic(
                     DesignCodes.DegradedProperty,
                     $"{DesignCodes.DegradedProperty}: '{component.Id}.{property.Name}': " +
@@ -1265,23 +1378,23 @@ public static class RegionWriter
                     filePath, 0, 0, IsWarning: true));
             }
 
-            // Spec ¬ß2.7: every reader of a default reads the TARGET's ‚Äî this template is web code.
+            // Spec -∫2.7: every reader of a default reads the TARGET's G«ˆ this template is web code.
             return property.DefaultFor(FormTarget.Web) ?? "";
         });
     }
 
     /// <summary>
-    /// One statement per catalog property, WinForms only ‚Äî the web's properties reach the page as
+    /// One statement per catalog property, WinForms only G«ˆ the web's properties reach the page as
     /// markup, never this region.
     ///
     /// <para>Shared by controls and components so the Degraded and collection rules below exist
     /// once; a second copy for the tray would drift on the first fix applied to one of them.</para>
     /// </summary>
     private static void AppendProperties(
-        StringBuilder body, FormControl control, string inner, string newline,
-        string filePath, List<DesignDiagnostic> diagnostics)
+        List<InitLine> body, FormControl control, string inner,
+        string filePath, List<DesignDiagnostic> diagnostics, InitLineKind kind)
     {
-        // ‚õî One statement per property. There is no object-initializer syntax, and `With` must
+        // G¢ˆ One statement per property. There is no object-initializer syntax, and `With` must
         // NEVER be emitted: `.Prop = value` inside a With block is silently discarded by the IR
         // builder, so the running program would not set what the designer shows.
         foreach (var (name, value) in control.Properties)
@@ -1295,24 +1408,24 @@ public static class RegionWriter
                 continue;
             }
 
-            // ‚õî‚õî A DEGRADED value never reaches generated source. The catalog knows the
+            // G¢ˆG¢ˆ A DEGRADED value never reaches generated source. The catalog knows the
             // attribute but cannot parse the value, and splicing it in produces a file the
             // user cannot build: `lbl.TextAlign = ContentAlignment.Bogus` is CS0117, and
             // `lbl.Enabled = maybe` does not even get past BasicLang. D9 requires the value to
-            // be preserved in the DOCUMENT and shown frozen in the property grid ‚Äî it says
+            // be preserved in the DOCUMENT and shown frozen in the property grid G«ˆ it says
             // nothing about emitting it, and emitting it breaks the build for a value the
             // designer has already told the user it cannot use.
             //
-            // ‚ö† A value that is ALREADY this property's source form is not degraded ‚Äî it is
+            // G‹· A value that is ALREADY this property's source form is not degraded G«ˆ it is
             // what the catalog would itself have written. `ContentAlignment.MiddleLeft` does
             // not parse as the designer's `Left`, but it is exactly what emitting `Left`
             // produces, so skipping it would strip the property for no reason. The catalog
             // answers that per row; a shape test cannot (FormPropertyDef.IsSourceForm).
             //
-            // ‚õî DescribeRefusal is reached ONLY for a value that is truly Degraded: the
+            // G¢ˆ DescribeRefusal is reached ONLY for a value that is truly Degraded: the
             // IsSourceForm test above short-circuits first, and DescribeRefusal throws for a value
             // the target accepts.
-            // ‚õî IsWritableOn, not "!Accepts && !IsSourceForm": a source form must obey the target's refusals too (Part E ‚Äî
+            // G¢ˆ IsWritableOn, not "!Accepts && !IsSourceForm": a source form must obey the target's refusals too (Part E G«ˆ
             // Color.Transparent on a TextBox is a green build and an ArgumentException at run time).
             if (property != null && !property.IsWritableOn(value, FormTarget.WinForms))
             {
@@ -1325,26 +1438,27 @@ public static class RegionWriter
                 continue;
             }
 
-            // ‚õî A get-only collection is ADDED to, never assigned ‚Äî `cmb.Items = "a,b"` is
+            // G¢ˆ A get-only collection is ADDED to, never assigned G«ˆ `cmb.Items = "a,b"` is
             // CS0200, and BasicLang reports nothing because Items types as Object.
             if (property is { IsItemCollection: true })
             {
                 foreach (var item in FormPropertyDef.SplitItems(value))
                 {
-                    body.Append($"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})")
-                        .Append(newline);
+                    Add(body,
+                        $"{inner}{control.Id}.{name}.Add({FormPropertyDef.StringLiteral(item)})",
+                        kind);
                 }
 
                 continue;
             }
 
-            body.Append($"{inner}{control.Id}.{name} = {Literal(property, value)}").Append(newline);
+            Add(body, $"{inner}{control.Id}.{name} = {Literal(property, value)}", kind);
         }
     }
 
     /// <summary>The wiring, shared by controls and components: <c>AddHandler</c> or <c>addEventListener</c> per bind.</summary>
     private static void AppendBinds(
-        StringBuilder body, FormDocument form, FormControl control, string inner, string newline)
+        List<InitLine> body, FormDocument form, FormControl control, FormStyle style, string inner)
     {
         var binds = form.Target == FormTarget.Web ? WebRaiseOrder(control.Definition, control.Binds) : (IReadOnlyList<FormBind>)control.Binds;
         foreach (var bind in binds)
@@ -1354,19 +1468,19 @@ public static class RegionWriter
                 continue;
             }
 
-            if (form.Target == FormTarget.Web)
+            if (style == FormStyle.Dom)
             {
-                // ‚õî NEVER `AddHandler el.click, AddressOf H` on the web: the event-call rewrite
-                // emits `{recv}.add(handler)` unconditionally, so that becomes `el.click.add(H)` ‚Üí
+                // G¢ˆ NEVER `AddHandler el.click, AddressOf H` on the web: the event-call rewrite
+                // emits `{recv}.add(handler)` unconditionally, so that becomes `el.click.add(H)` GÂ∆
                 // a runtime TypeError. addEventListener is the only correct form, and AddressOf
                 // (not a lambda) is what produces a bound handler.
                 //
-                // ‚õî‚õî The CATALOG's spelling, never the document's. DOM event types are
+                // G¢ˆG¢ˆ The CATALOG's spelling, never the document's. DOM event types are
                 // case-SENSITIVE and addEventListener takes a STRING, so `addEventListener("Click",
-                // ‚Ä¶)` registers cleanly and is never called: a green build, a page that loads, and a
+                // G«™)` registers cleanly and is never called: a green build, a page that loads, and a
                 // dead handler with no diagnostic anywhere. Every check that consults
                 // `IsEmittedBind` compares OrdinalIgnoreCase and therefore AGREES the bind is
-                // wired ‚Äî only the string that reaches the browser disagreed. `FormBind.Event` is
+                // wired G«ˆ only the string that reaches the browser disagreed. `FormBind.Event` is
                 // deliberately left un-normalised in the DOCUMENT (it says so), so the one place
                 // this can be put right is here, where the name leaves for the browser.
                 //
@@ -1374,40 +1488,75 @@ public static class RegionWriter
                 // refuses the write with BL8032 first. The fallback keeps this honest anyway,
                 // because the body is built BEFORE the checks run and thrown away when one refuses.
                 //
-                // Slice 5: the catalog EVENT decides what is listened to (ListenType ‚Äî a KeyPress is a keydown) and
+                // Slice 5: the catalog EVENT decides what is listened to (ListenType G«ˆ a KeyPress is a keydown) and
                 // whether the AddressOf names a generated wrapper (WebFilter, D-12).
                 if (control.Definition is { } known && WebEventOf(known, bind) is { } evt)
                 {
-                    AppendWebListener(body, control.Id, control.Id, known, control.Binds, bind, evt, inner, newline);
+                    var listener = new StringBuilder();
+                    AppendWebListener(listener, control.Id, control.Id, known, control.Binds, bind, evt, inner, "\n");
+                    if (listener.Length > 0)
+                    {
+                        Add(body, listener.ToString().TrimEnd('\r', '\n'), InitLineKind.Other);
+                    }
                     continue;
                 }
 
                 var eventName = bind.Event;
 
-                body.Append($"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})")
-                    .Append(newline);
+                Add(body,
+                    $"{inner}{control.Id}.addEventListener(\"{eventName}\", AddressOf {bind.Handler})",
+                    InitLineKind.Other);
             }
             else
             {
-                // ‚õî NEVER `Handles` ‚Äî it is lexed but never parsed, so the file would not build.
-                body.Append($"{inner}AddHandler {control.Id}.{bind.Event}, AddressOf {bind.Handler}")
-                    .Append(newline);
+                // Portable code is WinForms-shaped, so it must use the WinForms EVENT spelling. A
+                // web document stores `click`; AddHandler btn.click would not compile. Map through
+                // the catalog, and only fall back to the document when it already is the WinForms
+                // name (the ordinary desktop case).
+                var eventName = style == FormStyle.Portable && control.Definition is { } definition
+                    ? CanonicalPortableEvent(definition, bind) ?? bind.Event
+                    : bind.Event;
+
+                // G¢ˆ NEVER `Handles` G«ˆ it is lexed but never parsed, so the file would not build.
+                Add(body,
+                    $"{inner}AddHandler {control.Id}.{eventName}, AddressOf {bind.Handler}",
+                    InitLineKind.Other);
             }
         }
     }
 
     /// <summary>
+    /// The WinForms spelling of a bind that a web document may have written in the DOM's vocabulary.
+    /// Matches either spelling so <c>click</c> and <c>Click</c> reach <c>AddHandler btn.Click</c>.
+    /// </summary>
+    private static string? CanonicalPortableEvent(FormControlDef definition, FormBind bind)
+    {
+        foreach (var evt in FormEvents.WiredOn(definition, FormTarget.WinForms))
+        {
+            var winForms = FormEvents.NameOn(evt, FormTarget.WinForms);
+            var web = FormEvents.NameOn(evt, FormTarget.Web);
+            if (string.Equals(winForms, bind.Event, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(web, bind.Event, StringComparison.OrdinalIgnoreCase))
+            {
+                return winForms;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// A control's position and size, in the WinForms idiom.
     ///
-    /// <para>‚õî‚õî <b>Geometry FANS IN.</b> <c>X="96" Y="80"</c> becomes ONE statement,
-    /// <c>Location = New Point(96, 80)</c> ‚Äî never <c>Location.X = 96</c>. <c>Location</c> returns
+    /// <para>G¢ˆG¢ˆ <b>Geometry FANS IN.</b> <c>X="96" Y="80"</c> becomes ONE statement,
+    /// <c>Location = New Point(96, 80)</c> G«ˆ never <c>Location.X = 96</c>. <c>Location</c> returns
     /// a <c>Point</c> STRUCT, so assigning through it modifies a temporary and csc rejects it with
     /// <b>CS1612</b> ("cannot modify the return value ... because it is not a variable"). Measured
     /// 2026-09-13; the plan says not to assert the code without measuring it, so that is the
-    /// measurement. BasicLang itself catches none of this ‚Äî WinForms member access degrades to
-    /// <c>Object</c> with no diagnostic ‚Äî so the per-statement shape here is load-bearing.</para>
+    /// measurement. BasicLang itself catches none of this G«ˆ WinForms member access degrades to
+    /// <c>Object</c> with no diagnostic G«ˆ so the per-statement shape here is load-bearing.</para>
     ///
-    /// <para>‚õî‚õî <b>A DOCKED control's Size is the size it docks at</b>, i.e. its bounds from
+    /// <para>G¢ˆG¢ˆ <b>A DOCKED control's Size is the size it docks at</b>, i.e. its bounds from
     /// <see cref="FormDockLayout.Resolve"/> in <see cref="FormDockMode.Designer"/> mode (every sibling visible: the size
     /// its children were designed in). It is NOT its stored Width/Height. WinForms captures a child's anchor distances
     /// when the child is ADDED, against the container's size at that moment. A container is docked only when it is
@@ -1419,7 +1568,7 @@ public static class RegionWriter
     /// </summary>
     /// <param name="docks">The form resolved ONCE in Designer mode for this write (null on the web).</param>
     private static void AppendPixelGeometry(
-        StringBuilder body, FormControl control, string inner, string newline, FormDockLayoutResult? docks)
+        List<InitLine> body, FormControl control, string inner, FormDockLayoutResult? docks)
     {
         if (control.Geometry is not PixelGeometry stored)
         {
@@ -1428,8 +1577,8 @@ public static class RegionWriter
 
         var pixel = stored;
 
-        // ‚õî A docked control's resolved size is written even when it is 0√ó0 (a Fill after an overflow on both
-        // axes): skipping it would leave WinForms' own default Size (a Panel's 200√ó100), and the children would
+        // G¢ˆ A docked control's resolved size is written even when it is 0+˘0 (a Fill after an overflow on both
+        // axes): skipping it would leave WinForms' own default Size (a Panel's 200+˘100), and the children would
         // capture their anchor distances against THAT.
         var writeSize = pixel.Width != 0 || pixel.Height != 0;
         if (docks != null && FormDockLayout.EdgeOf(control) != null && docks.TryGet(control, out var docked))
@@ -1442,49 +1591,49 @@ public static class RegionWriter
             writeSize = true;
         }
 
-        // ‚õî Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and
-        // `New Point(‚àí5, ‚àí3)` is CS1056 at csc ‚Äî from a control dragged past the form's left edge.
+        // G¢ˆ Formatted INVARIANTLY: sv-SE/fi-FI/nb-NO spell a negative with U+2212, and
+        // `New Point(GÍ∆5, GÍ∆3)` is CS1056 at csc G«ˆ from a control dragged past the form's left edge.
         if (pixel.X != 0 || pixel.Y != 0)
         {
-            body.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})")).Append(newline);
+            Add(body, string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Location = New Point({pixel.X}, {pixel.Y})"), InitLineKind.Geometry);
         }
 
         if (writeSize)
         {
-            body.Append(string.Create(CultureInfo.InvariantCulture,
-                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})")).Append(newline);
+            Add(body, string.Create(CultureInfo.InvariantCulture,
+                $"{inner}{control.Id}.Size = New Size({pixel.Width}, {pixel.Height})"), InitLineKind.Geometry);
         }
 
-        // ‚õî The enum's OWN spelling (FormDock.Canonical): `DockStyle.fill` is CS0117 at csc and BasicLang says
+        // G¢ˆ The enum's OWN spelling (FormDock.Canonical): `DockStyle.fill` is CS0117 at csc and BasicLang says
         // nothing (plan 2026-09-27 S11). A value with no canonical member is refused by CheckDocks, which runs
-        // before any of this text is handed back ‚Äî the fallback only keeps a refused body from throwing.
+        // before any of this text is handed back G«ˆ the fallback only keeps a refused body from throwing.
         if (!FormDock.IsBlank(pixel.Dock))
         {
             var member = FormDock.Canonical(pixel.Dock) ?? pixel.Dock!.Trim();
-            body.Append($"{inner}{control.Id}.Dock = DockStyle.{member}").Append(newline);
+            Add(body, $"{inner}{control.Id}.Dock = DockStyle.{member}", InitLineKind.Geometry);
         }
 
         if (!string.IsNullOrWhiteSpace(pixel.Anchor))
         {
-            body.Append($"{inner}{control.Id}.Anchor = {AnchorExpression(pixel.Anchor)}").Append(newline);
+            Add(body, $"{inner}{control.Id}.Anchor = {AnchorExpression(pixel.Anchor)}", InitLineKind.Geometry);
         }
     }
 
     /// <summary>
     /// A control's <c>Anchor</c> as BasicLang source.
     ///
-    /// <para>‚ö† A SINGLE edge keeps the readable named member ‚Äî <c>AnchorStyles.Top</c>. Emitting
+    /// <para>G‹· A SINGLE edge keeps the readable named member G«ˆ <c>AnchorStyles.Top</c>. Emitting
     /// <c>CType(1, AnchorStyles)</c> for it would be a readability regression for the common case,
     /// to no benefit.</para>
     ///
-    /// <para>‚õî MULTIPLE edges become <c>CType(n, AnchorStyles)</c>, because BasicLang still has no
+    /// <para>G¢ˆ MULTIPLE edges become <c>CType(n, AnchorStyles)</c>, because BasicLang still has no
     /// bitwise <c>Or</c>: <c>AnchorStyles.Left Or AnchorStyles.Top</c> is rejected ("requires
     /// Boolean operands") and <c>|</c> lexes but does not parse. The cast is the only expressible
     /// form, and it is only expressible at all because
     /// <c>SemanticAnalyzer.RejectImpossibleConversion</c> now exempts unresolvable .NET types.</para>
     ///
-    /// <para>‚ö† The edge names ride along as a trailing comment. <c>CType(13, AnchorStyles)</c> tells
+    /// <para>G‹· The edge names ride along as a trailing comment. <c>CType(13, AnchorStyles)</c> tells
     /// a reader nothing on its own, and this region is code the user will read in their own file.</para>
     /// </summary>
     private static string AnchorExpression(string anchor)
@@ -1495,8 +1644,8 @@ public static class RegionWriter
             return $"AnchorStyles.{edges[0]}";
         }
 
-        // Unknown names are refused by CheckAnchors before this runs. ‚ö† Flags are OR-ed, not summed: the old
-        // sum turned "Left,Left" into 8 ‚Äî AnchorStyles.Right (plan scope call S10).
+        // Unknown names are refused by CheckAnchors before this runs. G‹· Flags are OR-ed, not summed: the old
+        // sum turned "Left,Left" into 8 G«ˆ AnchorStyles.Right (plan scope call S10).
         var value = (int)FormAnchor.Parse(anchor, out _);
         return $"CType({value}, AnchorStyles)   ' {string.Join(", ", edges)}";
     }
@@ -1505,18 +1654,18 @@ public static class RegionWriter
     /// The canonical source when the value is already BasicLang SOURCE rather than a document value;
     /// null otherwise.
     ///
-    /// <para>‚õî <c>Properties</c> holds DOCUMENT text (<c>Sign in</c>, unquoted). An Enum, Color or
+    /// <para>G¢ˆ <c>Properties</c> holds DOCUMENT text (<c>Sign in</c>, unquoted). An Enum, Color or
     /// Size row may also hold its catalog-decided source form (<c>ContentAlignment.MiddleLeft</c>,
-    /// <c>SystemColors.Control</c>, <c>New Size(‚Ä¶)</c>), and the CATALOG decides which is which ‚Äî
+    /// <c>SystemColors.Control</c>, <c>New Size(G«™)</c>), and the CATALOG decides which is which G«ˆ
     /// see <see cref="FormPropertyDef.IsSourceForm"/> for why the shape of the string is not a safe
     /// answer. A String row has no source form at all: it is always quoted and escaped, so a caption
     /// <c>New Customer</c> or <c>"quoted"</c> is text, never source.</para>
     ///
-    /// <para>‚õî A property with NO catalog row is never source: with no row there is nothing that can
-    /// prove it, and the old shape fallback (<c>"‚Ä¶</c> or <c>New ‚Ä¶</c>) was exactly the test this method
-    /// exists to replace. Only an in-memory model can hold one ‚Äî the reader routes unknown attributes
+    /// <para>G¢ˆ A property with NO catalog row is never source: with no row there is nothing that can
+    /// prove it, and the old shape fallback (<c>"G«™</c> or <c>New G«™</c>) was exactly the test this method
+    /// exists to replace. Only an in-memory model can hold one G«ˆ the reader routes unknown attributes
     /// to <c>UnknownAttributes</c> (a reserved resource reference is recorded before the row lookup,
-    /// but the reader reports it as an error) ‚Äî so it is quoted as text.</para>
+    /// but the reader reports it as an error) G«ˆ so it is quoted as text.</para>
     /// </summary>
     private static string? AlreadySource(FormPropertyDef? property, string value) =>
         property?.SourceLiteral(value);
@@ -1524,32 +1673,32 @@ public static class RegionWriter
     /// <summary>
     /// Formats a property value as BasicLang SOURCE, driven off the catalog's declared type.
     ///
-    /// <para>‚õî The same <c>Properties</c> dictionary means two different things to two consumers:
+    /// <para>G¢ˆ The same <c>Properties</c> dictionary means two different things to two consumers:
     /// the document reader stores the RAW attribute text (<c>Sign in</c>, unquoted, because XML
     /// attributes are not quoted values), while this writer splices the value into generated source.
-    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> ‚Äî a syntax error. Properties
+    /// Emitting the raw text produced <c>btnLogin.Text = Sign in</c> G«ˆ a syntax error. Properties
     /// holds document text; a String is always quoted and escaped through
     /// <see cref="FormPropertyDef.StringLiteral"/> (quotes, backslashes, CR, LF, tab). Typing the
     /// formatting off the catalog is what lets an Enum/Color/Size row's source form pass through
     /// while a String never does.</para>
     ///
-    /// <para>‚õî‚õî Nothing numeric is spliced as the input text. A source form comes back from
+    /// <para>G¢ˆG¢ˆ Nothing numeric is spliced as the input text. A source form comes back from
     /// <see cref="FormPropertyDef.SourceLiteral"/> RE-EMITTED from what was parsed, and an Int from
-    /// <see cref="FormPropertyDef.WinFormsLiteral"/> the same way ‚Äî so whitespace a parser tolerated
+    /// <see cref="FormPropertyDef.WinFormsLiteral"/> the same way G«ˆ so whitespace a parser tolerated
     /// (a line break around a comma, a leading zero) never reaches the user's file.</para>
     /// </summary>
-    /// <param name="property">The row ‚Äî a control's, or a <see cref="FormControlCatalog.FormRoot"/> row.
+    /// <param name="property">The row G«ˆ a control's, or a <see cref="FormControlCatalog.FormRoot"/> row.
     /// Null for a property the catalog does not know.</param>
     private static string Literal(FormPropertyDef? property, string value)
     {
-        // Already a source literal ‚Äî re-emitted canonically, never re-formatted as a document value:
+        // Already a source literal G«ˆ re-emitted canonically, never re-formatted as a document value:
         // that would produce `ContentAlignment.ContentAlignment.MiddleLeft`. (Never for a String row.)
         if (AlreadySource(property, value) is { } source)
         {
             return source;
         }
 
-        // ‚õî An enum or a colour is NOT the bare text. MEASURED, both ways:
+        // G¢ˆ An enum or a colour is NOT the bare text. MEASURED, both ways:
         //   lbl.TextAlign = Center    lexes, compiles, and csc then rejects it (CS0103).
         //   lbl.ForeColor = #FF0000   does not even LEX -- '#' starts a preprocessor directive.
         // The catalog carries the WinForms enum type and the member mapping precisely so this
@@ -1565,15 +1714,15 @@ public static class RegionWriter
             FormPropertyType.Bool => bool.TryParse(value, out var flag) ? (flag ? "True" : "False") : value,
             FormPropertyType.Enum => value,
             FormPropertyType.Color => value,
-            // ‚õî UNREACHABLE by construction, and loud if that ever stops being true. An Int or a Size
-            // reaches here only when WinFormsLiteral declined it ‚Äî i.e. it does not parse ‚Äî and such a
+            // G¢ˆ UNREACHABLE by construction, and loud if that ever stops being true. An Int or a Size
+            // reaches here only when WinFormsLiteral declined it G«ˆ i.e. it does not parse G«ˆ and such a
             // value is either already source (returned above) or Degraded, which every caller skips
             // before calling this. Quoting it (the default arm) would emit `X.ClientSize = "800x450"`,
-            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text ‚Äî `5\r\n` ‚Äî into
+            // CS0029 at csc with BasicLang silent; verbatim would splice unparsed text G«ˆ `5\r\n` G«ˆ into
             // source. Both hide a broken invariant as a broken build, so this names the invariant.
             FormPropertyType.Int or FormPropertyType.Size or FormPropertyType.Font or FormPropertyType.Padding
                 or FormPropertyType.Cursor or FormPropertyType.Fraction or FormPropertyType.Reference
-                // ‚õî Slice 4 D-5: an Image/Icon falling through would be QUOTED ‚Äî `pic.Image = "x.png"`, CS0029 for a
+                // G¢ˆ Slice 4 D-5: an Image/Icon falling through would be QUOTED G«ˆ `pic.Image = "x.png"`, CS0029 for a
                 // System.Drawing.Image property, BasicLang silent.
                 or FormPropertyType.Image or FormPropertyType.Icon
                 => throw new InvalidOperationException(
@@ -1585,13 +1734,15 @@ public static class RegionWriter
 
     /// <summary>
     /// The BasicLang type a control's field is declared as: the catalog's WinForms type on the
-    /// desktop, and <c>Element</c> on the web ‚Äî the typed DOM handle every element comes back as.
+    /// desktop, and <c>Element</c> on the web G«ˆ the typed DOM handle every element comes back as.
     /// A script-backed component (Task 25) declares its <see cref="FormWebScript.FieldType"/>
     /// instead: a Timer is an <c>Integer</c> handle, not an element.
     /// </summary>
-    private static string DeclaredType(FormDocument form, FormControl control)
+    private static string DeclaredType(FormControl control, FormStyle style)
     {
-        if (form.Target == FormTarget.Web)
+        // The DOM handle is an Element; a portable field is the WinForms type the portable library
+        // supplies, exactly as on the desktop.
+        if (style == FormStyle.Dom)
         {
             return control.Definition?.WebScript?.FieldType ?? "Element";
         }
@@ -1601,4 +1752,11 @@ public static class RegionWriter
 
     private static DesignDiagnostic Error(string code, string message, string filePath, int line) =>
         new(code, $"{code}: {message}", filePath, line, 0, IsWarning: false);
+
+    private static void Add(List<InitLine> body, string text, InitLineKind kind) =>
+        body.Add(new InitLine(text, kind));
+
+    private static bool EmitLine(InitLineKind kind, FormStyle style) =>
+        style != FormStyle.Portable ||
+        kind is InitLineKind.Other or InitLineKind.ComponentProperty;
 }

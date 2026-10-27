@@ -122,13 +122,13 @@ public class FormToolboxGlyphTests
     {
         var offered = new FormToolboxViewModel { Target = FormTarget.Web }.Items;
 
-        var impossible = offered
+        var desktopOnly = offered
             .Where(i => !FormControlCatalog.Find(i.Kind)!.SupportsTarget(FormTarget.Web))
-            .Select(i => i.Kind)
             .ToList();
 
-        Assert.That(impossible, Is.Empty,
-            "the web toolbox offers controls the web cannot emit: " + string.Join(", ", impossible));
+        Assert.That(desktopOnly, Is.Not.Empty, "the web toolbox now lists desktop-only kinds");
+        Assert.That(desktopOnly.All(i => i.DesktopOnly && i.Badge == "desktop"), Is.True,
+            "every web-incompatible kind must carry the desktop badge");
     }
 
     /// <summary>

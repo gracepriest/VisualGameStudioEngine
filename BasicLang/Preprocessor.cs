@@ -16,6 +16,15 @@ namespace BasicLang.Compiler
         private readonly List<PreprocessorError> _errors;
         private readonly HashSet<string> _definedSymbols;
         private readonly Stack<ConditionalState> _conditionalStack;
+
+        private static readonly Regex IfDirective = new(@"^#If\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ElseIfDirective = new(@"^#ElseIf\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ElseDirective = new(@"^#Else\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex EndIfDirective = new(@"^#End\s*If\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex IfForm = new(@"^#(?:Else)?If(?:\s+|(?=\())(?<cond>.*?)\s+Then\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex BareElse = new(@"^#Else\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ElseIfAsTwoWords = new(@"^#Else\s+If\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex BareEndIf = new(@"^#End\s*If\s*(?:'.*)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private readonly List<string> _cppIncludes = new List<string>();
         private readonly List<BasicLang.Compiler.IR.JsImportDirective> _jsImports =
             new List<BasicLang.Compiler.IR.JsImportDirective>();
@@ -174,9 +183,11 @@ namespace BasicLang.Compiler
         /// </summary>
         private class ConditionalState
         {
-            public bool ConditionWasTrue { get; set; }  // Was the #IfDef/#IfNDef condition true?
-            public bool InElseBranch { get; set; }       // Are we in the #Else branch?
-            public bool ParentActive { get; set; }       // Was the parent block active?
+            public bool ParentActive { get; set; }    // was the enclosing block active when this one opened?
+            public bool BranchActive { get; set; }    // is the current branch the one being compiled?
+            public bool AnyBranchTaken { get; set; }  // has an earlier branch of this block been taken?
+            public bool SeenElse { get; set; }        // has #Else been seen (no #ElseIf may follow)?
+            public bool IsIfBlock { get; set; }       // opened by #If (true) or by #IfDef/#IfNDef (false)
         }
 
         /// <summary>
@@ -236,29 +247,36 @@ namespace BasicLang.Compiler
                 {
                     ProcessDefine(trimmedLine, lineNumber);
                 }
-                // Check for #IfDef directive
+                // ORDER IS LOAD-BEARING: #IfDef/#IfNDef before #If; #ElseIf before #Else.
                 else if (trimmedLine.StartsWith("#IfDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, false);
                     result.AppendLine($"' {line}"); // Comment out the directive
                 }
-                // Check for #IfNDef directive
                 else if (trimmedLine.StartsWith("#IfNDef", StringComparison.OrdinalIgnoreCase))
                 {
                     ProcessIfDef(trimmedLine, lineNumber, true);
                     result.AppendLine($"' {line}"); // Comment out the directive
                 }
-                // Check for #Else directive
-                else if (trimmedLine.StartsWith("#Else", StringComparison.OrdinalIgnoreCase))
+                else if (ElseIfDirective.IsMatch(trimmedLine))
                 {
-                    ProcessElse(lineNumber);
-                    result.AppendLine($"' {line}"); // Comment out the directive
+                    ProcessElseIf(trimmedLine, lineNumber);
+                    result.AppendLine($"' {line}");
                 }
-                // Check for #EndIf directive
-                else if (trimmedLine.StartsWith("#EndIf", StringComparison.OrdinalIgnoreCase))
+                else if (ElseDirective.IsMatch(trimmedLine))
                 {
-                    ProcessEndIf(lineNumber);
-                    result.AppendLine($"' {line}"); // Comment out the directive
+                    ProcessElse(trimmedLine, lineNumber);
+                    result.AppendLine($"' {line}");
+                }
+                else if (EndIfDirective.IsMatch(trimmedLine))
+                {
+                    ProcessEndIf(trimmedLine, lineNumber);
+                    result.AppendLine($"' {line}");
+                }
+                else if (IfDirective.IsMatch(trimmedLine))
+                {
+                    ProcessIf(trimmedLine, lineNumber);
+                    result.AppendLine($"' {line}");
                 }
                 // Check for #CppInclude directive (C++ std passthrough - emits a real
                 // C++ #include; distinct from #Include which splices BasicLang source).
@@ -474,12 +492,9 @@ namespace BasicLang.Compiler
                     Line = lineNumber,
                     Message = $"Invalid {directiveName} syntax: expected symbol name"
                 });
-                // Push a default state to keep stack balanced
                 _conditionalStack.Push(new ConditionalState
                 {
-                    ConditionWasTrue = false,
-                    InElseBranch = false,
-                    ParentActive = IsConditionalActive()
+                    ParentActive = IsConditionalActive(), BranchActive = false, AnyBranchTaken = false
                 });
                 return;
             }
@@ -490,29 +505,79 @@ namespace BasicLang.Compiler
 
             _conditionalStack.Push(new ConditionalState
             {
-                ConditionWasTrue = conditionTrue,
-                InElseBranch = false,
-                ParentActive = IsConditionalActive()
+                ParentActive = IsConditionalActive(), BranchActive = conditionTrue, AnyBranchTaken = conditionTrue
             });
         }
 
-        /// <summary>
-        /// Process #Else directive
-        /// </summary>
-        private void ProcessElse(int lineNumber)
+        /// <summary>Process an <c>#If ... Then</c> directive.</summary>
+        private void ProcessIf(string line, int lineNumber)
         {
+            var parentActive = IsConditionalActive();
+            var taken = EvaluateIfForm(line, "#If", lineNumber);
+            _conditionalStack.Push(new ConditionalState
+            {
+                ParentActive = parentActive, BranchActive = taken, AnyBranchTaken = taken, IsIfBlock = true
+            });
+        }
+
+        /// <summary>Process an <c>#ElseIf ... Then</c> directive: taken only if no earlier branch was.</summary>
+        private void ProcessElseIf(string line, int lineNumber)
+        {
+            if (_conditionalStack.Count == 0) { Fail(lineNumber, "#ElseIf without matching #If"); return; }
+            var state = _conditionalStack.Peek();
+            if (!state.IsIfBlock) { Fail(lineNumber, "#ElseIf is only valid inside #If ... #End If, not #IfDef/#IfNDef"); return; }
+            if (state.SeenElse) { Fail(lineNumber, "#ElseIf after #Else"); return; }
+            var taken = EvaluateIfForm(line, "#ElseIf", lineNumber);
+            state.BranchActive = !state.AnyBranchTaken && taken;
+            state.AnyBranchTaken |= state.BranchActive;
+        }
+
+        /// <summary>The condition of an #If/#ElseIf line; a malformed one is reported and counts as false.</summary>
+        private bool EvaluateIfForm(string line, string directive, int lineNumber)
+        {
+            var match = IfForm.Match(line);
+            if (!match.Success || match.Groups["cond"].Value.Trim().Length == 0)
+            {
+                Fail(lineNumber, $"{directive} requires a condition followed by 'Then'");
+                return false;
+            }
+            var condition = match.Groups["cond"].Value;
+            if (!PreprocessorCondition.TryEvaluate(condition, IsDefined, out var value, out var error))
+            {
+                Fail(lineNumber, $"Invalid {directive} condition '{condition}': {error}");
+                return false;
+            }
+            return value;
+        }
+
+        private void Fail(int lineNumber, string message) =>
+            _errors.Add(new PreprocessorError { Line = lineNumber, Message = message });
+
+        /// <summary>Process #Else. Only whitespace or a ' comment may follow it.</summary>
+        private void ProcessElse(string line, int lineNumber)
+        {
+            if (ElseIfAsTwoWords.IsMatch(line))
+            {
+                Fail(lineNumber, "'#Else If' is not a directive: write #ElseIf (one word)");
+                if (_conditionalStack.Count > 0) _conditionalStack.Peek().BranchActive = false;
+                return;
+            }
+
+            if (!BareElse.IsMatch(line))
+                Fail(lineNumber, $"Unexpected text after #Else: {line}");
+
             if (_conditionalStack.Count == 0)
             {
                 _errors.Add(new PreprocessorError
                 {
                     Line = lineNumber,
-                    Message = "#Else without matching #IfDef or #IfNDef"
+                    Message = "#Else without matching #If, #IfDef or #IfNDef"
                 });
                 return;
             }
 
             var state = _conditionalStack.Peek();
-            if (state.InElseBranch)
+            if (state.SeenElse)
             {
                 _errors.Add(new PreprocessorError
                 {
@@ -522,20 +587,23 @@ namespace BasicLang.Compiler
                 return;
             }
 
-            state.InElseBranch = true;
+            state.BranchActive = !state.AnyBranchTaken;
+            state.AnyBranchTaken = true;
+            state.SeenElse = true;
         }
 
-        /// <summary>
-        /// Process #EndIf directive
-        /// </summary>
-        private void ProcessEndIf(int lineNumber)
+        /// <summary>Process #EndIf / #End If. Only whitespace or a ' comment may follow it.</summary>
+        private void ProcessEndIf(string line, int lineNumber)
         {
+            if (!BareEndIf.IsMatch(line))
+                Fail(lineNumber, $"Unexpected text after #End If: {line}");
+
             if (_conditionalStack.Count == 0)
             {
                 _errors.Add(new PreprocessorError
                 {
                     Line = lineNumber,
-                    Message = "#EndIf without matching #IfDef or #IfNDef"
+                    Message = "#End If without matching #If, #IfDef or #IfNDef"
                 });
                 return;
             }
@@ -543,23 +611,14 @@ namespace BasicLang.Compiler
             _conditionalStack.Pop();
         }
 
-        /// <summary>
-        /// Check if the current conditional block is active (code should be included)
-        /// </summary>
+        /// <summary>Check if the current conditional block is active (code should be included).</summary>
         private bool IsConditionalActive()
         {
             if (_conditionalStack.Count == 0)
-                return true; // No conditional block, everything is active
+                return true;
 
-            var state = _conditionalStack.Peek();
-
-            // If parent wasn't active, we're not active either
-            if (!state.ParentActive)
-                return false;
-
-            // In the #If branch: active if condition was true
-            // In the #Else branch: active if condition was false
-            return state.InElseBranch ? !state.ConditionWasTrue : state.ConditionWasTrue;
+            var s = _conditionalStack.Peek();
+            return s.ParentActive && s.BranchActive;
         }
 
         /// <summary>

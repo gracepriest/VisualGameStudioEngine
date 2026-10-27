@@ -353,7 +353,18 @@ namespace BasicLang.Compiler.IR
             // takes the same class-method guard as the arm below.
             if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule)
                 && !(callee.IsImported && IsCurrentClassMethod(callee.Name)))
+            {
+                // The sibling-signature path stamps a library CLASS method with its class as
+                // OwningModule. That is a static member, not a module-level free function:
+                // `MessageBox.Show` must stay qualified, or JavaScript emits `Show`.
+                if (BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(callee.OwningModule)
+                    || _semanticAnalyzer.LookupType(callee.OwningModule) != null)
+                {
+                    return ($"{callee.OwningModule}.{callee.Name}", null);
+                }
+
                 return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
+            }
             // ⛔ ...but NEVER owner an import when the class being built declares that method
             // itself. One symbol table entry per name means the last declaration wins, so without
             // this guard an unqualified self-call is emitted against whichever OTHER class happened
@@ -6072,7 +6083,10 @@ namespace BasicLang.Compiler.IR
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
 
-                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value);
+                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value)
+                {
+                    ThroughBase = IsBasePropertyAccess(memberExpr)
+                };
 
                 // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
                 // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
@@ -7395,6 +7409,17 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// <c>MyBase.P</c> where P is a PROPERTY — the base's accessor, bypassing virtual
+        /// dispatch. Lowered to <c>this.P</c> before, a derived override called itself (the
+        /// portable MenuStrip/StatusStrip <c>Items</c> getters recurse on JavaScript).
+        /// ⛔ A FIELD through MyBase is NOT flagged: a field is not virtual and lives on the
+        /// instance, so <c>super.field</c> would read the prototype instead.
+        /// </summary>
+        private bool IsBasePropertyAccess(MemberAccessExpressionNode node) =>
+            node.Object is MyBaseExpressionNode
+            && _semanticAnalyzer?.GetNodeSymbol(node)?.Kind == SymbolKind.Property;
+
+        /// <summary>
         /// The spelling an identifier reference is emitted by: its declaration's
         /// (<see cref="NameBinding.DeclaredName"/>) when the analyzer bound it, else as written. For
         /// the sites that name a thing rather than look up storage (#124).
@@ -7415,6 +7440,13 @@ namespace BasicLang.Compiler.IR
             // and a ~27 s Native AOT publish round trip. Measured before this change:
             // FileMode.Open emitted a real bl_net_System_IO_FileMode_Open__… export. Move this
             // arm below the emission and the value stays correct while the export comes back.
+            if (_semanticAnalyzer?.UserEnumConstants != null
+                && _semanticAnalyzer.UserEnumConstants.TryGetValue(node, out var userEnum))
+            {
+                _expressionResult = new IRConstant(userEnum.Value, userEnum.Type);
+                return;
+            }
+
             if (_semanticAnalyzer?.NetEnumConstants != null
                 && _semanticAnalyzer.NetEnumConstants.TryGetValue(node, out var enumConstant))
             {
@@ -7440,7 +7472,10 @@ namespace BasicLang.Compiler.IR
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType);
+            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType)
+            {
+                ThroughBase = IsBasePropertyAccess(node)
+            };
 
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
@@ -7634,9 +7669,28 @@ namespace BasicLang.Compiler.IR
                 // the text. Measured in the single-file AND the multi-file path alike.
                 if (_semanticAnalyzer.GetNodeSymbol(memberExpr) is Symbol moduleProcedure
                     && (moduleProcedure.Kind == SymbolKind.Function || moduleProcedure.Kind == SymbolKind.Subroutine)
-                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule))
+                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule)
+                    // The receiver must be the OWNER name — `MessageBox.Show` or
+                    // `Helpers.Twice`. `button.PerformClick` has a Variable symbol and a
+                    // lower-case receiver, and must fall through to the instance arm.
+                    && memberExpr.Object is IdentifierExpressionNode receiverId
+                    // A local `button` and the type `Button` differ only by case in BasicLang
+                    // source; only the type spelling is a static call. Module names stay
+                    // case-insensitive.
+                    && string.Equals(receiverId.Name, moduleProcedure.OwningModule,
+                        BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(moduleProcedure.OwningModule)
+                        || _semanticAnalyzer.LookupType(moduleProcedure.OwningModule) != null
+                            ? StringComparison.Ordinal
+                            : StringComparison.OrdinalIgnoreCase))
                 {
-                    EmitProcedureCall(node, moduleProcedure, memberExpr.MemberName, tempName, returnType);
+                    // The sibling-signature path stamps even a library CLASS method with its
+                    // class name as OwningModule. Keep that qualifier so the backend resolves
+                    // `MessageBox.Show`, instead of emitting the free function `Show`.
+                    var callee = BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(moduleProcedure.OwningModule)
+                        || _semanticAnalyzer.LookupType(moduleProcedure.OwningModule) != null
+                        ? $"{moduleProcedure.OwningModule}.{memberExpr.MemberName}"
+                        : memberExpr.MemberName;
+                    EmitProcedureCall(node, moduleProcedure, callee, tempName, returnType);
                     return;
                 }
 
@@ -7675,8 +7729,12 @@ namespace BasicLang.Compiler.IR
                 bool isStaticCall = false;
                 if (obj is IRVariable objVar)
                 {
-                    // Case-sensitive check: does the name exactly match a class name?
-                    bool exactClassMatch = _module.Classes.Keys.Any(k => k == objVar.Name);
+                    // Case-sensitive check: does the name exactly match a class name in this
+                    // unit, or a type the analyzer imported from the portable library?
+                    var declaredReceiverType = _semanticAnalyzer.LookupType(objVar.Name);
+                    bool exactClassMatch = _module.Classes.Keys.Any(k => k == objVar.Name)
+                        || (declaredReceiverType != null
+                            && string.Equals(declaredReceiverType.Name, objVar.Name, StringComparison.Ordinal));
                     // Is this a local variable or parameter?
                     bool isLocalOrParam = _currentFunction?.Parameters.Any(p => p.Name == objVar.Name) == true ||
                                           _locals.ContainsKey(objVar.Name);
@@ -7686,8 +7744,12 @@ namespace BasicLang.Compiler.IR
                     // a keyword can name no variable. IsKnownNetStaticType knows `String` but not
                     // `Integer`, which sent `Integer.Parse(s)` down the INSTANCE arm as a call on a
                     // variable named Integer.
-                    bool isNetType = objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
-                        || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name);
+                    // `Me` is the current instance, never a static type. Without this guard the
+                    // PascalCase .NET-name heuristic below routes `Me.VgsElementFor(...)` into the
+                    // fused static arm and emits a free call named "Me.VgsElementFor".
+                    bool isNetType = !string.Equals(objVar.Name, "Me", StringComparison.OrdinalIgnoreCase)
+                        && (objVar.Name.Contains('.') || IsKnownNetStaticType(objVar.Name)
+                            || PrimitiveStaticSurface.IsTypeKeyword(objVar.Name));
 
                     // A declared name is never a type name, so the guard applies to BOTH
                     // sources of type-ness, not just the class-name one. It used to read
@@ -8184,8 +8246,13 @@ namespace BasicLang.Compiler.IR
             node.Expression.Accept(this);
             var value = _expressionResult;
 
-            var sourceType = _semanticAnalyzer.GetNodeType(node.Expression);
+            var sourceType = _semanticAnalyzer.GetNodeType(node.Expression) ?? value?.Type;
             var targetType = _semanticAnalyzer.GetNodeType(node);
+            // An Optional parameter's default is not always visited by the analyzer (the shipped
+            // portable library's `CType(0, MessageBoxButtons)` is the measured case), so neither
+            // node has a recorded type. Recover the target from the type NAME the parser kept.
+            if (targetType == null && !string.IsNullOrEmpty(node.TargetType?.Name))
+                targetType = _semanticAnalyzer.LookupType(node.TargetType.Name);
 
             // `CType(x, Integer)` IS `CInt(x)` in VB — same rounding (half-to-even), same string
             // parsing, same Boolean rule. Lowered to the builtin so the two spellings cannot

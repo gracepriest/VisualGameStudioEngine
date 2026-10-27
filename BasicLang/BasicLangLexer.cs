@@ -1086,8 +1086,15 @@ namespace BasicLang.Compiler
 
                 ScanExponent(sb);
 
-                // Check for type suffix
-                if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
+                // Check for type suffix. `D` is VB's Decimal suffix; the JS backend and the
+                // portable library carry it as an ordinary double.
+                if (!IsAtEnd() && (Peek() == 'd' || Peek() == 'D'))
+                {
+                    sb.Append(Advance());
+                    double value = double.Parse(sb.ToString().TrimEnd('d', 'D'), CultureInfo.InvariantCulture);
+                    AddToken(TokenType.DoubleLiteral, sb.ToString(), value, startLine, startColumn);
+                }
+                else if (!IsAtEnd() && (Peek() == 'f' || Peek() == 'F'))
                 {
                     sb.Append(Advance());
                     float value = float.Parse(sb.ToString().TrimEnd('f', 'F'), CultureInfo.InvariantCulture);

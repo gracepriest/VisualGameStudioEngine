@@ -6,6 +6,7 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Forms;
 
 namespace BasicLang.Compiler
 {
@@ -184,6 +185,7 @@ namespace BasicLang.Compiler
             _registry = new ModuleRegistry(_resolver);
             _dependencyGraph = new DependencyGraph();
             _preprocessor = new Preprocessor();
+            _preprocessor.Define(IsJavaScriptTarget ? "WEB" : "DESKTOP");
 
             // Add configured search paths
             foreach (var path in _options.SearchPaths)
@@ -351,7 +353,7 @@ namespace BasicLang.Compiler
 
             try
             {
-                var files = WithJavaScriptDeclarations(sourceFiles)
+                var files = WithWebFormsLibrary(WithJavaScriptDeclarations(sourceFiles))
                     .Where(File.Exists)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -430,6 +432,24 @@ namespace BasicLang.Compiler
                 }
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
+                // Task 34: source-level web errors run before analysis so the user sees the named
+                // error rather than a follow-on missing-member or conversion error. Never for the
+                // library's own units.
+                if (IsJavaScriptTarget && projectUnits.Any(IsPortableLibraryUnit))
+                {
+                    var userUnits = projectUnits.Where(u => !IsPortableLibraryUnit(u)).ToList();
+                    foreach (var error in PortableWebSourceChecks.Check(
+                                 userUnits, (source, path) => _preprocessor.Process(source, path)))
+                    {
+                        result.AllErrors.Add(error);
+                    }
+                    if (result.HasErrors) return FinalizeResult(result, startTime);
+                }
+
+                // A program class must not silently shadow a portable-library class.
+                CheckPortableLibraryNameCollisions(projectUnits, result);
+                if (result.HasErrors) return FinalizeResult(result, startTime);
+
                 // Phase 2: compile library-like units (.mod/.cls) before entry
                 // files (.bas/.bl) so their full-fidelity exported symbols
                 // exist when an entry file that uses them is analyzed. Symbol
@@ -440,7 +460,11 @@ namespace BasicLang.Compiler
                 // call into a later-listed .bas file, or mutual references
                 // between two files, resolve with full type information).
                 var compileOrder = projectUnits
-                    .OrderBy(u => IsEntryLikeFile(u.FilePath) ? 1 : 0)
+                    // The shipped library is the base vocabulary of every portable program:
+                    // compile it before the user's entry files so Form/Control members are
+                    // fully known when a generated form reads them (`Form.Controls`,
+                    // `Timer.Interval`), rather than resolving through a sibling signature.
+                    .OrderBy(u => IsPortableLibraryUnit(u) ? 1 : IsEntryLikeFile(u.FilePath) ? 2 : 0)
                     .ToList();
 
                 foreach (var unit in compileOrder)
@@ -535,6 +559,86 @@ namespace BasicLang.Compiler
         /// them — and a program reaches the runtime objects through the hatch:
         /// <c>Dim d As Document = ::document</c>.
         /// </summary>
+        /// <summary>
+        /// The shipped portable Forms library: plain BasicLang sources beside the compiler.
+        /// Included only for a JavaScript build whose user sources mention the Forms/Drawing namespaces.
+        /// </summary>
+        public static string WebFormsLibraryDirectory =>
+            Path.Combine(AppContext.BaseDirectory, "lib", "js", "forms");
+
+        private List<string> WithWebFormsLibrary(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles.ToList();
+            if (!IsJavaScriptTarget) return files;
+            if (!files.Any(HasPortableNamespaceReference)) return files;
+
+            var directory = WebFormsLibraryDirectory;
+            if (!Directory.Exists(directory)) return files;
+
+            // Foundational library files must compile before the kinds that consume their enums and
+            // base types. Master's analyzer does not hoist sibling enums across namespace blocks.
+            var foundation = new[]
+            {
+                "Enums.bas", "Drawing.bas", "EventArgsTypes.bas", "Core.bas",
+                "Control.bas", "ControlStripItem.bas", "ControlStrip.bas"
+            };
+            var libraryFiles = Directory
+                .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Where(f => string.Equals(Path.GetExtension(f), ".bas", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(Path.GetExtension(f), ".bli", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f =>
+                {
+                    var name = Path.GetFileName(f);
+                    var index = Array.FindIndex(foundation, x => string.Equals(x, name, StringComparison.OrdinalIgnoreCase));
+                    return index < 0 ? foundation.Length : index;
+                })
+                .ThenBy(f => f, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var libraryFile in libraryFiles)
+            {
+                if (!files.Any(f => string.Equals(f, libraryFile, StringComparison.OrdinalIgnoreCase)))
+                    files.Add(libraryFile);
+            }
+            return files;
+        }
+
+        /// <summary>Token-level trigger for the portable library; shared with the LSP.</summary>
+        internal static bool HasPortableNamespaceReference(string filePath)
+        {
+            try
+            {
+                return HasPortableNamespaceReferenceText(File.ReadAllText(filePath));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        internal static bool HasPortableNamespaceReferenceText(string source)
+        {
+            var tokens = new Lexer(source).Tokenize();
+            for (var i = 0; i + 2 < tokens.Count; i++)
+            {
+                if (tokens[i].Type != TokenType.Identifier ||
+                    !string.Equals(tokens[i].Lexeme, "System", StringComparison.OrdinalIgnoreCase) ||
+                    tokens[i + 1].Type != TokenType.Dot ||
+                    tokens[i + 2].Type != TokenType.Identifier)
+                    continue;
+
+                if (string.Equals(tokens[i + 2].Lexeme, "Drawing", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                if (i + 4 < tokens.Count &&
+                    string.Equals(tokens[i + 2].Lexeme, "Windows", StringComparison.OrdinalIgnoreCase) &&
+                    tokens[i + 3].Type == TokenType.Dot &&
+                    tokens[i + 4].Type == TokenType.Identifier &&
+                    string.Equals(tokens[i + 4].Lexeme, "Forms", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
         public static string DomDeclarationsPath =>
             Path.Combine(AppContext.BaseDirectory, "lib", "js", "dom-core.bli");
 
@@ -558,9 +662,73 @@ namespace BasicLang.Compiler
             return files;
         }
 
+        private static bool IsPortableLibraryUnit(CompilationUnit unit)
+        {
+            var libraryDirectory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(unit.FilePath).StartsWith(libraryDirectory, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// Parse a file and collect its imports
         /// </summary>
+        private static void CheckPortableLibraryNameCollisions(
+            IReadOnlyList<CompilationUnit> units, CompilationResult result)
+        {
+            var libraryDirectory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            static bool IsLibraryUnit(CompilationUnit unit, string directory) =>
+                Path.GetFullPath(unit.FilePath).StartsWith(directory, StringComparison.OrdinalIgnoreCase);
+
+            if (!units.Any(u => IsLibraryUnit(u, libraryDirectory))) return;
+
+            var libraryClasses = new Dictionary<string, (string FullName, string SimpleName)>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var unit in units.Where(u => IsLibraryUnit(u, libraryDirectory)))
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                    libraryClasses[cls.SimpleName] = (cls.FullName, cls.SimpleName);
+
+            foreach (var unit in units.Where(u => !IsLibraryUnit(u, libraryDirectory)))
+            {
+                foreach (var cls in EnumerateClasses(unit.AST?.Declarations, string.Empty))
+                {
+                    if (!libraryClasses.TryGetValue(cls.SimpleName, out var libraryClass)) continue;
+                    result.AllErrors.Add(new SemanticError(
+                        $"PortableLibraryNameCollision: program class '{cls.SimpleName}' collides with " +
+                        $"the portable library's '{libraryClass.FullName}'. Rename the program class.",
+                        cls.Line, cls.Column));
+                }
+            }
+        }
+
+        private static IEnumerable<(string FullName, string SimpleName, int Line, int Column)>
+            EnumerateClasses(IEnumerable<ASTNode> nodes, string prefix)
+        {
+            if (nodes == null) yield break;
+            foreach (var node in nodes)
+            {
+                switch (node)
+                {
+                    case NamespaceNode ns:
+                        var namespacePrefix = string.IsNullOrEmpty(prefix) ? ns.Name : prefix + "." + ns.Name;
+                        foreach (var nested in EnumerateClasses(ns.Members, namespacePrefix)) yield return nested;
+                        break;
+                    case ModuleNode module:
+                        foreach (var nested in EnumerateClasses(module.Members, prefix)) yield return nested;
+                        break;
+                    case ClassNode cls:
+                        var fullName = string.IsNullOrEmpty(prefix) ? cls.Name : prefix + "." + cls.Name;
+                        yield return (fullName, cls.Name, cls.Line, cls.Column);
+                        foreach (var nested in EnumerateClasses(cls.Members, fullName)) yield return nested;
+                        break;
+                }
+            }
+        }
+
         private void ParseAndCollectImports(CompilationUnit unit, CompilationResult result)
         {
             if (unit.Status != CompilationStatus.Pending)
@@ -772,6 +940,7 @@ namespace BasicLang.Compiler
                     _options.NetResolverFactory,
                     nativeBackend: string.Equals(_options.TargetBackend, "cpp",
                                                  StringComparison.OrdinalIgnoreCase));
+                analyzer.ConfigureTarget(_options.TargetBackend, IsPortableLibraryUnit(unit));
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);
@@ -809,7 +978,6 @@ namespace BasicLang.Compiler
                 // surface through AllErrors. HasErrors filters by severity, so warnings
                 // here cannot fail the build.
                 result.AllErrors.AddRange(analyzer.Errors);
-
                 if (!success)
                 {
                     unit.Status = CompilationStatus.Error;
@@ -849,7 +1017,7 @@ namespace BasicLang.Compiler
                 // exports the real symbol itself (re-exporting the shell made a
                 // unit collide with its own declarations coming back through a
                 // sibling).
-                if (symbol.IsSiblingSignature)
+                if (symbol.IsSiblingSignature || symbol.IsImported)
                 {
                     continue;
                 }
@@ -876,8 +1044,7 @@ namespace BasicLang.Compiler
                     symbol.Kind == SymbolKind.Subroutine ||
                     symbol.Kind == SymbolKind.Class)
                 {
-                    unit.ExportedSymbols.Add(symbol);
-                }
+                    unit.ExportedSymbols.Add(symbol);                }
             }
 
             // ⛔ A Module block's variables and constants live in the Module's OWN scope, a child
@@ -901,6 +1068,36 @@ namespace BasicLang.Compiler
                         unit.ExportedSymbols.Add(symbol);
                     }
                 }
+            }
+
+            // Namespace scopes: enums declared inside `Namespace System.Windows.Forms` are Type
+            // symbols in CHILD scopes, not the global one. Export them and their qualified member
+            // constants so `DockStyle` / `DockStyle.Top` resolve across library files.
+            foreach (var childScope in AllChildScopes(scope))
+            {
+                foreach (var symbol in childScope.Symbols.Values)
+                {
+                    if (symbol.IsSiblingSignature || symbol.IsImported) continue;
+                    if (symbol.Kind == SymbolKind.Type ||
+                        symbol.Kind == SymbolKind.Class ||
+                        symbol.Kind == SymbolKind.Structure ||
+                        symbol.Kind == SymbolKind.Interface ||
+                        (symbol.Kind == SymbolKind.Constant && symbol.Name.Contains('.', StringComparison.Ordinal)))
+                    {
+                        if (symbol.Access == AST.AccessModifier.Public || symbol.Kind == SymbolKind.Type)
+                            unit.ExportedSymbols.Add(symbol);
+                    }
+                }
+            }
+        }
+
+        private static IEnumerable<Scope> AllChildScopes(Scope scope)
+        {
+            foreach (var child in scope.Children)
+            {
+                yield return child;
+                foreach (var nested in AllChildScopes(child))
+                    yield return nested;
             }
         }
 
@@ -991,6 +1188,16 @@ namespace BasicLang.Compiler
                     }
                 }
 
+                // A namespaced class is also addressable by its simple name: the portable
+                // library's Color/Point/Font are declared under System.Drawing and used
+                // unqualified through `Using System.Drawing`.
+                foreach (var key in combined.Classes.Keys.Where(k => k.Contains('.', StringComparison.Ordinal)).ToList())
+                {
+                    var simple = key.Substring(key.LastIndexOf('.') + 1);
+                    if (!combined.Classes.ContainsKey(simple))
+                        combined.Classes[simple] = combined.Classes[key];
+                }
+
                 // Add interfaces
                 foreach (var iface in unit.IR.Interfaces)
                 {
@@ -1007,6 +1214,13 @@ namespace BasicLang.Compiler
                     {
                         combined.Enums[enumDecl.Key] = enumDecl.Value;
                     }
+                }
+
+                foreach (var key in combined.Enums.Keys.Where(k => k.Contains('.', StringComparison.Ordinal)).ToList())
+                {
+                    var simple = key.Substring(key.LastIndexOf('.') + 1);
+                    if (!combined.Enums.ContainsKey(simple))
+                        combined.Enums[simple] = combined.Enums[key];
                 }
 
                 // Add delegates
