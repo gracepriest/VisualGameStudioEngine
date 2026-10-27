@@ -669,14 +669,9 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
         }
 
         tracks.RemoveAt(tracks.Count - 1);
-        if (tracks.Count == 0)
-        {
-            Reset();
-        }
-        else
-        {
-            Commit(string.Join(",", tracks));
-        }
+        // A grid always has at least one implicit track. Keep the row valid rather than snapping
+        // back to the catalog's two-track default, which would undo the user's first removal too.
+        Commit(string.Join(",", tracks.Count == 0 ? new[] { Name == "Rows" ? "auto" : "1fr" } : tracks));
     }
 
     /// <summary>Chooses a specialised editor after construction (catalog rows have no editor column).</summary>
