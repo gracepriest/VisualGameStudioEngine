@@ -230,6 +230,10 @@ internal static class CppPipelineLines
     /// <summary>The combined single-file output with the spliced runtime cut off the front.</summary>
     public static string AfterRuntime(string combined)
     {
+        // The generated C++ uses CRLF on Windows; the marker regex anchors `$` before LF only,
+        // so normalise first or no runtime marker matches and the whole runtime leaks into the
+        // line multiset. Multiset normalises later anyway — this is the same view, just earlier.
+        combined = combined.Replace("\r\n", "\n").Replace('\r', '\n');
         var ends = RuntimeEnd.Matches(combined);
         return ends.Count == 0 ? combined : combined[(ends[^1].Index + ends[^1].Length)..];
     }

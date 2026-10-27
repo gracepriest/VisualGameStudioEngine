@@ -114,7 +114,7 @@ End Sub";
     [Test]
     public void EveryTextRoute_UsesTheFormatter_NeverToStringOrABareCout()
     {
-        var cpp = Cpp(Program);
+        var cpp = Cpp(Program).Replace("\r\n", "\n");
         var main = cpp.Substring(cpp.IndexOf("void Main()\n{", System.StringComparison.Ordinal));
 
         Assert.That(main, Does.Contain("BasicLang::FormatDouble("));

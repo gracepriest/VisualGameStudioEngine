@@ -79,7 +79,7 @@ public class SnippetServiceTests
     [Test]
     public void SearchSnippets_EmptyQuery_ReturnsAll()
     {
-        var allSnippets = _service.GetSnippets();
+        var allSnippets = _service.GetAllSnippets();
         var searchResults = _service.SearchSnippets("");
 
         Assert.That(searchResults.Count, Is.EqualTo(allSnippets.Count));
@@ -88,7 +88,7 @@ public class SnippetServiceTests
     [Test]
     public void SearchSnippets_WhitespaceQuery_ReturnsAll()
     {
-        var allSnippets = _service.GetSnippets();
+        var allSnippets = _service.GetAllSnippets();
         var searchResults = _service.SearchSnippets("   ");
 
         Assert.That(searchResults.Count, Is.EqualTo(allSnippets.Count));

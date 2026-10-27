@@ -583,6 +583,14 @@ public sealed record FormPropertyDef(
             return $"{WinFormsEnumType}.{Canonical(value)}";
         }
 
+        // Image/Icon carry their own asset rule: a project path is anchored to the program's
+        // folder and the call is fully qualified (a user `Using` can otherwise make Image
+        // ambiguous). Their WinFormsFactory spelling is only the unanchored fallback.
+        if (Type == FormPropertyType.Image)
+            return AssetLiteral("System.Drawing.Image.FromFile", value);
+        if (Type == FormPropertyType.Icon)
+            return AssetLiteral("New System.Drawing.Icon", value);
+
         if (WinFormsFactory != null)
         {
             return $"{WinFormsFactory}({StringLiteral(value)})";
@@ -601,8 +609,6 @@ public sealed record FormPropertyDef(
             FormPropertyType.Fraction => TryParseFraction(value, out var fraction) ? FractionText(fraction) : null,
             // The field the Id names. ΓÜá Whether such a field EXISTS is a document question ΓÇö the region writer's (BL8034).
             FormPropertyType.Reference => FormDocument.IsLegalControlId(value) ? value : null,
-            FormPropertyType.Image => AssetLiteral("System.Drawing.Image.FromFile", value),
-            FormPropertyType.Icon => AssetLiteral("New System.Drawing.Icon", value),
             _ => null
         };
     }

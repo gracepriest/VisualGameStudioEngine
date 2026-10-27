@@ -162,7 +162,31 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             try
             {
                 fillTemp(temp);
-                File.Move(temp, path, overwrite: true);
+                try
+                {
+                    File.Move(temp, path, overwrite: true);
+                }
+                catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException) && File.Exists(path))
+                {
+                    // A mapped target cannot be REPLACED in one rename (the overwrite deletes it
+                    // first). Rename the old file ASIDE, then put the new one in its place; the
+                    // old name can be removed once no view holds it. A scanner mapping the file
+                    // is exactly the case this protects.
+                    var old = Path.Combine(directory,
+                        "." + Path.GetFileName(path) + "." + Path.GetRandomFileName() + ".old");
+                    File.Move(path, old);
+                    try
+                    {
+                        File.Move(temp, path);
+                    }
+                    catch
+                    {
+                        try { File.Move(old, path); } catch { /* original failure wins */ }
+                        throw;
+                    }
+
+                    try { File.Delete(old); } catch { /* the rebuilt file is already in place */ }
+                }
             }
             catch
             {
