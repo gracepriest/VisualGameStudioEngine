@@ -28,8 +28,8 @@ public static class FormDocumentLoader
     /// Saying so is what stops the missing page from being a silent one.</para>
     /// </summary>
     public static IReadOnlyList<FormDocument> LoadWebForms(
-        IEnumerable<string> sourcePaths, Action<string>? warn = null) =>
-        Load(sourcePaths, FormTarget.Web, "was not turned into a page", warn).Select(f => f.Model).ToList();
+        IEnumerable<string> sourcePaths, Action<string>? warn = null, Action<string>? error = null) =>
+        Load(sourcePaths, FormTarget.Web, "was not turned into a page", warn, error).Select(f => f.Model).ToList();
 
     /// <summary>
     /// The form documents of <paramref name="target"/> among <paramref name="sourcePaths"/>, in listed order, each with its
@@ -39,8 +39,11 @@ public static class FormDocumentLoader
     /// <c>'X' {consequence}: …</c> — "was not turned into a page" on the web route, "— its images and icons were not
     /// copied into the output" on the C# route. ⛔ A parameter, never a literal here: one route's consequence is false on
     /// the other.</param>
+    /// <param name="error">When supplied, a desktop-only control is reported as a build ERROR here instead of
+    /// through <paramref name="warn"/>. The document is still skipped; the caller decides whether that fails the build.</param>
     public static IReadOnlyList<LoadedForm> Load(
-        IEnumerable<string> sourcePaths, FormTarget target, string consequence, Action<string>? warn = null)
+        IEnumerable<string> sourcePaths, FormTarget target, string consequence, Action<string>? warn = null,
+        Action<string>? error = null)
     {
         ArgumentNullException.ThrowIfNull(sourcePaths);
 
@@ -80,10 +83,19 @@ public static class FormDocumentLoader
                 .FirstOrDefault(c => c.Definition is { } definition && !definition.SupportsTarget(FormTarget.Web));
             if (desktopOnly != null)
             {
-                warn?.Invoke(
+                var message =
                     $"{DesignCodes.DesktopOnlyKind}: '{Path.GetFileName(path)}' uses desktop-only control " +
                     $"'{desktopOnly.Kind}' ({desktopOnly.Id}); the page was not generated. " +
-                    "Remove it or target WinForms.");
+                    "Remove it or target WinForms.";
+                if (error != null)
+                {
+                    error(message);
+                }
+                else
+                {
+                    warn?.Invoke(message);
+                }
+
                 continue;
             }
 

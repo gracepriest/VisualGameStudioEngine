@@ -77,11 +77,27 @@ public sealed class FormTrayViewModel : ObservableObject
         OnPropertyChanged(nameof(IsVisible));
     }
 
-    /// <summary>A click on an item: select it, through the shared selection.</summary>
-    public void Select(FormTrayItem item)
+    /// <summary>
+    /// A click on an item: select it through the shared selection. <paramref name="add"/> is Shift
+    /// (add, never remove); <paramref name="toggle"/> is Ctrl (add or remove). Matches the canvas:
+    /// plain replaces, Shift extends, Ctrl toggles.
+    /// </summary>
+    public void Select(FormTrayItem item, bool add = false, bool toggle = false)
     {
         ArgumentNullException.ThrowIfNull(item);
-        _selection.Set(item.Control);
+
+        if (toggle)
+        {
+            _selection.Toggle(item.Control);
+        }
+        else if (add)
+        {
+            _selection.Add(item.Control);
+        }
+        else
+        {
+            _selection.Set(item.Control);
+        }
     }
 
     private void Mark()

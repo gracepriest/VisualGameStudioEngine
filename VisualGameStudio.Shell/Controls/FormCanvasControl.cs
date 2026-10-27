@@ -605,6 +605,16 @@ public class FormCanvasControl : Control
             }
         }
 
+        // Ctrl+A: every control on the form. The tray is a separate surface; components join the
+        // selection through the tray itself.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.A && Selection is { } selectAll)
+        {
+            selectAll.SetRange(document.AllControls().ToList());
+            SelectedControl = selectAll.Primary;
+            e.Handled = true;
+            return;
+        }
+
         if (SelectedControl is not { } control)
         {
             return;
@@ -796,7 +806,7 @@ public class FormCanvasControl : Control
     /// cannot move a group at all. It PROMOTES the control to primary instead and keeps the group
     /// (slice 6 D-13, VS).</para>
     /// </summary>
-    private void ApplyClickSelection(FormControl? hit, bool extend)
+    private void ApplyClickSelection(FormControl? hit, bool add, bool toggle)
     {
         var selection = Selection;
         if (selection == null)
@@ -811,9 +821,13 @@ public class FormCanvasControl : Control
             return;
         }
 
-        if (extend)
+        if (toggle)
         {
             selection.Toggle(hit);
+        }
+        else if (add)
+        {
+            selection.Add(hit);
         }
         else if (!selection.Contains(hit))
         {
@@ -959,8 +973,9 @@ public class FormCanvasControl : Control
             // NOTHING, starts a rubber band, and the empty-band release clears the selection
             // outright: the open menu vanishes as you click on it.
             var hit = _transform.HitTest(document, point, SelectedControl);
-            var extend = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ||
-                         e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+            var extend = shift || ctrl;
 
             if (hit == null && !extend)
             {
@@ -988,7 +1003,7 @@ public class FormCanvasControl : Control
             _pressIsSelecting = true;
             try
             {
-                ApplyClickSelection(hit, extend);
+                ApplyClickSelection(hit, shift, ctrl);
             }
             finally
             {
@@ -1826,7 +1841,7 @@ public class FormCanvasControl : Control
         })
         {
             context.DrawRectangle(
-                HandleBrush,
+                PrimaryHandleBrush,
                 HandlePen,
                 new Rect(centre.X - reach, centre.Y - reach, reach * 2, reach * 2));
         }
@@ -3273,8 +3288,13 @@ public class FormCanvasControl : Control
     private static readonly IPen RowPen = new Pen(new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0)));
 
     // ⚠ VB6 marks a selection with HANDLES ALONE — no outline. Solid navy squares, which read
-    // against the form face and a white control interior alike.
+    // against the form face and a white control interior alike. These are the FORM's own grips;
+    // a selected control's handles are white with a black border (PrimaryHandleBrush), as VS draws
+    // the primary of a multi-selection.
     private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x00, 0x80));
+
+    /// <summary>The primary's grab handles: white fill, black border (VS), distinct from the dashed secondary outline.</summary>
+    private static readonly IBrush PrimaryHandleBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
 
     /// <summary>
     /// The outline on a secondary member of a multi-selection: the primary's navy, dashed so the two

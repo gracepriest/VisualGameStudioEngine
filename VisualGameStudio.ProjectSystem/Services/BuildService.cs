@@ -636,9 +636,35 @@ public class BuildService : IBuildService
                 // That glob cannot yield a .blwebform by design (it feeds the lexer, and a form
                 // document is XML), so a project with explicit <Compile> items got pages and a
                 // default one — same files on disk — got none, silently.
+                var formErrors = new List<string>();
                 loadedWebForms = BasicLang.Forms.FormDocumentLoader.Load(formDocumentPaths, BasicLang.Forms.FormTarget.Web,
-                    "was not turned into a page", m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build));
+                    "was not turned into a page", m => _outputService.WriteLine($"Warning: {m}", OutputCategory.Build),
+                    m =>
+                    {
+                        formErrors.Add(m);
+                        _outputService.WriteError(m, OutputCategory.Build);
+                    });
                 webForms = loadedWebForms.Select(f => f.Model).ToList();
+
+                // ⛔ Task 46: a desktop-only control on a page is a BUILD error on both routes. The
+                // page cannot be emitted, and a green build with a silently missing page is worse
+                // than a red one. Stop before compile/codegen, exactly as the CLI does.
+                if (formErrors.Count > 0)
+                {
+                    foreach (var message in formErrors)
+                    {
+                        result.Diagnostics.Add(new DiagnosticItem
+                        {
+                            Id = BasicLang.Forms.DesignCodes.DesktopOnlyKind,
+                            Message = message,
+                            FilePath = project.FilePath,
+                            Severity = DiagnosticSeverity.Error
+                        });
+                    }
+
+                    result.Success = false;
+                    return result;
+                }
 
                 // ⛔⛔ D7's dispatch, as a real source file compiled with everything else — the
                 // CLI does exactly this, and the two routes must agree. Without it the `data-form`

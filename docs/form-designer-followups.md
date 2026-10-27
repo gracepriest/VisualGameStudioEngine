@@ -111,25 +111,23 @@ and carries a full-suite blast radius — or keep single-edge anchors plus `Dock
 use is *Unexpected token in expression*. Either wire it up (see 8) or stop lexing it, because a
 token that only ever produces a parse error is worse than no token.
 
-### 10. `Avalonia.Controls.ColorPicker` 11.3.13 IS available
+### 10. `Avalonia.Controls.ColorPicker` 11.3.13 IS available — FIXED 2026-10-27
 The designer plan prices colour editors as hand-built on the grounds that "Avalonia 11.3 base ships
 no ColorPicker". True of the base package — but the first-party `Avalonia.Controls.ColorPicker`
 package restores fine, and `IDE/Avalonia.Controls.ColorPicker.dll` is already in the committed drop.
 
-The property grid's colour rows are text for now. Adopting the real control needs its theme included
-in `App.axaml`, and a missing style include renders a blank control — which is not something a
-headless run or a build will tell you. **Do this on a machine where you can see it.**
+The property grid's colour rows now carry `FormColorDropDown` (Custom / Web / System). Its Custom
+tab is the real `ColorView`; the theme include lives once in `FormPropertyGridView.axaml`, and
+`FormPropertyGridEditorRealViewTests` drives a real click and asserts the view has a template. The
+visual look still deserves a human glance — a headless run proves the control is templated, not
+that it reads well on screen.
 
-### 11. `FormClipboard` is complete and nothing calls it
+### 11. `FormClipboard` is complete and nothing calls it — FIXED 2026-10-27
 `FormClipboard.SerializeSubtree` / `DeserializeSubtree` (`FormDocument.cs`) do the whole job —
-target-matched fragments, id collision renaming, handler retargeting by convention — and the only
-callers are tests. The canvas has no Copy/Cut/Paste commands, so a user cannot reach any of it.
-
-This is the same shape as the two dead generators fixed in `49a9bda` (`RegionWriter.Write` and
-`DispatchSource`), and it is the one that is left. Wiring it is a canvas feature — keyboard bindings,
-a selection-to-fragment path, a paste-at-cursor offset rule — not a fix, so it is filed rather than
-bolted on. **Until it is wired, treat the clipboard tests as design notes, not as coverage of
-anything a user can do.**
+target-matched fragments, id collision renaming, handler retargeting by convention. The canvas now
+has `CopyCommand` / `CutCommand` / `PasteCommand`, Ctrl+C/X/V, menu items, and
+`CodeEditorDocumentViewModel`'s `CopyControlsCommand` etc. call `FormClipboard`;
+`FormDesignerCommandTests` drives those same commands.
 
 ### 12. D7 describes a dispatch shape that does not build
 The spec says the dispatch helper is "the only generated **top-level** name". A top-level `Sub` in
@@ -634,26 +632,22 @@ Type Here editing surface or the strip/item model 24d and 24e shipped; it is a p
 rendering gap in the simple-control caption path, found while eyeballing the IDE for the owner's
 acceptance pass and left for its own investigation.
 
-### 34. The property grid's Dock row accepts any text — found 2026-09-29, review of the BL8033 fix
+### 34. The property grid's Dock row accepts any text — FIXED 2026-10-27
 
-`FormPropertyGridViewModel`'s pixel `Dock` row (≈380-386) writes whatever is typed straight into
-`PixelGeometry.Dock` (`v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v`). Since BL8033 a value
-that is not a `DockStyle` member is refused by the region writer, so the typo no longer reaches generated
-code — but it is caught on SAVE, with the canvas showing the control undocked until then. The write lambda
-should go through `FormDock.Canonical` (store the member's own spelling) and snap back on null, the way a
-refused catalog value already snaps back in the real TextBox (the posted two-step echo, property-grid slice
-2). No code yet.
+The pixel `Dock` row now parses through `FormDock.Canonical`: a member is stored in the enum's own
+spelling, a blank clears the attribute, and a typo returns false so the row snaps back. The canvas
+and the writer never see the typo. `FormAnchorDockPickerTests` pins the text path.
 
-### 35. Renaming a control's Id must rewrite the Form references that name it — found 2026-10-04, property-grid slice 4 review
+### 35. Renaming a control's Id must rewrite the Form references that name it — still deliberate 2026-10-27
 
 VS rewrites `AcceptButton`/`CancelButton` when the Button they name is renamed. Today NO route renames an
 Id: the grid's `Name` row is frozen (`FormPropertyGridViewModel.AddIntrinsicRows`), the canvas's F2 rename
 edits a strip item's `Text`, and `FormClipboard`'s rename mints ids for PASTED copies only (nothing refers to
-them yet). So there is nothing to fix and no caller to hang a helper on. The day `Name` becomes editable, the
-rename belongs beside `FormDocument.RemoveControl` in the MODEL (one place, every route), rewriting every
-`FormControlCatalog.FormRoot` Reference row whose value is the old Id, in the same write so one undo
-restores both — `FormReferences.ForgetRemoved` is the delete half and the shape to copy. Delete and Cut
-already follow VS (slice 4 review follow-up).
+them yet). The rename belongs beside `FormDocument.RemoveControl` in the MODEL (one place, every route),
+rewriting every `FormControlCatalog.FormRoot` Reference row whose value is the old Id, in the same write so
+one undo restores both — `FormReferences.ForgetRemoved` is the delete half and the shape to copy. It stays
+unfixed until the code-behind rename does too: the generated field name appears in the user's `.bas`, so an
+Id-only rename would turn a working form into CS0103/BL1004. Do not unfreeze `Name` without that half.
 
 ## Property-grid slice 5 (events) — filed 2026-10-05
 
@@ -677,13 +671,14 @@ Also user-facing (D-3): on a web page Form Load runs at the END of `InitializeCo
 `Me.InitializeComponent()` in `New()` runs AFTER Load; on WinForms Load runs later, when the form is shown. The web
 scaffold carries that comment beside the call.
 
-### 37. `FormCodeScan` reads every `#If` as active except a literal `False`/`0`
+### 37. `FormCodeScan` reads every `#If` as active except a literal `False`/`0` — PARTLY FIXED 2026-10-27
 
-The scanner (rebuilt on BasicLang's lexer in slice 5 review round 5) skips `#If False`/`#If 0` and reads every other
-branch — `#If DEBUG`, `#IfDef`, `#IfNDef`, `#ElseIf` — as live, so a Sub in an inactive branch can be offered in the
-handler drop-down and counted as a taken name. Full evaluation needs the project's `#Define` set and constants: the
-follow-up is piece 2's `ProcessForEditor` (the preprocessor run for editor features), which `FormCodeScan` should call
-instead of its own literal-false rule.
+The scanner (rebuilt on BasicLang's lexer in slice 5 review round 5) now evaluates literal conditions
+(`True`/`False`, integers, `Not`, `And`/`AndAlso`, `Or`/`OrElse`, comparisons) and tracks which branch of
+an `#If`/`#ElseIf`/`#Else` was taken, so a known `True` no longer leaves its `#Else` live. It also accepts
+an optional `#Define` set on `Scan`/`DeclaredSubs`/`FindSub` for `#IfDef`/`#IfNDef` and bare names; no
+production caller supplies the project's defines yet. Full evaluation still belongs to piece 2's
+`ProcessForEditor`, which `FormCodeScan` should call instead of its own partial evaluator.
 
 ### 38. No "handler does not fit its event" diagnostic code (D-7)
 
@@ -730,19 +725,18 @@ its other number errors throw. `FormCodeScan` now survives any non-fatal lexer e
   the view model).
 - An editable Avalonia ComboBox (11.3.13) opens only from its 12px glyph, not from a click on its right-hand padding.
 
-### 44. Multi-select (property-grid slice 6): deferred VS behaviour and things found
+### 44. Multi-select (property-grid slice 6): deferred VS behaviour and things found — FIXED 2026-10-27
 
-Deferred by the slice-6 pre-flight (D-12), each a VS behaviour this designer does not have yet:
+The five deferred behaviours are now implemented:
 
-- **The selection does not survive undo/redo.** An undo re-parses the document and `SyncDesignerPanels` clears the
-  store (the old parse's objects are ghosts); VS keeps the selection. Needs re-resolving the selection by id across a
-  re-parse — the grid's own rebuild would then follow.
-- **Tray Ctrl+click.** The tray only `Set`s, so components cannot join a multi-selection. The grid's rules are generic
-  (D-7), so this is a tray-only change.
-- **Ctrl+A** (select all) is not bound on the canvas.
-- **Shift adds, Ctrl toggles** in VS; here both toggle (`FormCanvasControl.ApplyClickSelection`).
-- **The primary's white handles.** VS marks the primary with white grab handles and the others with black; the canvas
-  draws all members alike, so the control align-lefts will use is not visible (promotion, D-13, made it easy to change).
+- **Selection survives undo/redo.** `AdoptDocumentText` remembers the selection's Ids (and, for a
+  delete/cut, the pre-removal snapshot) and re-resolves them against the new parse.
+- **Tray Ctrl+click.** `FormTrayViewModel.Select(item, add, toggle)` follows the canvas: Shift adds,
+  Ctrl toggles, plain replaces.
+- **Ctrl+A** selects every control on the canvas.
+- **Shift adds, Ctrl toggles** in `FormCanvasControl.ApplyClickSelection`, matching VS.
+- **The primary's white handles.** The primary draws white fill / black border; secondary members keep
+  the dashed outline.
 
 Found while executing slice 6, recorded rather than fixed:
 
@@ -758,3 +752,36 @@ Found while executing slice 6, recorded rather than fixed:
   mapping one WinForms event to different DOM events do not share a row. No catalog pair does that today.
 - **Merged rows have no Reset menu state of their own while a member is frozen** — the row is frozen (D-3) and offers
   nothing, which is correct, but the reason names only the FIRST frozen member.
+
+---
+
+## 2026-10-27 — form-designer gap pass
+
+Fixed in this pass, with tests:
+
+- **BL8042 is a hard build error** on both routes: the CLI (`Program.cs`) and the IDE
+  (`BuildService.cs`) stop before compiling or writing a page. `FormDocumentLoader.Load` still accepts a
+  warning-only callback for callers that want the old behaviour.
+- **Task 43 gates:** `Task43ConversionCliTests` compares the CLI's bytes with
+  `FormCodeConversion.Convert`'s bytes; `PortableBuildErrorTests` compiles a converted form and pins the
+  absence of `MixedCodeStyle`.
+- **Task 44 IDE offer:** the DOM-to-portable offer, Convert, Not-now byte identity, one-offer-per-open and
+  already-portable refusal are covered through `CodeEditorDocumentViewModel`; the real open route calls
+  those methods in `MainWindowViewModel`.
+- **Multi-select:** undo/redo selection, Delete/Cut undo selection, tray Shift/Ctrl, canvas Ctrl+A, and
+  VS's Shift-adds/Ctrl-toggles rule.
+- **Dock:** typed Dock values are canonicalised and typos snap back before the model/writer sees them.
+- **Primary handles:** white fill, black border, distinct from the dashed secondary outline.
+- **`FormCodeScan`:** literal `#If`/`#ElseIf` evaluation and an optional `#Define` set.
+
+Still open, and why:
+
+- **Manual click-throughs** for Tasks 36, 42, 45 and 47 have not been performed in this headless
+  environment. The automated gates are green; the human look-and-feel pass remains.
+- **`FormCodeScan`'s full preprocessor:** it now evaluates literals, but project-defined symbols only
+  reach it when a caller supplies them. Piece 2's `ProcessForEditor` is still the real fix.
+- **Renaming a control Id** remains deliberately impossible: the grid's Name row is frozen because the
+  generated field name also appears in the user's code-behind. Enabling it needs a code rename in the
+  same write.
+- **Task 41's default flip** (new web forms scaffold portable) is not part of this pass; ordinary
+  New Form still scaffolds the historical DOM style so the conversion offer has something to offer.

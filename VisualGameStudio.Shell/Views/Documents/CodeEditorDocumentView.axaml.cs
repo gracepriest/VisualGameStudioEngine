@@ -95,7 +95,10 @@ public partial class CodeEditorDocumentView : UserControl
             return;
         }
 
-        vm.Tray.Select(item);
+        vm.Tray.Select(
+            item,
+            add: e.KeyModifiers.HasFlag(KeyModifiers.Shift),
+            toggle: e.KeyModifiers.HasFlag(KeyModifiers.Control));
         ComponentTray.Focus();
         e.Handled = true;
     }

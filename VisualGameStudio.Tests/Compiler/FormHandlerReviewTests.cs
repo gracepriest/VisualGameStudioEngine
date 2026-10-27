@@ -60,6 +60,35 @@ public class FormHandlerReviewTests
     }
 
     [Test]
+    public void KnownLiteralConditions_PruneTheBranchesTheyMakeDead()
+    {
+        const string code =
+            "Public Class LoginForm\n" +
+            "#If True Then\n    Private Sub Live1()\n    End Sub\n#Else\n    Private Sub Dead1()\n    End Sub\n#End If\n" +
+            "#If Not False Then\n    Private Sub Live2()\n    End Sub\n#Else\n    Private Sub Dead2()\n    End Sub\n#End If\n" +
+            "#If False Then\n    Private Sub Dead3()\n    End Sub\n#ElseIf False Then\n    Private Sub Dead4()\n    End Sub\n#ElseIf 1 = 1 Then\n    Private Sub Live3()\n    End Sub\n#Else\n    Private Sub Dead5()\n    End Sub\n#End If\n" +
+            "End Class\n";
+
+        Assert.That(Names(code), Is.EqualTo("Live1,Live2,Live3"));
+    }
+
+    [Test]
+    public void ADefineSet_MakesIfDefAndBareNamesDecidable()
+    {
+        const string code =
+            "Public Class LoginForm\n" +
+            "#If DEBUG Then\n    Private Sub DeadDebug()\n    End Sub\n#Else\n    Private Sub LiveRelease()\n    End Sub\n#End If\n" +
+            "#IfDef TRACE Then\n    Private Sub LiveTrace()\n    End Sub\n#Else\n    Private Sub DeadTrace()\n    End Sub\n#End If\n" +
+            "#IfNDef TRACE Then\n    Private Sub DeadNoTrace()\n    End Sub\n#End If\n" +
+            "End Class\n";
+
+        var subs = FormCodeScan.DeclaredSubs(code, "LoginForm", Array.Empty<string>());
+
+        Assert.That(subs.Select(s => s.Name), Is.EqualTo(new[] { "LiveRelease", "DeadTrace", "DeadNoTrace" }),
+            "with an EMPTY #Define set, DEBUG/TRACE are false — until now every branch was read as live");
+    }
+
+    [Test]
     public void AttributesOnTheSameLine_AGenericSub_AndAnUnderscoreContinuation_AreRead()
     {
         const string code =

@@ -209,6 +209,35 @@ public class FormAssetBuildRouteTests
     }
 
     /// <summary>
+    /// Task 46: the IDE route must fail too, not warn and skip the page. The loader is shared with the
+    /// CLI, but BuildService has its own result/diagnostic plumbing — this pins that plumbing.
+    /// </summary>
+    [Test]
+    public async Task Ide_WebProjectWithADesktopOnlyControl_FailsWithBL8042()
+    {
+        WebProject("ide");
+        var documentPath = P("Pic.blwebform");
+        var document = BasicLang.Forms.Serialization.FormDocumentReader
+            .Read(documentPath, File.ReadAllText(documentPath)).Model;
+        document.Controls.Add(new FormControl { Kind = "DataGridView", Id = "grid", Geometry = new GridGeometry() });
+        File.WriteAllText(documentPath, BasicLang.Forms.Serialization.FormDocumentWriter.Create(document));
+
+        var result = await IdeBuild();
+
+        var error = result.Diagnostics.SingleOrDefault(d => d.Id == DesignCodes.DesktopOnlyKind);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False, "a desktop-only control on a web form fails the build");
+            Assert.That(error, Is.Not.Null, string.Join("\n", result.Diagnostics.Select(d => d.Id + " " + d.Message)));
+            Assert.That(error?.Severity, Is.EqualTo(DiagnosticSeverity.Error));
+            var html = Directory.Exists(P("bin"))
+                ? Directory.GetFiles(P("bin"), "*.html", SearchOption.AllDirectories)
+                : Array.Empty<string>();
+            Assert.That(html, Is.Empty, "no page is emitted for a refused form");
+        });
+    }
+
+    /// <summary>
     /// The fallback branch: when <c>ProjectFile.Load</c> cannot read the .blproj, BuildService reads the form documents
     /// from the IDE project's own items — stored MSBuild-style (<c>Forms\Pic.blwebform</c>), so each goes through
     /// <c>ProjectFile.ToLocalPath</c> (a raw backslash is a file-name character off Windows).

@@ -261,7 +261,7 @@ public class FormCanvasPixelPageTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(undocked, Is.EqualTo(Navy), $"{w}x{h}: control — the sampler sees a handle");
+                Assert.That(undocked, Is.EqualTo(Color.FromRgb(0xFF, 0xFF, 0xFF)), $"{w}x{h}: control — the sampler sees a primary handle");
                 Assert.That(docked, Is.Not.EqualTo(Navy), $"{w}x{h}: a docked control has no handles");
             });
         }

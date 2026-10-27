@@ -105,4 +105,36 @@ public partial class FormPropertyGridMultiSelectTests
                 "a child whose container is NOT selected is top-level");
         });
     }
+
+    /// <summary>
+    /// Entry 44: undo/redo re-parses the document and used to clear the selection. VS keeps it —
+    /// re-resolved by id against the new document, in selection order, with the primary still last.
+    /// </summary>
+    [Test]
+    public void UndoAndRedo_KeepTheSelection_ReResolvedById()
+    {
+        var vm = OpenVm(MultiDoc, "btn", "btn2", "lbl");
+        var before = vm.Text;
+
+        vm.DeleteControlCommand.Execute(vm.Selection.Primary);
+        Assert.That(vm.Selection.IsEmpty, Is.True, "precondition: Delete clears the selection");
+
+        vm.UndoDesignerEditCommand.Execute(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Text, Is.EqualTo(before));
+            Assert.That(vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "btn", "btn2", "lbl" }),
+                "the selection is back, in order");
+            Assert.That(vm.Selection.Primary?.Id, Is.EqualTo("lbl"), "the primary is still the last member");
+            Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("lbl"), "and the grid follows it");
+        });
+
+        vm.DeleteControlCommand.Execute(vm.Selection.Primary);
+        vm.UndoDesignerEditCommand.Execute(null);
+        vm.RedoDesignerEditCommand.Execute(null);
+
+        Assert.That(vm.Selection.IsEmpty, Is.True,
+            "redo removes the controls again; a selection may not outlive the objects it named");
+    }
 }

@@ -869,9 +869,24 @@ namespace BasicLang.Compiler.Driver
                 // is XML), so handing it to the page emitter meant a project with explicit
                 // <Compile> items got pages and a default one — same files on disk — got none,
                 // silently.
+                var formErrors = new List<string>();
                 loadedWebForms = Forms.FormDocumentLoader.Load(project.GetFormDocuments(), Forms.FormTarget.Web,
-                    "was not turned into a page", m => Console.Error.WriteLine($"  Warning: {m}"));
+                    "was not turned into a page", m => Console.Error.WriteLine($"  Warning: {m}"),
+                    m =>
+                    {
+                        formErrors.Add(m);
+                        Console.Error.WriteLine($"  Error: {m}");
+                    });
                 webForms = loadedWebForms.Select(f => f.Model).ToList();
+
+                // ⛔ A desktop-only control on a page is a BUILD error: the page cannot be emitted, and a
+                // green build with a silently missing page is worse than a red one. Skip the rest of the
+                // web route so no partial site is written.
+                if (formErrors.Count > 0)
+                {
+                    Console.Error.WriteLine($"Build failed with {formErrors.Count} form document error(s).");
+                    return 1;
+                }
 
                 // ⛔⛔ D7's dispatch, as a real source file compiled with everything else. Without
                 // this the `data-form` attribute every generated page carries is read by NOTHING:

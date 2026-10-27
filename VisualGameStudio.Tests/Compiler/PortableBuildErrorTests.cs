@@ -282,6 +282,27 @@ public class PortableBuildErrorTests
         Assert.That(Errors(result), Does.Not.Contain("MixedCodeStyle"));
     }
 
+    /// <summary>
+    /// Task 43 regression: the converted output itself must not look like a mixed style. It carries
+    /// <c>Using System.Windows.Forms</c> and <c>Inherits Form</c> (portable) beside DOM-shaped
+    /// markers, and only the <c>style="portable"</c> attribute tells the two apart.
+    /// </summary>
+    [Test]
+    public void AConvertedDomForm_DoesNotTriggerMixedCodeStyle()
+    {
+        var scaffold = BasicLang.Forms.FormScaffolder.Create("ConvertMe", BasicLang.Forms.FormTarget.Web);
+        var document = new BasicLang.Forms.FormDocument
+        {
+            Target = BasicLang.Forms.FormTarget.Web, Name = "ConvertMe"
+        };
+
+        var converted = BasicLang.Forms.FormCodeConversion.Convert(document, scaffold.CodeText).Text;
+        var result = Compile(Js(), ("ConvertMe.bas", converted));
+
+        Assert.That(result.Success, Is.True, Errors(result));
+        Assert.That(Errors(result), Does.Not.Contain("MixedCodeStyle"));
+    }
+
     // ------------------------------------------------------- ElementOnDesktop
 
     [Test]

@@ -140,6 +140,36 @@ public class FormCanvasMultiSelectTests
     }
 
     /// <summary>
+    /// ⛔ VS: Shift ADDS, Ctrl TOGGLES. Both used to toggle here, so Shift-clicking a selected
+    /// member removed it — the opposite of every other designer.
+    /// </summary>
+    [AvaloniaTest]
+    public void ShiftClickOnASelectedControlKeepsItSelected()
+    {
+        var rig = Surface();
+        rig.Click(rig.Centre(rig.A));
+        rig.Click(rig.Centre(rig.B), RawInputModifiers.Shift);
+
+        rig.Click(rig.Centre(rig.B) + new Point(8, 0), RawInputModifiers.Shift);
+
+        Assert.That(rig.Selection.Controls, Is.EquivalentTo(new[] { rig.A, rig.B }));
+    }
+
+    [AvaloniaTest]
+    public void CtrlASelectsEveryControl()
+    {
+        var (rig, c) = SurfaceOfThree();
+
+        PressKey(rig, Key.A, RawInputModifiers.Control);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Selection.Controls, Is.EquivalentTo(new[] { rig.A, rig.B, c }));
+            Assert.That(rig.Canvas.SelectedControl, Is.SameAs(c), "the last document control is the primary");
+        });
+    }
+
+    /// <summary>
     /// ⚠ Slice 6 Task 4b: this test used to click A — a MEMBER of {A, B} — and pass only through the collapse-on-release
     /// that D-13 removed (the pre-flight's "no test pins the collapse" was wrong: this one did, under a name that says
     /// "unselected"). It now clicks a control that really is unselected; a click on a member is

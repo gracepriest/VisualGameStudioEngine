@@ -342,6 +342,32 @@ public class FormAnchorDockPickerTests
         Assert.That(GeometryOf(control).Dock, Is.Null);
     }
 
+    /// <summary>
+    /// Follow-up 34: the Dock row's TEXT path used to write whatever was typed, so a typo reached
+    /// the document and was only refused on save (BL8033). It is now parsed with the same
+    /// <see cref="FormDock.Canonical"/> rule the writer uses: a member is stored in the enum's own
+    /// spelling, a blank clears the attribute, and anything else snaps back.
+    /// </summary>
+    [Test]
+    public void TypingADock_StoresTheCanonicalSpelling_AndSnapsBackOnATypo()
+    {
+        var (grid, control) = GridFor(Pixel(), FormTarget.WinForms);
+        var row = Row(grid, "Dock");
+
+        row.StringValue = " fill ";
+        Assert.That(GeometryOf(control).Dock, Is.EqualTo("Fill"));
+
+        row.StringValue = "Rigth";
+        Assert.Multiple(() =>
+        {
+            Assert.That(GeometryOf(control).Dock, Is.EqualTo("Fill"), "the typo never reaches the model");
+            Assert.That(row.StringValue, Is.EqualTo("Fill"), "the editor re-reads the document value");
+        });
+
+        row.StringValue = "";
+        Assert.That(GeometryOf(control).Dock, Is.Null, "blank undocks, as Reset does");
+    }
+
     // ==================================================================
     // Slice 4 Task 2 — the pop-ups' one-line summaries
     // ==================================================================

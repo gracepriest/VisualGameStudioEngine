@@ -172,6 +172,84 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         return true;
     }
 
+    private bool _portableConversionOffered;
+
+    /// <summary>
+    /// True when this open should offer the one-way DOM-to-portable conversion (Task 44): a web form
+    /// whose code-behind markers still say DOM. Refused documents and already-portable forms are not
+    /// offered, and the offer is made once per open, never on a reload.
+    /// </summary>
+    public async Task<bool> ShouldOfferPortableConversionAsync()
+    {
+        if (_portableConversionOffered || !IsFormDocument || FilePath == null || DesignDocument == null)
+        {
+            return false;
+        }
+
+        if (DesignDocument.Target != BasicLang.Forms.FormTarget.Web)
+        {
+            return false;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        if (!await CodeBehindExistsAsync(codePath))
+        {
+            return false;
+        }
+
+        var code = await ReadCodeBehindAsync(codePath, CancellationToken.None);
+        var style = BasicLang.Forms.FormStyleReader.Of(
+            code, Path.GetFileName(FilePath), BasicLang.Forms.FormTarget.Web);
+        if (style.Problem != null || style.Style != BasicLang.Forms.FormStyle.Dom)
+        {
+            return false;
+        }
+
+        _portableConversionOffered = true;
+        return true;
+    }
+
+    /// <summary>Marks the offer declined without touching a byte.</summary>
+    public void DismissPortableConversionOffer() => _portableConversionOffered = true;
+
+    /// <summary>
+    /// Converts this form's code-behind once, through the same <see cref="BasicLang.Forms.FormCodeConversion"/>
+    /// the CLI uses, and publishes the conversion findings to the Error List.
+    /// </summary>
+    public async Task<bool> ConvertToPortableAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsFormDocument || FilePath == null)
+        {
+            return false;
+        }
+
+        var file = DesignFile;
+        if (file == null)
+        {
+            return false;
+        }
+
+        var codePath = BasicLang.Forms.FormCodeBehind.PathFor(FilePath);
+        if (!await CodeBehindExistsAsync(codePath))
+        {
+            return false;
+        }
+
+        var before = await ReadCodeBehindAsync(codePath, cancellationToken);
+        var result = BasicLang.Forms.FormCodeConversion.Convert(file.Model, before);
+        var findings = result.Diagnostics.Select(ToDiagnosticItem).ToList();
+        _eventAggregator.Publish(new DesignerDiagnosticsEvent(codePath, findings));
+
+        if (result.Diagnostics.Any(d => !d.IsWarning))
+        {
+            return false;
+        }
+
+        await WriteCodeBehindAsync(codePath, result.Text, cancellationToken);
+        _portableConversionOffered = true;
+        return true;
+    }
+
     /// <summary>The property grid beside the canvas. Always present; empty until something is selected.</summary>
     public ViewModels.Designer.FormPropertyGridViewModel PropertyGrid { get; } = new();
 
@@ -288,6 +366,10 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
+        // VS restores the selection when a delete is undone. The store is emptied after the write so
+        // no ghost can be edited; remember the ids for the undo that puts the objects back.
+        var selectionBeforeRemoval = Selection.Controls.Select(c => c.Id).ToList();
+
         // Slice 6 D-11 (VS): a control that is part of a MULTI-selection deletes the whole selection — its top-level
         // members only (a child whose container is also selected goes with the container) — in ONE write, so one undo.
         // The tray's Delete is always a single selection and takes the one-control path.
@@ -312,6 +394,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // next tray click could not displace (Set() is a no-op for the control already selected).
         SelectInDesigner(null);
         WriteDesignerEditBack();
+        _selectionBeforeRemoval = selectionBeforeRemoval;
     }
 
     /// <summary>
@@ -540,6 +623,13 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     private static string? _designerClipboard;
 
     /// <summary>
+    /// The ids the selection held immediately before a Delete/Cut, kept only until the next
+    /// undo/redo so VS's "undo a delete restores the selection" can re-resolve them against the new
+    /// parse. Null when the last edit was not a removal.
+    /// </summary>
+    private List<string>? _selectionBeforeRemoval;
+
+    /// <summary>
     /// Align and make-same-size over the multi-selection, against its primary.
     ///
     /// <para>⚠ Writes the document only when something actually moved, so pressing "align left" on
@@ -619,6 +709,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         }
 
         CopyControls();
+        var selectionBeforeRemoval = Selection.Controls.Select(c => c.Id).ToList();
 
         // ⚠ A snapshot: removing mutates the document, and Selection.Clear below would otherwise be
         // iterating the collection it is emptying.
@@ -631,6 +722,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         // selection was non-empty (guarded above), so Clear always raises Changed.
         Selection.Clear();
         WriteDesignerEditBack();
+        _selectionBeforeRemoval = selectionBeforeRemoval;
     }
 
     /// <summary>
@@ -1393,6 +1485,14 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     /// panels — so one undo rebuilt the grid twice. Here it is synced exactly once (Part C review).</param>
     private void AdoptDocumentText(Action rewind)
     {
+        // ⚠ VS keeps the selection across an undo/redo. The old objects are ghosts once the text is
+        // re-parsed, so remember the IDs (in selection order, primary last) and re-resolve them
+        // against the new document. A delete/cut cleared the store already; its pre-removal snapshot
+        // is what the undo restores. A control the undo removed simply drops out.
+        var selectedIds = _selectionBeforeRemoval
+                          ?? Selection.Controls.Select(c => c.Id).ToList();
+        _selectionBeforeRemoval = null;
+
         _adoptingDocumentText = true;
         try
         {
@@ -1409,6 +1509,20 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
         OnPropertyChanged(nameof(DesignFile));
         OnPropertyChanged(nameof(DesignDocument));
         SyncDesignerPanels();
+
+        if (selectedIds.Count > 0 && DesignFile?.Model is { } model)
+        {
+            var restored = selectedIds
+                .Select(id => model.AllControls().Concat(model.AllComponents())
+                    .FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.Ordinal)))
+                .OfType<BasicLang.Forms.FormControl>()
+                .ToList();
+            if (restored.Count > 0)
+            {
+                Selection.SetRange(restored);
+            }
+        }
+
         DesignModelRevision++;
     }
 

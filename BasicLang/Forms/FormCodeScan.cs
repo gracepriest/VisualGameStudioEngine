@@ -66,6 +66,9 @@ public static class FormCodeScan
 
     private sealed record Block(string Kind, string Name);
 
+    /// <summary>One conditional's state: whether the enclosing branch is dead, whether a branch was taken, and whether THIS branch is live.</summary>
+    private sealed record Conditional(bool ParentDead, bool AnyTaken, bool Live);
+
     private static readonly HashSet<TokenType> ModifierTokens = new()
     {
         TokenType.Public, TokenType.Private, TokenType.Protected, TokenType.Friend, TokenType.Shared,
@@ -97,15 +100,18 @@ public static class FormCodeScan
     };
 
     /// <summary>Every Sub the FORM class declares, in document order. <paramref name="formName"/>: the form's class name.</summary>
-    public static IReadOnlyList<FormDeclaredSub> DeclaredSubs(string codeText, string? formName = null) =>
-        Scan(codeText, formName).Subs;
+    public static IReadOnlyList<FormDeclaredSub> DeclaredSubs(
+        string codeText, string? formName = null, IReadOnlyCollection<string>? defines = null) =>
+        Scan(codeText, formName, defines).Subs;
 
     /// <summary>The form class's Sub named <paramref name="name"/>, matched IGNORING CASE as BasicLang binds names, or null.</summary>
-    public static FormDeclaredSub? FindSub(string codeText, string name, string? formName = null) =>
-        Scan(codeText, formName).Find(name);
+    public static FormDeclaredSub? FindSub(
+        string codeText, string name, string? formName = null, IReadOnlyCollection<string>? defines = null) =>
+        Scan(codeText, formName, defines).Find(name);
 
     /// <summary>ONE scan of the form class: its Subs and its other members' names (see <see cref="FormCodeScanResult"/>).</summary>
-    public static FormCodeScanResult Scan(string codeText, string? formName = null)
+    public static FormCodeScanResult Scan(
+        string codeText, string? formName = null, IReadOnlyCollection<string>? defines = null)
     {
         var lines = codeText.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
         var statements = Statements(Tokens(codeText, lines, RegionLines(codeText)));
@@ -118,7 +124,7 @@ public static class FormCodeScan
             {
                 classes.Add(block.Name);
             }
-        }, () => { });
+        }, () => { }, defines);
 
         var formOrdinal = classes.FindIndex(c => formName != null && c.Equals(formName, StringComparison.OrdinalIgnoreCase));
         if (formOrdinal < 0)
@@ -212,7 +218,7 @@ public static class FormCodeScan
             body = null;
             lambdaDepth = 0;
             pendingProperty = false;
-        });
+        }, defines);
 
         return new FormCodeScanResult(subs, others);
     }
@@ -420,14 +426,15 @@ public static class FormCodeScan
     /// non-namespace blocks enclose it); <paramref name="onClose"/> when one closes.
     /// </summary>
     private static void Walk(
-        List<Statement> statements, Action<Statement, IReadOnlyList<Block>> onStatement, Action<Block, int> onOpen, Action onClose)
+        List<Statement> statements, Action<Statement, IReadOnlyList<Block>> onStatement, Action<Block, int> onOpen,
+        Action onClose, IReadOnlyCollection<string>? defines = null)
     {
         var blocks = new List<Block>();
-        var conditions = new Stack<(bool Dead, bool ParentDead)>();
+        var conditions = new Stack<Conditional>();
 
         foreach (var statement in statements)
         {
-            var deadNow = conditions.Count > 0 && conditions.Peek().Dead;
+            var deadNow = conditions.Count > 0 && !conditions.Peek().Live;
 
             if (statement.IsDirective)
             {
@@ -436,20 +443,45 @@ public static class FormCodeScan
                 if (directive.Type == TokenType.PreprocessorIf)
                 {
                     var cond = statement.Tokens.Skip(1).Where(t => t.Type != TokenType.Then).ToList();
-                    var literalFalse = cond.Count == 1 &&
-                                       ((cond[0].Type == TokenType.BooleanLiteral && cond[0].Lexeme.Equals("False", StringComparison.OrdinalIgnoreCase)) ||
-                                        (cond[0].Type == TokenType.IntegerLiteral && cond[0].Lexeme == "0"));
-                    conditions.Push((deadNow || literalFalse, deadNow));
+                    var (known, value) = EvaluateCondition(cond, defines);
+                    var live = !deadNow && (!known || value);
+                    conditions.Push(new Conditional(deadNow, known && value, live));
                 }
                 else if (word is "#ifdef" or "#ifndef")
                 {
-                    // ⚠ The lexer calls these Unknown; unevaluated (they need the #Define set) — live unless inside a dead block.
-                    conditions.Push((deadNow, deadNow));
+                    // The lexer calls these Unknown. With a caller-supplied #Define set they are
+                    // decidable; without one, both branches stay live (the safe mid-edit answer).
+                    var name = statement.Tokens.Skip(1).FirstOrDefault()?.Lexeme;
+                    bool? defined = name == null || defines == null
+                        ? null
+                        : defines.Contains(name, StringComparer.OrdinalIgnoreCase);
+                    bool? value = defined;
+                    if (word == "#ifndef")
+                    {
+                        value = defined is { } d ? !d : null;
+                    }
+
+                    var live = !deadNow && value != false;
+                    conditions.Push(new Conditional(deadNow, value == true, live));
                 }
                 else if (directive.Type is TokenType.PreprocessorElse or TokenType.PreprocessorElseIf && conditions.Count > 0)
                 {
-                    var (_, parentDead) = conditions.Pop();
-                    conditions.Push((parentDead, parentDead));
+                    var parent = conditions.Pop();
+                    if (directive.Type == TokenType.PreprocessorElse)
+                    {
+                        conditions.Push(parent with { Live = !parent.ParentDead && !parent.AnyTaken });
+                    }
+                    else
+                    {
+                        var cond = statement.Tokens.Skip(1).Where(t => t.Type != TokenType.Then).ToList();
+                        var (known, value) = EvaluateCondition(cond, defines);
+                        var live = !parent.ParentDead && !parent.AnyTaken && (!known || value);
+                        conditions.Push(parent with
+                        {
+                            AnyTaken = parent.AnyTaken || (known && value),
+                            Live = live
+                        });
+                    }
                 }
                 else if ((directive.Type == TokenType.PreprocessorEndIf || word == "#end") && conditions.Count > 0)
                 {
@@ -503,6 +535,154 @@ public static class FormCodeScan
     // ==================================================================
     // Members
     // ==================================================================
+
+    /// <summary>
+    /// Evaluates the LITERAL part of a conditional: booleans, integers, <c>Not</c>, parentheses,
+    /// <c>And</c>/<c>AndAlso</c>/<c>Or</c>/<c>OrElse</c>, comparisons, and — when the caller supplies
+    /// the project's <c>#Define</c> set — a bare name. Anything else is UNKNOWN, which the walk reads
+    /// as "both branches may be live"; that is the only safe answer while the user is typing and the
+    /// full preprocessor (piece 2's <c>ProcessForEditor</c>) is not available here.
+    /// </summary>
+    private static (bool Known, bool Value) EvaluateCondition(
+        IReadOnlyList<LexToken> tokens, IReadOnlyCollection<string>? defines)
+    {
+        if (tokens.Count == 0)
+        {
+            return (false, false);
+        }
+
+        var at = 0;
+        var result = ParseOr(tokens, ref at, defines);
+        return result.Known && at == tokens.Count ? result : (false, false);
+    }
+
+    private static (bool Known, bool Value) ParseOr(
+        IReadOnlyList<LexToken> tokens, ref int at, IReadOnlyCollection<string>? defines)
+    {
+        var result = ParseAnd(tokens, ref at, defines);
+        while (at < tokens.Count && tokens[at].Type is TokenType.Or or TokenType.OrElse)
+        {
+            at++;
+            var right = ParseAnd(tokens, ref at, defines);
+            result = (result.Known && right.Known, result.Value | right.Value);
+            if (right.Known && right.Value)
+            {
+                result = (true, true);
+            }
+            else if (result.Known && result.Value)
+            {
+                result = (true, true);
+            }
+        }
+
+        return result;
+    }
+
+    private static (bool Known, bool Value) ParseAnd(
+        IReadOnlyList<LexToken> tokens, ref int at, IReadOnlyCollection<string>? defines)
+    {
+        var result = ParseComparison(tokens, ref at, defines);
+        while (at < tokens.Count && tokens[at].Type is TokenType.And or TokenType.AndAlso)
+        {
+            at++;
+            var right = ParseComparison(tokens, ref at, defines);
+            result = (result.Known && right.Known, result.Value & right.Value);
+            if (right.Known && !right.Value)
+            {
+                result = (true, false);
+            }
+            else if (result.Known && !result.Value)
+            {
+                result = (true, false);
+            }
+        }
+
+        return result;
+    }
+
+    private static (bool Known, bool Value) ParseComparison(
+        IReadOnlyList<LexToken> tokens, ref int at, IReadOnlyCollection<string>? defines)
+    {
+        var left = ParseUnary(tokens, ref at, defines);
+        if (at >= tokens.Count || tokens[at].Type is not (
+                TokenType.Equal or TokenType.Assignment or TokenType.NotEqual or TokenType.LessThan or
+                TokenType.LessThanOrEqual or TokenType.GreaterThan or TokenType.GreaterThanOrEqual))
+        {
+            return left;
+        }
+
+        var op = tokens[at++].Type;
+        var right = ParseUnary(tokens, ref at, defines);
+        if (!left.Known || !right.Known)
+        {
+            return (false, false);
+        }
+
+        var value = op switch
+        {
+            TokenType.Equal or TokenType.Assignment => left.Value == right.Value,
+            TokenType.NotEqual => left.Value != right.Value,
+            TokenType.LessThan => left.Value.CompareTo(right.Value) < 0,
+            TokenType.LessThanOrEqual => left.Value.CompareTo(right.Value) <= 0,
+            TokenType.GreaterThan => left.Value.CompareTo(right.Value) > 0,
+            _ => left.Value.CompareTo(right.Value) >= 0
+        };
+        return (true, value);
+    }
+
+    private static (bool Known, bool Value) ParseUnary(
+        IReadOnlyList<LexToken> tokens, ref int at, IReadOnlyCollection<string>? defines)
+    {
+        if (at < tokens.Count && tokens[at].Type == TokenType.Not)
+        {
+            at++;
+            var inner = ParseUnary(tokens, ref at, defines);
+            return (inner.Known, !inner.Value);
+        }
+
+        return ParsePrimary(tokens, ref at, defines);
+    }
+
+    private static (bool Known, bool Value) ParsePrimary(
+        IReadOnlyList<LexToken> tokens, ref int at, IReadOnlyCollection<string>? defines)
+    {
+        if (at >= tokens.Count)
+        {
+            return (false, false);
+        }
+
+        var token = tokens[at++];
+        if (token.Type == TokenType.LeftParen)
+        {
+            var inner = ParseOr(tokens, ref at, defines);
+            if (at < tokens.Count && tokens[at].Type == TokenType.RightParen)
+            {
+                at++;
+                return inner;
+            }
+
+            return (false, false);
+        }
+
+        if (token.Type == TokenType.BooleanLiteral)
+        {
+            return (true, token.Lexeme.Equals("True", StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (token.Type == TokenType.IntegerLiteral &&
+            long.TryParse(token.Lexeme, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var number))
+        {
+            return (true, number != 0);
+        }
+
+        if (token.Type == TokenType.Identifier && defines != null)
+        {
+            return (true, defines.Contains(token.Lexeme, StringComparer.OrdinalIgnoreCase));
+        }
+
+        return (false, false);
+    }
 
     /// <summary>Reads one member-level statement: a Sub (recorded), any other named member (its name), a field's names.</summary>
     private static void ReadMember(

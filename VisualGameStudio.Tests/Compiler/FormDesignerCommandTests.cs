@@ -468,12 +468,12 @@ public class FormDesignerCommandTests
     }
 
     /// <summary>
-    /// ⛔ An undo re-parses the text into a FRESH model, so every control the selection held belongs
-    /// to a document nobody draws. The store must empty with the grid — otherwise a following
-    /// BringToFront/Cut acts on the ghost (and silently does nothing to the document on screen).
+    /// ⛔ An undo re-parses the text into a FRESH model, so a selection carried over naively would
+    /// hold objects nobody draws. It is re-resolved by id instead, and a following Cut acts on the
+    /// LIVE controls — never on the discarded parse's ghosts.
     /// </summary>
     [Test]
-    public void AnUndo_LeavesNoStaleSelection_AndAFollowingCutCopiesNothingStale()
+    public void AnUndo_ReResolvesTheSelection_AndAFollowingCutActsOnTheLiveControls()
     {
         var vm = Open();
         vm.Selection.Set(Control(vm, "a"));
@@ -481,27 +481,30 @@ public class FormDesignerCommandTests
         vm.ArrangeCommand.Execute(FormArrangeKind.AlignLeft);
 
         vm.UndoDesignerEditCommand.Execute(null);
-        var afterUndo = vm.Text;
 
         Assert.Multiple(() =>
         {
-            Assert.That(vm.Selection.IsEmpty, Is.True, "no control of the discarded model stays selected");
-            Assert.That(vm.PropertyGrid.SelectedControl, Is.Null, "and the grid agrees");
+            Assert.That(vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "a", "c" }),
+                "the selection follows the undo");
+            Assert.That(vm.Selection.Primary?.Id, Is.EqualTo("c"), "and its primary");
+            Assert.That(vm.Selection.Controls.All(c => ReferenceEquals(c, Control(vm, c.Id))), Is.True,
+                "every member is an object from the NEW parse, not the discarded one");
+            Assert.That(vm.PropertyGrid.SelectedControl?.Id, Is.EqualTo("c"), "and the grid agrees");
         });
 
-        // ⚠ The designer clipboard is STATIC (one per IDE session), so seed it with a known control from
-        // ANOTHER document — a Cut of a ghost selection would overwrite it with the old parse's a and c.
-        var seed = Open();
-        seed.Selection.Set(Control(seed, "b"));
-        seed.CopyControlsCommand.Execute(null);
-
         vm.CutControlsCommand.Execute(null);
-        Assert.That(vm.Text, Is.EqualTo(afterUndo), "nothing was selected, so Cut changes nothing");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.IsEmpty, Is.True);
+            Assert.That(vm.DesignDocument!.FindById("a"), Is.Null, "Cut removed the live a");
+            Assert.That(vm.DesignDocument!.FindById("c"), Is.Null, "and the live c");
+            Assert.That(vm.DesignDocument!.FindById("b"), Is.Not.Null, "the unselected b stays");
+        });
 
         vm.PasteControlsCommand.Execute(null);
-        var added = vm.DesignDocument!.Controls.Except(new[] { Control(vm, "a"), Control(vm, "b"), Control(vm, "c") }).ToList();
-        Assert.That(added.Select(c => (G(c).Width, G(c).Height)), Is.EqualTo(new[] { (80, 40) }),
-            "the clipboard still holds the seeded 'b' (80x40) — the Cut copied nothing from the discarded model");
+        var added = vm.DesignDocument!.Controls.Select(c => c.Id).Except(new[] { "b" }).ToList();
+        Assert.That(added, Has.Count.EqualTo(2), "Paste brought back the two controls Cut copied");
     }
 
     [Test]

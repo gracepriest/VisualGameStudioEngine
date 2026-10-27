@@ -150,6 +150,40 @@ public class FormTrayTests
         });
     }
 
+    /// <summary>
+    /// Entry 44: the tray's Shift/Ctrl click follows the canvas — Shift adds, Ctrl toggles, plain
+    /// replaces. Components could not join a multi-selection at all before this.
+    /// </summary>
+    [Test]
+    public void TrayShiftAndCtrlClick_JoinAndLeaveAMultiSelection()
+    {
+        var vm = Open();
+        vm.PlaceControl("Timer", 0, 0);
+        vm.PlaceControl("ToolTip", 0, 0);
+        var timer = vm.Tray.Items.Single(i => i.Id == "Timer1");
+        var tip = vm.Tray.Items.Single(i => i.Id == "ToolTip1");
+
+        vm.Tray.Select(timer);
+        vm.Tray.Select(tip, add: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "Timer1", "ToolTip1" }));
+            Assert.That(timer.IsSelected && tip.IsSelected, Is.True);
+        });
+
+        vm.Tray.Select(timer, add: true);
+        Assert.That(vm.Selection.Controls, Has.Count.EqualTo(2), "Shift never removes");
+
+        vm.Tray.Select(timer, toggle: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(vm.Selection.Controls.Select(c => c.Id), Is.EqualTo(new[] { "ToolTip1" }));
+            Assert.That(timer.IsSelected, Is.False);
+            Assert.That(tip.IsSelected, Is.True);
+        });
+    }
+
     [Test]
     public void DeletingATrayItem_RemovesIt_AndUndoBringsItBack()
     {

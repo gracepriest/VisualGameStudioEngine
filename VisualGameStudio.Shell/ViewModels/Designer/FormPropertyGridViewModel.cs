@@ -206,7 +206,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
     /// refresh (round 4 ruling 11: never a static counter in a compiler type). Public: the Shell grants the tests no
     /// internals.
     /// </summary>
-    public Func<string, string?, FormCodeScanResult> CodeScanner { get; set; } = FormCodeScan.Scan;
+    public Func<string, string?, FormCodeScanResult> CodeScanner { get; set; } =
+        (text, formName) => FormCodeScan.Scan(text, formName);
 
     /// <summary>The ONE scan of <see cref="CodeBehindText"/> every Events-tab row reads (review ruling 5), and what it was of.</summary>
     private (string Text, string? FormName, FormCodeScanResult Result)? _codeScan;
@@ -772,7 +773,26 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 rows.Add(new FormPropertyRow(
                     "Dock", FormPropertyType.String,
                     () => pixel.Dock ?? "",
-                    Changing(() => pixel.Dock, v => pixel.Dock = string.IsNullOrWhiteSpace(v) ? null : v),
+                    value =>
+                    {
+                        var before = pixel.Dock;
+                        if (FormDock.IsBlank(value))
+                        {
+                            pixel.Dock = null;
+                        }
+                        else if (FormDock.Canonical(value) is { } canonical)
+                        {
+                            pixel.Dock = canonical;
+                        }
+                        else
+                        {
+                            // ⛔ A typo is refused HERE, not on save (follow-up 34): the row snaps back
+                            // to the document's value; the canvas and the writer never see the typo.
+                            return false;
+                        }
+
+                        return !string.Equals(before, pixel.Dock, StringComparison.Ordinal);
+                    },
                     Changed,
                     editor: FormRowEditor.DockPicker,
                     category: "Layout",
