@@ -749,17 +749,15 @@ public class NothingIntoValueTypeCompileTests
     }
 
     /// <summary>
-    /// JavaScript has no Long, Char, Decimal or ULong, so it refuses each BY NAME — with a Nothing exactly as with a written `0` — through the standard and the aggressive passes (a capability check, not an optimizer
-    /// rule). The other groups run on it: an Integer, a Boolean and a Double hold no such type. (Group 6 of the execution fixture is C#, C++ and MSIL for the same reason.)
+    /// JavaScript has no Long or ULong, so it refuses each BY NAME — with a Nothing exactly as with a written `0` — through the standard and the aggressive passes (a capability check, not an optimizer
+    /// rule). Char and Decimal lower since portable-controls Tasks 14 and 19; the other groups run on it too.
     /// </summary>
     [Test]
-    public void JavaScript_StillRefuses_Long_Char_Decimal_AndULong_ByName_WithANothing()
+    public void JavaScript_StillRefuses_Long_AndULong_ByName_WithANothing()
     {
         var rows = new[]
         {
             ("Long", "Dim v As Long = Nothing", "BL7003"),
-            ("Char", "Dim v As Char = Nothing", "BL7004"),
-            ("Decimal", "Dim v As Decimal = Nothing", "BL7007"),
             ("ULong", "Dim v As ULong = Nothing", "BL7003"),
         };
 
