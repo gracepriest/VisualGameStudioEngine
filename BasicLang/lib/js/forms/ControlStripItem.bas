@@ -9,6 +9,11 @@ Namespace System.Windows.Forms
         Private _rootStrip As ToolStrip
         Private _parentItem As ToolStripMenuItem
         Private _onClick As Action(Of DomEvent)
+        Private _onDoubleClick As Action(Of DomEvent)
+        Private _onMouseDown As Action(Of DomEvent)
+        Private _onMouseUp As Action(Of DomEvent)
+        Private _onMouseEnter As Action(Of DomEvent)
+        Private _onMouseLeave As Action(Of DomEvent)
 
         Public Sub New()
             _name = ""
@@ -80,6 +85,26 @@ Namespace System.Windows.Forms
             Me.OnClick(EventArgs.Empty)
             Dim strip As ToolStrip = Me.VgsStrip()
             If strip IsNot Nothing Then strip.VgsRaiseItemClicked(Me)
+        End Sub
+
+        Private Sub VgsOnDomDoubleClick(e As DomEvent)
+            Me.OnDoubleClick(EventArgs.Empty)
+        End Sub
+
+        Private Sub VgsOnDomMouseDown(e As DomEvent)
+            Me.OnMouseDown(Me.VgsMouseArgs(e))
+        End Sub
+
+        Private Sub VgsOnDomMouseUp(e As DomEvent)
+            Me.OnMouseUp(Me.VgsMouseArgs(e))
+        End Sub
+
+        Private Sub VgsOnDomMouseEnter(e As DomEvent)
+            Me.OnMouseEnter(EventArgs.Empty)
+        End Sub
+
+        Private Sub VgsOnDomMouseLeave(e As DomEvent)
+            Me.OnMouseLeave(EventArgs.Empty)
         End Sub
 
         Public Overridable Property Text As String
@@ -159,10 +184,43 @@ Namespace System.Windows.Forms
         End Property
 
         Public Event Click(sender As Object, e As EventArgs)
+        Public Event DoubleClick(sender As Object, e As EventArgs)
+        Public Event MouseDown(sender As Object, e As MouseEventArgs)
+        Public Event MouseUp(sender As Object, e As MouseEventArgs)
+        Public Event MouseEnter(sender As Object, e As EventArgs)
+        Public Event MouseLeave(sender As Object, e As EventArgs)
 
         Protected Overridable Sub OnClick(e As EventArgs)
             RaiseEvent Click(Me, e)
         End Sub
+
+        Protected Overridable Sub OnDoubleClick(e As EventArgs)
+            RaiseEvent DoubleClick(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseDown(e As MouseEventArgs)
+            RaiseEvent MouseDown(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseUp(e As MouseEventArgs)
+            RaiseEvent MouseUp(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseEnter(e As EventArgs)
+            RaiseEvent MouseEnter(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseLeave(e As EventArgs)
+            RaiseEvent MouseLeave(Me, e)
+        End Sub
+
+        Public Function VgsMouseArgs(e As DomEvent) As MouseEventArgs
+            Dim button As MouseButtons = CType(0, MouseButtons)
+            If e.button = 0 Then button = CType(1048576, MouseButtons)
+            If e.button = 1 Then button = CType(4194304, MouseButtons)
+            If e.button = 2 Then button = CType(2097152, MouseButtons)
+            Return New MouseEventArgs(button, 1, e.clientX, e.clientY, 0)
+        End Function
 
         Public Sub VgsAttach(element As Element, owner As ToolStrip)
             Me.VgsAttachCore(element)
@@ -185,7 +243,17 @@ Namespace System.Windows.Forms
             Me.VgsRemoveClickListener()
             _element = element
             _onClick = AddressOf Me.VgsOnDomClick
+            _onDoubleClick = AddressOf Me.VgsOnDomDoubleClick
+            _onMouseDown = AddressOf Me.VgsOnDomMouseDown
+            _onMouseUp = AddressOf Me.VgsOnDomMouseUp
+            _onMouseEnter = AddressOf Me.VgsOnDomMouseEnter
+            _onMouseLeave = AddressOf Me.VgsOnDomMouseLeave
             element.addEventListener("click", _onClick)
+            element.addEventListener("dblclick", _onDoubleClick)
+            element.addEventListener("mousedown", _onMouseDown)
+            element.addEventListener("mouseup", _onMouseUp)
+            element.addEventListener("mouseenter", _onMouseEnter)
+            element.addEventListener("mouseleave", _onMouseLeave)
         End Sub
 
         Public Sub VgsDetach()
@@ -197,10 +265,20 @@ Namespace System.Windows.Forms
         End Sub
 
         Private Sub VgsRemoveClickListener()
-            If _element IsNot Nothing AndAlso _onClick IsNot Nothing Then
-                _element.removeEventListener("click", _onClick)
+            If _element IsNot Nothing Then
+                If _onClick IsNot Nothing Then _element.removeEventListener("click", _onClick)
+                If _onDoubleClick IsNot Nothing Then _element.removeEventListener("dblclick", _onDoubleClick)
+                If _onMouseDown IsNot Nothing Then _element.removeEventListener("mousedown", _onMouseDown)
+                If _onMouseUp IsNot Nothing Then _element.removeEventListener("mouseup", _onMouseUp)
+                If _onMouseEnter IsNot Nothing Then _element.removeEventListener("mouseenter", _onMouseEnter)
+                If _onMouseLeave IsNot Nothing Then _element.removeEventListener("mouseleave", _onMouseLeave)
             End If
             _onClick = Nothing
+            _onDoubleClick = Nothing
+            _onMouseDown = Nothing
+            _onMouseUp = Nothing
+            _onMouseEnter = Nothing
+            _onMouseLeave = Nothing
         End Sub
 
         Public Sub VgsNotifyClicked()

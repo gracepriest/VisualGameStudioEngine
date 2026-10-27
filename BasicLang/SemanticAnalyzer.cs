@@ -13477,7 +13477,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                      && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryReceiver
                      && !string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
                      && !ObjectMemberNames.Contains(node.MemberName)
-                     && !DeclaresMember(objectType, node.MemberName))
+                     && LacksDeclaredMember(objectType, node.MemberName))
             {
                 ReportWebUnavailableMember(libraryReceiver, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);

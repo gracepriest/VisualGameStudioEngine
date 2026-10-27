@@ -31,7 +31,7 @@ public class PortableMethodCoverageTests
     public void BuildAndRun()
     {
         PortableRuntimeHarnesses.RequireWeb();
-        Assert.That(PortableMembers.Manifest, Has.Count.EqualTo(34),
+        Assert.That(PortableMembers.Manifest, Has.Count.EqualTo(38),
             "the method gate reads the portable manifest, not a hand list");
         Assert.That(PortableMembers.Manifest.Select(Key), Is.Unique);
 
@@ -108,11 +108,11 @@ public class PortableMethodCoverageTests
         text.Properties["Text"] = "";
         var combo = FormCatalogShapes.Canonical(document, FormControlCatalog.All.First(d => d.Kind == "ComboBox"),
             "cmbSample", geometry: new PixelGeometry { X = 40, Y = 190, Width = 220, Height = 32, Anchor = "Top, Left" });
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma";
         combo.Properties["SelectedIndex"] = "0";
         var list = FormCatalogShapes.Canonical(document, FormControlCatalog.All.First(d => d.Kind == "ListBox"),
             "lstSample", geometry: new PixelGeometry { X = 40, Y = 240, Width = 220, Height = 60, Anchor = "Top, Left" });
-        list.Properties["Items"] = "Alpha, Beta, Gamma";
+        list.Properties["Items"] = "Alpha\nBeta\nGamma";
         list.Properties["SelectedIndex"] = "0";
 
         // Task 39 method rows need a real strip with three live items and a Timer component.
@@ -329,6 +329,28 @@ public class PortableMethodCoverageTests
             """,
         ("ObjectCollection", "Contains") => """
             Emit("has=" & CStr(cmbSample.Items.Contains("Beta")))
+            """,
+        ("Color", "FromName") => """
+            ' The desktop analyzer has no .NET resolver here, so it types the static call
+            ' Object; the C# compiler still resolves System.Drawing.Color at codegen.
+            Dim c As Object = Color.FromName("Red")
+            Emit("same=" & CStr(c IsNot Nothing))
+            """,
+        ("Color", "FromArgb") => """
+            Dim c As Object = Color.FromArgb(255, 0, 0, 255)
+            Emit("same=" & CStr(c IsNot Nothing))
+            """,
+        ("Color", "Equals") => """
+            Emit("same=" & CStr(Color.Red.Equals(Color.Red)))
+            """,
+        ("Font", "Equals") => """
+            #If WEB Then
+            Dim f = New Font()
+            Emit("same=" & CStr(f.Equals(New Font())))
+            #Else
+            Dim f As New Font("Arial", 9)
+            Emit("same=" & CStr(f.Equals(New Font("Arial", 9))))
+            #End If
             """,
         ("MessageBox", "Show") => $"""
             Dim answer As DialogResult = CType(MessageBox.Show({string.Join(", ", row.SampleArguments)}), DialogResult)

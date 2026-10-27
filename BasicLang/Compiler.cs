@@ -460,7 +460,11 @@ namespace BasicLang.Compiler
                 // call into a later-listed .bas file, or mutual references
                 // between two files, resolve with full type information).
                 var compileOrder = projectUnits
-                    .OrderBy(u => IsEntryLikeFile(u.FilePath) ? 1 : 0)
+                    // The shipped library is the base vocabulary of every portable program:
+                    // compile it before the user's entry files so Form/Control members are
+                    // fully known when a generated form reads them (`Form.Controls`,
+                    // `Timer.Interval`), rather than resolving through a sibling signature.
+                    .OrderBy(u => IsPortableLibraryUnit(u) ? 1 : IsEntryLikeFile(u.FilePath) ? 2 : 0)
                     .ToList();
 
                 foreach (var unit in compileOrder)

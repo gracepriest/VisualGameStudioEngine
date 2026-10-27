@@ -353,7 +353,18 @@ namespace BasicLang.Compiler.IR
             // takes the same class-method guard as the arm below.
             if (isProcedure && !string.IsNullOrEmpty(callee.OwningModule)
                 && !(callee.IsImported && IsCurrentClassMethod(callee.Name)))
+            {
+                // The sibling-signature path stamps a library CLASS method with its class as
+                // OwningModule. That is a static member, not a module-level free function:
+                // `MessageBox.Show` must stay qualified, or JavaScript emits `Show`.
+                if (BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(callee.OwningModule)
+                    || _semanticAnalyzer.LookupType(callee.OwningModule) != null)
+                {
+                    return ($"{callee.OwningModule}.{callee.Name}", null);
+                }
+
                 return (GlobalIrName(callee.OwningModule, callee.Name), callee.OwningModule);
+            }
             // ⛔ ...but NEVER owner an import when the class being built declares that method
             // itself. One symbol table entry per name means the last declaration wins, so without
             // this guard an unqualified self-call is emitted against whichever OTHER class happened
@@ -7658,9 +7669,28 @@ namespace BasicLang.Compiler.IR
                 // the text. Measured in the single-file AND the multi-file path alike.
                 if (_semanticAnalyzer.GetNodeSymbol(memberExpr) is Symbol moduleProcedure
                     && (moduleProcedure.Kind == SymbolKind.Function || moduleProcedure.Kind == SymbolKind.Subroutine)
-                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule))
+                    && !string.IsNullOrEmpty(moduleProcedure.OwningModule)
+                    // The receiver must be the OWNER name — `MessageBox.Show` or
+                    // `Helpers.Twice`. `button.PerformClick` has a Variable symbol and a
+                    // lower-case receiver, and must fall through to the instance arm.
+                    && memberExpr.Object is IdentifierExpressionNode receiverId
+                    // A local `button` and the type `Button` differ only by case in BasicLang
+                    // source; only the type spelling is a static call. Module names stay
+                    // case-insensitive.
+                    && string.Equals(receiverId.Name, moduleProcedure.OwningModule,
+                        BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(moduleProcedure.OwningModule)
+                        || _semanticAnalyzer.LookupType(moduleProcedure.OwningModule) != null
+                            ? StringComparison.Ordinal
+                            : StringComparison.OrdinalIgnoreCase))
                 {
-                    EmitProcedureCall(node, moduleProcedure, memberExpr.MemberName, tempName, returnType);
+                    // The sibling-signature path stamps even a library CLASS method with its
+                    // class name as OwningModule. Keep that qualifier so the backend resolves
+                    // `MessageBox.Show`, instead of emitting the free function `Show`.
+                    var callee = BasicLang.Forms.PortableLibraryTypes.IsLibraryClass(moduleProcedure.OwningModule)
+                        || _semanticAnalyzer.LookupType(moduleProcedure.OwningModule) != null
+                        ? $"{moduleProcedure.OwningModule}.{memberExpr.MemberName}"
+                        : memberExpr.MemberName;
+                    EmitProcedureCall(node, moduleProcedure, callee, tempName, returnType);
                     return;
                 }
 
@@ -7699,8 +7729,12 @@ namespace BasicLang.Compiler.IR
                 bool isStaticCall = false;
                 if (obj is IRVariable objVar)
                 {
-                    // Case-sensitive check: does the name exactly match a class name?
-                    bool exactClassMatch = _module.Classes.Keys.Any(k => k == objVar.Name);
+                    // Case-sensitive check: does the name exactly match a class name in this
+                    // unit, or a type the analyzer imported from the portable library?
+                    var declaredReceiverType = _semanticAnalyzer.LookupType(objVar.Name);
+                    bool exactClassMatch = _module.Classes.Keys.Any(k => k == objVar.Name)
+                        || (declaredReceiverType != null
+                            && string.Equals(declaredReceiverType.Name, objVar.Name, StringComparison.Ordinal));
                     // Is this a local variable or parameter?
                     bool isLocalOrParam = _currentFunction?.Parameters.Any(p => p.Name == objVar.Name) == true ||
                                           _locals.ContainsKey(objVar.Name);

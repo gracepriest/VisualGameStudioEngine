@@ -4757,6 +4757,14 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (_module?.Classes != null && _module.Classes.TryGetValue(name, out var declared))
                 return SanitizeName(declared.Name);
 
+            // A qualified winforms/library spelling (`System.Windows.Forms.Timer`) names the
+            // class the module declares under its simple name; emit THAT name, not the
+            // dot-stripped SystemWindowsFormsTimer which nothing defines.
+            var simple = name?.Substring(name.LastIndexOf('.') + 1);
+            if (_module?.Classes != null && !string.IsNullOrEmpty(simple)
+                && _module.Classes.TryGetValue(simple, out declared))
+                return SanitizeName(declared.Name);
+
             var canonical = JsExceptionTypes.Canonical(name);
             if (canonical != null) return canonical;
 
@@ -5024,6 +5032,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
             if (TryCollectionMethod(kind, mc.MethodName, receiver, args, out var collection))
                 return collection;
+
+            // The portable library uses .NET String methods (`name.ToLowerInvariant()` in
+            // Color.FromName); JavaScript spells those camelCase on the string value.
+            if (string.Equals(mc.Object?.Type?.Name, "String", StringComparison.OrdinalIgnoreCase))
+            {
+                switch (mc.MethodName.ToLowerInvariant())
+                {
+                    case "tolower" or "tolowerinvariant" when args.Count == 0:
+                        return $"{receiver}.toLowerCase()";
+                    case "toupper" or "toupperinvariant" when args.Count == 0:
+                        return $"{receiver}.toUpperCase()";
+                }
+            }
 
             // #224: an ARRAY is a LINQ source too (`From x In arr`, `arr.Where(f)`), and already a JS
             // Array — but CollectionKindOf keys on the List/IEnumerable names and answers None for
