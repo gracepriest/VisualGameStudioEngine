@@ -18,6 +18,10 @@ Namespace System.Windows.Forms
         Private _onKeyDown As Action(Of DomEvent)
         Private _onKeyUp As Action(Of DomEvent)
         Private _onFocusIn As Action(Of DomEvent)
+        Private _onDoubleClick As Action(Of DomEvent)
+        Private _onMouseEnter As Action(Of DomEvent)
+        Private _onMouseLeave As Action(Of DomEvent)
+        Private _onFocusOut As Action(Of DomEvent)
         Private _foreColor As Color
         Private _backColor As Color
         Private _font As Font
@@ -366,6 +370,10 @@ Namespace System.Windows.Forms
         Public Event KeyUp(sender As Object, e As KeyEventArgs)
         Public Event KeyPress(sender As Object, e As KeyPressEventArgs)
         Public Event Enter(sender As Object, e As EventArgs)
+        Public Event DoubleClick(sender As Object, e As EventArgs)
+        Public Event MouseEnter(sender As Object, e As EventArgs)
+        Public Event MouseLeave(sender As Object, e As EventArgs)
+        Public Event Leave(sender As Object, e As EventArgs)
 
         Protected Overridable Sub OnClick(e As EventArgs)
             RaiseEvent Click(Me, e)
@@ -403,6 +411,22 @@ Namespace System.Windows.Forms
             RaiseEvent Enter(Me, e)
         End Sub
 
+        Protected Overridable Sub OnDoubleClick(e As EventArgs)
+            RaiseEvent DoubleClick(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseEnter(e As EventArgs)
+            RaiseEvent MouseEnter(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnMouseLeave(e As EventArgs)
+            RaiseEvent MouseLeave(Me, e)
+        End Sub
+
+        Protected Overridable Sub OnLeave(e As EventArgs)
+            RaiseEvent Leave(Me, e)
+        End Sub
+
         ' M25: these declarations must stay above VgsAttachListeners, the method that
         ' takes their AddressOf. A listener declared below is refused by the backend.
         Private Sub VgsOnDomClick(e As DomEvent)
@@ -425,12 +449,24 @@ Namespace System.Windows.Forms
             Me.OnMouseMove(Me.VgsMouseArgs(e))
         End Sub
 
+        Private Sub VgsOnDomDoubleClick(e As DomEvent)
+            Me.OnDoubleClick(EventArgs.Empty)
+        End Sub
+
+        Private Sub VgsOnDomMouseEnter(e As DomEvent)
+            Me.OnMouseEnter(EventArgs.Empty)
+        End Sub
+
+        Private Sub VgsOnDomMouseLeave(e As DomEvent)
+            Me.OnMouseLeave(EventArgs.Empty)
+        End Sub
+
         Private Sub VgsOnDomKeyDown(e As DomEvent)
             Dim args As New KeyEventArgs(Me.VgsKeyCode(e), e.shiftKey, e.ctrlKey, e.altKey)
             Me.OnKeyDown(args)
             If CBool(args.Handled) OrElse CBool(args.SuppressKeyPress) Then e.preventDefault()
-            If Not CBool(e.ctrlKey) AndAlso Not CBool(e.altKey) AndAlso Not CBool(args.SuppressKeyPress) AndAlso e.key.Length = 1 Then
-                Dim press As New KeyPressEventArgs(ChrW(AscW(e.key)))
+            If e.ctrlKey = False AndAlso e.altKey = False AndAlso CStr(e.key) <> "" Then
+                Dim press As New KeyPressEventArgs(ChrW(AscW(CStr(e.key))))
                 Me.OnKeyPress(press)
                 If CBool(press.Handled) Then e.preventDefault()
             End If
@@ -440,6 +476,10 @@ Namespace System.Windows.Forms
             Dim args As New KeyEventArgs(Me.VgsKeyCode(e), e.shiftKey, e.ctrlKey, e.altKey)
             Me.OnKeyUp(args)
             If CBool(args.Handled) Then e.preventDefault()
+        End Sub
+
+        Private Sub VgsOnDomFocusOut(e As DomEvent)
+            Me.OnLeave(EventArgs.Empty)
         End Sub
 
         Private Sub VgsOnDomFocusIn(e As DomEvent)
@@ -917,6 +957,10 @@ Namespace System.Windows.Forms
             _element.removeEventListener("keydown", _onKeyDown)
             _element.removeEventListener("keyup", _onKeyUp)
             _element.removeEventListener("focusin", _onFocusIn)
+            _element.removeEventListener("dblclick", _onDoubleClick)
+            _element.removeEventListener("mouseenter", _onMouseEnter)
+            _element.removeEventListener("mouseleave", _onMouseLeave)
+            _element.removeEventListener("focusout", _onFocusOut)
         End Sub
 
         Private Sub VgsAttachListeners()
@@ -927,6 +971,10 @@ Namespace System.Windows.Forms
             _onKeyDown = AddressOf Me.VgsOnDomKeyDown
             _onKeyUp = AddressOf Me.VgsOnDomKeyUp
             _onFocusIn = AddressOf Me.VgsOnDomFocusIn
+            _onDoubleClick = AddressOf Me.VgsOnDomDoubleClick
+            _onMouseEnter = AddressOf Me.VgsOnDomMouseEnter
+            _onMouseLeave = AddressOf Me.VgsOnDomMouseLeave
+            _onFocusOut = AddressOf Me.VgsOnDomFocusOut
             _element.addEventListener("click", _onClick)
             _element.addEventListener("mousedown", _onMouseDown)
             _element.addEventListener("mouseup", _onMouseUp)
@@ -934,6 +982,10 @@ Namespace System.Windows.Forms
             _element.addEventListener("keydown", _onKeyDown)
             _element.addEventListener("keyup", _onKeyUp)
             _element.addEventListener("focusin", _onFocusIn)
+            _element.addEventListener("dblclick", _onDoubleClick)
+            _element.addEventListener("mouseenter", _onMouseEnter)
+            _element.addEventListener("mouseleave", _onMouseLeave)
+            _element.addEventListener("focusout", _onFocusOut)
             Me.VgsAttachExtraListeners()
         End Sub
 

@@ -95,7 +95,7 @@ public class PortableRemainingKindsNodeTests
         Console.WriteLine(CStr(c.Visible))
         f.Show()
         Console.WriteLine(CStr(c.Visible))
-        """, "color: red;background-color: black;cursor: pointer;font-family: Arial;font-size: 12pt;font-weight: normal;font-style: normal;\nFalse\nFalse\nTrue\nTrue\nFalse\nTrue");
+        """, "color: red;background-color: black;cursor: pointer;font-family: \"Arial\";font-size: 12pt;\nFalse\nFalse\nTrue\nTrue\nFalse\nTrue");
 
     [Test]
     public void ComboBox_TextIsTheSelectedOption_AndSelectionEventsAreChangeOnly() => Expect("ComboBox", """

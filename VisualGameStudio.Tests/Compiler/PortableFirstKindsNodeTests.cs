@@ -88,7 +88,15 @@ public class PortableFirstKindsNodeTests
     {
         var stimulus = eventName == "CheckedChanged" ? "c.Element.querySelector(\"input\").click()" :
             domEvent == "input" ? "raw.value = \"typed\"\n raw.dispatch(\"input\")" :
-            domEvent == "focusin" ? "c.Element.focus()" : "c.Element.click()";
+            domEvent == "focusin" ? "c.Element.focus()" :
+            domEvent == "focusout" ? "raw.fire(\"focusout\")" :
+            domEvent is "mousedown" or "mouseup" or "mousemove" or "mouseenter" or "mouseleave" or "dblclick"
+                ? $"raw.fire(\"{domEvent}\")" :
+            domEvent == "keypress"
+                ? $"raw.fire(\"keydown\", 0, 0, 0, \"a\", \"KeyA\", False, False, False, \"\")" :
+            domEvent is "keydown" or "keyup"
+                ? $"raw.fire(\"{domEvent}\", 0, 0, 0, \"a\", \"KeyA\", False, False, False, \"\")" :
+            "c.Element.click()";
         Expect(kind, $"AddHandler c.{eventName}, AddressOf Changed\nDim raw As Object = c.Element\n" +
             stimulus + "\nConsole.WriteLine(hits)", "1");
     }

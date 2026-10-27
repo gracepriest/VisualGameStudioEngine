@@ -182,6 +182,7 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // The exception hierarchy this program needs, BEFORE any user class: a user
             // `class MyError extends Exception` hits the temporal dead zone otherwise.
             EmitExceptionPrelude(module);
+            if (UsesDecimal(module)) EmitDecimalPrelude();
             EmitConversionPrelude(module);
             EmitObjectComparisonPrelude(module);
             EmitIntegerDivisionPrelude(module);
@@ -341,6 +342,313 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         private bool _textHelperEmitted;
 
         /// <summary>
+        /// Exact <c>System.Decimal</c> for the JavaScript backend: a mantissa/scale value, so
+        /// <c>1.10D</c> stays 1.10 rather than collapsing to the JS number 1.1. Only emitted when
+        /// the module mentions Decimal (see <see cref="UsesDecimal"/>), keeping ordinary output
+        /// byte-for-byte unchanged.
+        /// </summary>
+        private const string DecimalPrelude = """
+            // VgsDecimal --- exact System.Decimal semantics for BasicLang's JavaScript backend.
+            // Portions derived from dotnet/runtime (System.Decimal.DecCalc: VarR8FromDec, VarDecFromR8 and its
+            // power-of-ten table) --- (c) .NET Foundation and Contributors, MIT License.
+            class VgsDecimal {
+              static MAX = (1n << 96n) - 1n;
+              static ZERO = new VgsDecimal(false, 0n, 0);
+              // .NET's double powers of ten, as double LITERALS (from 1e23 on a literal is not exact --- the table must
+              // be literals, never a computed power). A static FIELD: built once, not per call.
+              static DOUBLE_POWERS_10 = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14,
+                                         1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23, 1e24, 1e25, 1e26, 1e27, 1e28,
+                                         1e29, 1e30, 1e31, 1e32, 1e33, 1e34, 1e35, 1e36, 1e37, 1e38, 1e39, 1e40, 1e41, 1e42, 1e43,
+                                         1e44, 1e45, 1e46, 1e47, 1e48, 1e49, 1e50, 1e51, 1e52, 1e53, 1e54, 1e55, 1e56, 1e57, 1e58,
+                                         1e59, 1e60, 1e61, 1e62, 1e63, 1e64, 1e65, 1e66, 1e67, 1e68, 1e69, 1e70, 1e71, 1e72, 1e73,
+                                         1e74, 1e75, 1e76, 1e77, 1e78, 1e79, 1e80];
+              // The bit view VarDecFromR8 needs for GetExponent: one buffer, two typed views.
+              static BUF = new ArrayBuffer(8);
+              static F64 = new Float64Array(VgsDecimal.BUF);
+              static U64 = new BigUint64Array(VgsDecimal.BUF);
+              constructor(neg, mant, scale) { this.neg = neg && mant !== 0n; this.mant = mant; this.scale = scale; }
+              static pow10(n) { return 10n ** BigInt(n); }
+              signed() { return this.neg ? -this.mant : this.mant; }
+              // .NET's rule: at most 28 fractional digits and a 96-bit magnitude; drop digits with ONE banker's
+              // rounding over everything dropped (never digit by digit --- that double-rounds).
+              static reduce(neg, mant, scale) {
+                const MAX = VgsDecimal.MAX;
+                let k = Math.max(0, scale - 28);
+                while (k < scale && mant / VgsDecimal.pow10(k) > MAX) k++;
+                if (k > 0) {
+                  const p = VgsDecimal.pow10(k), q = mant / p, r = mant % p, half = p / 2n;
+                  mant = (r > half || (r === half && (q & 1n) === 1n)) ? q + 1n : q;
+                  scale -= k;
+                  if (mant > MAX && scale > 0) return VgsDecimal.reduce(neg, mant, scale);
+                }
+                if (mant > MAX) throw new OverflowException("Value was either too large or too small for a Decimal.");
+                return new VgsDecimal(neg, mant, scale);
+              }
+              static fromSigned(v, scale) { return VgsDecimal.reduce(v < 0n, v < 0n ? -v : v, scale); }
+              static align(a, b) {
+                const s = Math.max(a.scale, b.scale);
+                return [a.signed() * VgsDecimal.pow10(s - a.scale), b.signed() * VgsDecimal.pow10(s - b.scale), s];
+              }
+              static fromInt(n) { const v = BigInt(Math.trunc(n)); return new VgsDecimal(v < 0n, v < 0n ? -v : v, 0); }
+              // --- (decimal)double is .NET's DecCalc.VarDecFromR8 --- PORT IT, line for line (Task 22), from
+              // dotnet/runtime src/libraries/System.Private.CoreLib/src/System/Decimal.DecCalc.cs (MIT; add the
+              // attribution is the notice at the top of this prelude + THIRD-PARTY-NOTICES.md). It scales the DOUBLE by a double power of ten chosen from the
+              // binary exponent, rounds the scaled double half-to-even to an integer of ~15 significant digits, and
+              // strips trailing zeros --- arithmetic in IEEE doubles, which JavaScript reproduces exactly when the same
+              // operations and the same power-of-ten table are used. A decimal-string approach (toExponential/
+              // toPrecision) rounds the EXACT binary value instead and differs from .NET on edge cases.
+              static fromNumber(d) { return VgsDecimal.varDecFromR8(d); }
+              static varDecFromR8(input) {
+                // .NET 8 Decimal.DecCalc.VarDecFromR8, statement for statement. Doubles stay JS numbers (IEEE
+                // arithmetic is identical); the 64/96-bit steps are BigInt; the power table is DOUBLE_POWERS_10.
+                const DBLBIAS = 1022, DEC_SCALE_MAX = 28;
+                VgsDecimal.F64[0] = input;
+                const exp = Number((VgsDecimal.U64[0] >> 52n) & 0x7FFn) - DBLBIAS;
+                if (exp < -94) return new VgsDecimal(false, 0n, 0); // underflow -> canonical zero
+                if (exp > 96) throw new OverflowException("Value was either too large or too small for a Decimal.");
+
+                let neg = false;
+                if (input < 0) { input = -input; neg = true; }
+
+                // Round the input to a 15-digit integer. power is between -14 and 43.
+                let dbl = input;
+                let power = 14 - ((exp * 19728) >> 16);
+                if (power >= 0) {
+                  if (power > DEC_SCALE_MAX) power = DEC_SCALE_MAX;
+                  dbl *= VgsDecimal.DOUBLE_POWERS_10[power];
+                } else {
+                  if (power !== -1 || dbl >= 1E15) dbl /= VgsDecimal.DOUBLE_POWERS_10[-power];
+                  else power = 0; // didn't scale it
+                }
+                if (dbl < 1E14 && power < DEC_SCALE_MAX) { dbl *= 10; power++; }
+
+                // Math.Round(dbl) is half-to-even, then (ulong)(long) truncates the integral double.
+                let mant = VgsDecimal.roundHalfEven(dbl);
+                if (mant === 0n) return new VgsDecimal(false, 0n, 0);
+
+                let scale = 0;
+                if (power < 0) {
+                  // Add -power factors of 10; UInt64x64To128 throws past 96 bits.
+                  power = -power;
+                  mant *= 10n ** BigInt(power);
+                  if ((mant >> 96n) !== 0n) throw new OverflowException("Value was either too large or too small for a Decimal.");
+                } else {
+                  // Factor out powers of 10 to reduce the scale, if possible (max 14: a 15-digit mantissa).
+                  let lmax = power > 14 ? 14 : power;
+                  if ((mant & 255n) === 0n && lmax >= 8) {
+                    const div = mant / 100000000n;
+                    if (mant === div * 100000000n) { mant = div; power -= 8; lmax -= 8; }
+                  }
+                  if ((mant & 15n) === 0n && lmax >= 4) {
+                    const div = mant / 10000n;
+                    if (mant === div * 10000n) { mant = div; power -= 4; lmax -= 4; }
+                  }
+                  if ((mant & 3n) === 0n && lmax >= 2) {
+                    const div = mant / 100n;
+                    if (mant === div * 100n) { mant = div; power -= 2; lmax -= 2; }
+                  }
+                  if ((mant & 1n) === 0n && lmax >= 1) {
+                    const div = mant / 10n;
+                    if (mant === div * 10n) { mant = div; power--; }
+                  }
+                  scale = power;
+                }
+                return new VgsDecimal(neg, mant, scale);
+              }
+              static roundHalfEven(x) {
+                const f = Math.floor(x), diff = x - f;
+                return (diff > 0.5 || (diff === 0.5 && (f % 2) !== 0)) ? BigInt(f + 1) : BigInt(f);
+              }
+              // NumberStyles.Number, invariant: white space, a leading or trailing sign, group separators, one point.
+              static parse(text) {
+                const m = String(text).trim().match(/^([+-])?([\d,]*)(?:\.(\d*))?([+-])?$/);
+                if (!m || (m[1] && m[4])) throw new FormatException("The input string '" + text + "' was not in a correct format.");
+                const whole = m[2].replace(/,/g, ""), frac = m[3] ?? "";
+                if (whole === "" && frac === "") throw new FormatException("The input string '" + text + "' was not in a correct format.");
+                return VgsDecimal.reduce((m[1] ?? m[4]) === "-", BigInt((whole || "0") + frac), frac.length);
+              }
+              // VB's Conversions.ToDecimal on a BOXED value: an Object holding a Decimal, Integer,
+              // Double or String converts; anything else throws InvalidCastException. `CType(o,
+              // Decimal)` lowers to a CDec CALL (IRBuilder.ConversionBuiltinFor), not an IRCast,
+              // so this is the Object -> Decimal arm the backend actually reaches.
+              static fromObject(o) {
+                if (o == null) return VgsDecimal.ZERO;
+                if (o instanceof VgsDecimal) return o;
+                if (typeof o === "number") return Number.isInteger(o) ? VgsDecimal.fromInt(o) : VgsDecimal.fromNumber(o);
+                if (typeof o === "string") return VgsDecimal.parse(o);
+                throw new InvalidCastException("Conversion from type '" + o.constructor.name + "' to type 'Decimal' is not valid.");
+              }
+              add(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x + y, s); }
+              sub(b) { const [x, y, s] = VgsDecimal.align(this, b); return VgsDecimal.fromSigned(x - y, s); }
+              mul(b) {
+                const neg = this.neg !== b.neg;
+                // .NET's VarDecMul keeps the summed scale only while BOTH mantissas fit
+                // in 32 bits; past that, a zero product comes back from the 192-bit path
+                // as default(decimal) - 0 at scale 0, positive, sign discarded.
+                if (this.mant < 4294967296n && b.mant < 4294967296n)
+                {
+                  const scale = this.scale + b.scale;
+                  // DEC_SCALE_MAX + MaxInt64Scale: past scale 47 even a 64-bit product
+                  // underflows to default(decimal) - 0 at scale 0, sign discarded.
+                  if (scale > 47) return new VgsDecimal(false, 0n, 0);
+                  return VgsDecimal.reduce(neg, this.mant * b.mant, scale);
+                }
+                if (this.mant === 0n || b.mant === 0n) return new VgsDecimal(false, 0n, 0);
+                return VgsDecimal.reduce(neg, this.mant * b.mant, this.scale + b.scale);
+              }
+              div(b) {
+                if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
+                let scale = this.scale - b.scale, num = this.mant;
+                const den = b.mant, MAX = VgsDecimal.MAX;
+                while (scale < 0) { num *= 10n; scale++; }
+                let q = num / den, r = num % den;
+                while (r !== 0n && scale < 28) {
+                  const next = q * 10n + (r * 10n) / den;
+                  if (next > MAX) break;
+                  r = (r * 10n) % den; q = next; scale++;
+                }
+                if (r !== 0n) {
+                  const twice = r * 2n; if (twice > den || (twice === den && (q & 1n) === 1n)) q++;
+                  // .NET drops the trailing zeros that the 28-digit cut left on the end of a
+                  // non-terminating quotient: 1.10 / 2.205 is 0.498-356, not 0.498-3560.
+                  while (scale > 0 && q % 10n === 0n) { q /= 10n; scale--; }
+                }
+                return VgsDecimal.reduce(this.neg !== b.neg, q, scale);
+              }
+              mod(b) {
+                if (b.mant === 0n) throw new DivideByZeroException("Attempted to divide by zero.");
+                const [x, y, s] = VgsDecimal.align(this, b);
+                // .NET returns the dividend unchanged (scale and all) when |a| < |b|: 1.10 Mod
+                // 123456789.123456789 is 1.10 at scale 2, not 1.100000000.
+                if ((x < 0n ? -x : x) < (y < 0n ? -y : y)) return new VgsDecimal(this.neg, this.mant, this.scale);
+                const r = x % y;
+                // The sign of a remainder follows the dividend, and that includes -0.0.
+                return VgsDecimal.reduce(this.neg, r < 0n ? -r : r, s);
+              }
+              negate() { return new VgsDecimal(!this.neg, this.mant, this.scale); }
+              cmp(b) { const [x, y] = VgsDecimal.align(this, b); return x < y ? -1 : (x > y ? 1 : 0); }
+              equals(b) { return b instanceof VgsDecimal && this.cmp(b) === 0; }
+              // mode: "even" (Math.Round / CInt), "floor", "ceiling", "trunc".
+              roundTo(n, mode) {
+                if (this.scale <= n) return this;
+                const p = VgsDecimal.pow10(this.scale - n), r = this.mant % p;
+                let q = this.mant / p;
+                if (r !== 0n) {
+                  if (mode === "even") { const half = p / 2n; if (r > half || (r === half && (q & 1n) === 1n)) q++; }
+                  else if (mode === "floor" && this.neg) q++;
+                  else if (mode === "ceiling" && !this.neg) q++;
+                }
+                return new VgsDecimal(this.neg, q, n);
+              }
+              abs() { return new VgsDecimal(false, this.mant, this.scale); }
+              // VB's Decimal --- integral (CInt/CShort/CByte and CType/implicit narrowing --- exception row E1/E4): round
+              // half-to-even, then OverflowException outside the target's range (never a wrap).
+              toIntegral(min, max, typeName) {
+                const v = this.roundTo(0, "even").signed();
+                if (v < min || v > max) throw new OverflowException("Value was either too large or too small for " + typeName + ".");
+                return Number(v);
+              }
+              toInt32() { return this.toIntegral(-2147483648n, 2147483647n, "an Int32"); }
+              toInt16() { return this.toIntegral(-32768n, 32767n, "an Int16"); }
+              toByte() { return this.toIntegral(0n, 255n, "an unsigned byte"); }
+              // (double)decimal is .NET's DecCalc.VarR8FromDec: ((double)lo64 + (double)hi32 * 2^64) / 10^scale --- the
+              // ulong---double conversion, the sum and the division each round in IEEE doubles, and JS rounds the same
+              // operations identically; 10^scale is DOUBLE_POWERS_10 (the same literals .NET uses).
+              toNumber() {
+                const lo = this.mant & ((1n << 64n) - 1n), hi = this.mant >> 64n;
+                const d = (Number(lo) + Number(hi) * 18446744073709551616) / VgsDecimal.DOUBLE_POWERS_10[this.scale];
+                return this.neg ? -d : d;
+              }
+              toString() {
+                let digits = this.mant.toString();
+                if (this.scale > 0) {
+                  digits = digits.padStart(this.scale + 1, "0");
+                  digits = digits.slice(0, digits.length - this.scale) + "." + digits.slice(digits.length - this.scale);
+                }
+                return (this.neg ? "-" : "") + digits;
+              }
+              ToString() { return this.toString(); }
+              // VB's late-bound Object equality (spec D19): when either side is a Decimal, compare
+              // by VALUE. A JS number on the other side is a boxed Integer/Single/Double; exact
+              // integral values go through fromInt, the rest through fromNumber (Task 22).
+              static objEquals(a, b) {
+                const aDecimal = a instanceof VgsDecimal, bDecimal = b instanceof VgsDecimal;
+                if (aDecimal && bDecimal) return a.cmp(b) === 0;
+                const toDecimal = (n) => Number.isInteger(n) ? VgsDecimal.fromInt(n) : VgsDecimal.fromNumber(n);
+                if (aDecimal && typeof b === "number") return a.cmp(toDecimal(b)) === 0;
+                if (bDecimal && typeof a === "number") return b.cmp(toDecimal(a)) === 0;
+                return a === b;
+              }
+            }
+            """;
+
+        private static bool IsDecimalTypeName(TypeInfo t) =>
+            t != null && string.Equals(t.Name, "Decimal", StringComparison.OrdinalIgnoreCase);
+
+        private static bool UsesDecimal(IRModule module)
+        {
+            if (module == null) return false;
+
+            foreach (var type in ModuleTypeWalker.AllTypes(module))
+                if (IsDecimalTypeName(type)) return true;
+
+            if (module.GlobalVariables != null)
+                foreach (var gv in module.GlobalVariables.Values)
+                    if (IsDecimalTypeName(gv?.Type)) return true;
+
+            foreach (var function in module.Functions ?? Enumerable.Empty<IRFunction>())
+                foreach (var block in function.Blocks ?? Enumerable.Empty<BasicBlock>())
+                    foreach (var instruction in block.Instructions ?? Enumerable.Empty<IRInstruction>())
+                        if (ValueUsesDecimal(instruction, new HashSet<object>())) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Walks an IR node's public fields/properties looking for a Decimal type or value. The
+        /// DECLARED-type walk above misses a bare <c>1.10D</c> whose only occurrence is an
+        /// operand, so this is the belt to that braces.
+        /// </summary>
+        private static bool ValueUsesDecimal(object val, HashSet<object> visited)
+        {
+            if (val == null) return false;
+            if (val is TypeInfo ti) return IsDecimalTypeName(ti);
+            if (val is IRConstant c) return c.Value is decimal || IsDecimalTypeName(c.Type);
+            if (val is decimal) return true;
+            if (val is string) return false;
+            if (val.GetType().IsPrimitive || val.GetType().IsEnum) return false;
+            if (!visited.Add(val)) return false;
+            if (val is System.Collections.IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                    if (ValueUsesDecimal(item, visited)) return true;
+                return false;
+            }
+            var type = val.GetType();
+            foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                object v;
+                try { v = prop.GetValue(val); } catch { continue; }
+                if (ValueUsesDecimal(v, visited)) return true;
+            }
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                object v;
+                try { v = field.GetValue(val); } catch { continue; }
+                if (ValueUsesDecimal(v, visited)) return true;
+            }
+            return false;
+        }
+
+        private void EmitDecimalPrelude()
+        {
+            Line("/* VgsDecimal prelude */");
+            foreach (var line in DecimalPrelude.Split('\n'))
+                Line(line.TrimEnd('\r'));
+            Line();
+        }
+
+        /// <summary>
         /// THE one place a value becomes text on this backend, mirroring the C++ backend's
         /// <c>StringifyForText</c>: <c>&amp;</c>, interpolation (which lowers to the same Concat),
         /// <c>CStr</c>, <c>Console.Write</c>/<c>WriteLine</c> and a primitive's <c>.ToString()</c>.
@@ -376,6 +684,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                     return constant ? "\"True\"" : "\"False\"";
                 return $"({rendered} ? \"True\" : \"False\")";
             }
+
+            // VgsDecimal's toString keeps the scale; String(...) also carries a boxed Decimal
+            // through CStr, `&`, Console.Write and Decimal.ToString().
+            if (IsDecimalValue(value))
+                return $"String({rendered})";
 
             if (NeedsRuntimeTextCheck(value))
             {
@@ -439,6 +752,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private static bool IsBooleanValue(IRValue value) =>
             string.Equals(value?.Type?.Name, "Boolean", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsDecimalValue(IRValue value) =>
+            string.Equals(value?.Type?.Name, "Decimal", StringComparison.OrdinalIgnoreCase);
 
         private static bool IsPrimitiveTextType(IRValue value) =>
             (value?.Type?.Name?.ToLowerInvariant()) switch
@@ -2082,6 +2398,28 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             // behaviour was reachable before this.)
             var wrap = IsInt32(op.Type);
 
+            // Decimal is a VgsDecimal object: its own methods keep value+scale exact, and
+            // fromObject fits an Integer/Double/String operand into the same representation.
+            if (IsDecimalValue(op.Left) || IsDecimalValue(op.Right))
+            {
+                var dl = $"VgsDecimal.fromObject({l})";
+                var dr = $"VgsDecimal.fromObject({r})";
+                switch (op.Operation)
+                {
+                    case BinaryOpKind.Add: return $"{dl}.add({dr})";
+                    case BinaryOpKind.Sub: return $"{dl}.sub({dr})";
+                    case BinaryOpKind.Mul: return $"{dl}.mul({dr})";
+                    case BinaryOpKind.Div: return $"{dl}.div({dr})";
+                    case BinaryOpKind.Mod: return $"{dl}.mod({dr})";
+                    case BinaryOpKind.Eq: return $"({dl}.cmp({dr}) === 0)";
+                    case BinaryOpKind.Ne: return $"({dl}.cmp({dr}) !== 0)";
+                    case BinaryOpKind.Lt: return $"({dl}.cmp({dr}) < 0)";
+                    case BinaryOpKind.Le: return $"({dl}.cmp({dr}) <= 0)";
+                    case BinaryOpKind.Gt: return $"({dl}.cmp({dr}) > 0)";
+                    case BinaryOpKind.Ge: return $"({dl}.cmp({dr}) >= 0)";
+                }
+            }
+
             switch (op.Operation)
             {
                 case BinaryOpKind.Add: return wrap ? NarrowWrap(op.Type, $"(({l} + {r}) | 0)") : $"({l} + {r})";
@@ -2349,6 +2687,24 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             if (IsLateBoundComparison(op.Left, op.Right))
                 return LateBoundCompareText(op.Comparison, render(op.Left), render(op.Right));
 
+            // Decimal is a VgsDecimal object here, so === would compare references rather than
+            // values. 1.250 must equal 1.25 while still printing with its own scale.
+            if (IsDecimalValue(op.Left) || IsDecimalValue(op.Right))
+            {
+                var dl = $"VgsDecimal.fromObject({render(op.Left)})";
+                var dr = $"VgsDecimal.fromObject({render(op.Right)})";
+                return op.Comparison switch
+                {
+                    CompareKind.Eq => $"({dl}.cmp({dr}) === 0)",
+                    CompareKind.Ne => $"({dl}.cmp({dr}) !== 0)",
+                    CompareKind.Lt => $"({dl}.cmp({dr}) < 0)",
+                    CompareKind.Le => $"({dl}.cmp({dr}) <= 0)",
+                    CompareKind.Gt => $"({dl}.cmp({dr}) > 0)",
+                    CompareKind.Ge => $"({dl}.cmp({dr}) >= 0)",
+                    _ => throw NotYet($"CompareKind.{op.Comparison}"),
+                };
+            }
+
             var isEquality = op.Comparison is CompareKind.Eq or CompareKind.Ne;
             var l = isEquality ? NothingAsEmpty(op.Left, op.Right, render(op.Left)) : render(op.Left);
             var r = isEquality ? NothingAsEmpty(op.Right, op.Left, render(op.Right)) : render(op.Right);
@@ -2394,7 +2750,8 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 // rather than a syntax error. Pinned by Emits_DoubleConstant_InvariantCulture.
                 case double d: return d.ToString("R", CultureInfo.InvariantCulture);
                 case float f: return f.ToString("R", CultureInfo.InvariantCulture);
-                case decimal m: return m.ToString(CultureInfo.InvariantCulture);
+                // Preserve Decimal SCALE: 1.10D must stay 1.10, not become the JS number 1.1.
+                case decimal m: return $"VgsDecimal.parse(\"{m.ToString(CultureInfo.InvariantCulture)}\")";
 
                 // A Char or a 64-bit integer can reach the output as a BARE LITERAL with no
                 // declared position anywhere, so JsCapabilityChecker's declaration walk is
@@ -2629,9 +2986,9 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
                 case "asc" or "ascw" when args.Count == 1:
                     result = $"{Recv()}.charCodeAt(0)"; return true;
 
-                // Decimal is a JS number here; Parse is the one static use the portable library needs.
+                // The portable library's one static use: keep the text's scale (1.10 is not 1.1).
                 case "decimal.parse" when args.Count == 1:
-                    result = $"parseFloat({args[0]})"; return true;
+                    result = $"VgsDecimal.parse({args[0]})"; return true;
 
                 default:
                     return false;
@@ -4266,7 +4623,22 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
             rendered = null;
             var source = cast.SourceType;
             var target = cast.Type;
-            if (source == null || target == null) return false;
+            if (target == null) return false;
+
+            // An Optional parameter's default can be built from an UNANALYZED expression (the
+            // shipped portable library's `CType(0, MessageBoxButtons)` is the measured case), so
+            // the literal arrives with no type at all. A constant integral value cast to an enum
+            // is still just that number on JavaScript; anything else keeps the refusal below.
+            if (source == null)
+            {
+                if (target.Kind == TypeKind.Enum && cast.Value is IRConstant
+                    { Value: int or long or short or byte or sbyte or ushort or uint or ulong })
+                {
+                    rendered = Expr(cast.Value);
+                    return true;
+                }
+                return false;
+            }
 
             // Widening to floating point, and Single↔Double: the double already holds it.
             if (target.IsFloatingPoint() && (source.IsIntegral() || source.IsFloatingPoint()))
@@ -4894,6 +5266,11 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
 
         private string FieldAccess(IRFieldAccess fa)
         {
+            // `MyBase.P` on a property: the BASE's getter. `this.P` called the override itself —
+            // the portable MenuStrip/StatusStrip Items getters recursed until the stack died.
+            if (fa.ThroughBase)
+                return $"super.{SanitizeName(fa.FieldName)}";
+
             // A type keyword's Shared property (`Integer.MaxValue`, `String.Empty`). ⛔ Never the bare
             // member: `String.Empty` read a property of JavaScript's String constructor, which has none,
             // and `String.Empty & "x"` printed "undefinedx" from a clean build.
@@ -4960,16 +5337,19 @@ namespace BasicLang.Compiler.CodeGen.JavaScript
         // Reachable since plan 2 Task 7 let a `::` member be assigned at all.
         public void Visit(IRFieldStore fieldStore)
         {
+            // `MyBase.P = v` on a property: the BASE's setter, not the override.
+            var receiver = fieldStore.ThroughBase ? "super" : Expr(fieldStore.Object);
+
             if (ReadOnlyAutoPropertySlot(fieldStore) is string slot)
             {
-                Line($"{Expr(fieldStore.Object)}.{slot} = {Expr(fieldStore.Value)};");
+                Line($"{receiver}.{slot} = {Expr(fieldStore.Value)};");
                 return;
             }
 
             var member = IsForeignValue(fieldStore.Object)
                 ? (ForeignName(fieldStore.FieldName, out var foreign) ? foreign : fieldStore.FieldName)
                 : SanitizeName(fieldStore.FieldName);
-            Line($"{Expr(fieldStore.Object)}.{member} = {Expr(fieldStore.Value)};");
+            Line($"{receiver}.{member} = {Expr(fieldStore.Value)};");
         }
         public void Visit(IRTupleElement tupleElement) => throw NotYet(nameof(IRTupleElement));
         /// <summary>

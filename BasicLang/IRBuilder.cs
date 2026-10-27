@@ -6072,7 +6072,10 @@ namespace BasicLang.Compiler.IR
                 memberExpr.Object.Accept(this);
                 var obj = _expressionResult;
 
-                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value);
+                var fieldStore = new IRFieldStore(obj, DeclaredMemberSpelling(memberExpr), value)
+                {
+                    ThroughBase = IsBasePropertyAccess(memberExpr)
+                };
 
                 // P2a-2 Task 7a: a .NET PROPERTY/FIELD write carries the SYNTHESIZED set_X
                 // accessor-method descriptor (NetAccessorSynthesis — the single synthesis
@@ -7395,6 +7398,17 @@ namespace BasicLang.Compiler.IR
         }
 
         /// <summary>
+        /// <c>MyBase.P</c> where P is a PROPERTY — the base's accessor, bypassing virtual
+        /// dispatch. Lowered to <c>this.P</c> before, a derived override called itself (the
+        /// portable MenuStrip/StatusStrip <c>Items</c> getters recurse on JavaScript).
+        /// ⛔ A FIELD through MyBase is NOT flagged: a field is not virtual and lives on the
+        /// instance, so <c>super.field</c> would read the prototype instead.
+        /// </summary>
+        private bool IsBasePropertyAccess(MemberAccessExpressionNode node) =>
+            node.Object is MyBaseExpressionNode
+            && _semanticAnalyzer?.GetNodeSymbol(node)?.Kind == SymbolKind.Property;
+
+        /// <summary>
         /// The spelling an identifier reference is emitted by: its declaration's
         /// (<see cref="NameBinding.DeclaredName"/>) when the analyzer bound it, else as written. For
         /// the sites that name a thing rather than look up storage (#124).
@@ -7447,7 +7461,10 @@ namespace BasicLang.Compiler.IR
             var memberType = _semanticAnalyzer.GetNodeType(node);
             var tempName = _currentFunction.GetNextTempName();
 
-            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType);
+            var fieldAccess = new IRFieldAccess(tempName, obj, DeclaredMemberSpelling(node), memberType)
+            {
+                ThroughBase = IsBasePropertyAccess(node)
+            };
 
             // P2a-2 Task 7a: a .NET PROPERTY/FIELD read carries its descriptor (the
             // getter-shaped slot) into IR. Gated to those two kinds on purpose: a METHOD
@@ -8195,8 +8212,13 @@ namespace BasicLang.Compiler.IR
             node.Expression.Accept(this);
             var value = _expressionResult;
 
-            var sourceType = _semanticAnalyzer.GetNodeType(node.Expression);
+            var sourceType = _semanticAnalyzer.GetNodeType(node.Expression) ?? value?.Type;
             var targetType = _semanticAnalyzer.GetNodeType(node);
+            // An Optional parameter's default is not always visited by the analyzer (the shipped
+            // portable library's `CType(0, MessageBoxButtons)` is the measured case), so neither
+            // node has a recorded type. Recover the target from the type NAME the parser kept.
+            if (targetType == null && !string.IsNullOrEmpty(node.TargetType?.Name))
+                targetType = _semanticAnalyzer.LookupType(node.TargetType.Name);
 
             // `CType(x, Integer)` IS `CInt(x)` in VB — same rounding (half-to-even), same string
             // parsing, same Boolean rule. Lowered to the builtin so the two spellings cannot
