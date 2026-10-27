@@ -2079,6 +2079,22 @@ public static class FormControlCatalog
         new FormEventDef("Scroll", "ScrollEventArgs", null, FormEventCategory.Action, "Occurs when the user moves the scroll box.")
     ];
 
+    /// <summary>
+    /// A GridPanel is a web container: its default gesture is Click. Paint belongs to a WinForms
+    /// control and would make the web-only row look like a desktop panel to the catalog gates.
+    /// </summary>
+    private static IReadOnlyList<FormEventDef> GridPanelEvents() =>
+    [
+        new FormEventDef("Click", null, "click", FormEventCategory.Action, "Occurs when the component is clicked.", IsDefault: true),
+        new FormEventDef("DoubleClick", null, "dblclick", FormEventCategory.Action, "Occurs when the component is double-clicked."),
+        new FormEventDef("MouseDown", "MouseEventArgs", "mousedown", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is pressed."),
+        new FormEventDef("MouseUp", "MouseEventArgs", "mouseup", FormEventCategory.Mouse, "Occurs when the mouse pointer is over the component and a mouse button is released."),
+        new FormEventDef("MouseMove", "MouseEventArgs", "mousemove", FormEventCategory.Mouse, "Occurs when the mouse pointer is moved over the component."),
+        new FormEventDef("MouseEnter", null, "mouseenter", FormEventCategory.Mouse, "Occurs when the mouse enters the visible part of the control."),
+        new FormEventDef("MouseLeave", null, "mouseleave", FormEventCategory.Mouse, "Occurs when the mouse leaves the visible part of the control."),
+        ..FocusEvents(web: true)
+    ];
+
     private static IReadOnlyList<FormEventDef> GroupBoxEvents() =>
     [
         new FormEventDef("Enter", null, "focusin", FormEventCategory.Focus, "Occurs when the control becomes the active control of the form.", IsDefault: true, WebFilter: FormWebFilter.FromOutside),
@@ -2572,16 +2588,19 @@ public static class FormControlCatalog
             StretchesWhenStacked: true),
         new("GridPanel",   null,          "div",      null,       true,  Common(
             new FormPropertyDef("Columns", FormPropertyType.String, "1fr,1fr",
+                DomMember: "style.gridTemplateColumns",
                 Category: FormPropertyCategory.Layout,
                 Description: "The grid's column tracks, as a comma-separated CSS track list (e.g. 120px,1fr)."),
             new FormPropertyDef("Rows", FormPropertyType.String, "auto,auto",
+                DomMember: "style.gridTemplateRows",
                 Category: FormPropertyCategory.Layout,
                 Description: "The grid's row tracks, as a comma-separated CSS track list (e.g. auto,auto)."),
             new FormPropertyDef("Gap", FormPropertyType.String, "8px",
+                DomMember: "style.gap",
                 Category: FormPropertyCategory.Layout,
                 Description: "The space between the grid's cells, as a CSS length (e.g. 8px).")),
             DefaultWidth: 320, DefaultHeight: 180, Schematic: FormSchematic.TableContainer,
-            Events: PanelEvents(),
+            Events: GridPanelEvents(),
             DropValues: new Dictionary<string, string>
             {
                 ["Columns"] = "1fr,1fr",

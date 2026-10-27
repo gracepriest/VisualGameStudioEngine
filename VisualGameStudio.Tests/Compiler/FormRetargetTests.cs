@@ -1577,16 +1577,14 @@ public class FormRetargetTests
     /// HOISTED going to WinForms — which is why Hoist may translate by a container's stored X/Y.
     /// </summary>
     [Test]
-    public void EveryWebCatalogRow_HasAWinFormsType_SoACanvasPageNeverHoists()
+    public void TheOnlyWebOnlyCatalogRow_IsGridPanel_AndItIsHandledAsAPanelLoss()
     {
         var webOnly = FormControlCatalog.For(FormTarget.Web).Where(d => !d.SupportsTarget(FormTarget.WinForms))
             .Select(d => d.Kind).ToList();
 
-        Assert.That(webOnly, Is.Empty,
-            "a web-only row now exists, so a Canvas page CAN hoist going to WinForms. FormRetarget.Hoist translates " +
-            "children by the removed container's STORED X/Y — for a docked container that is not where it sits, and " +
-            "its hoisted children would land offset. Translate by FormDockLayout's resolved rect there first " +
-            "(Task 11 pre-flight B2).");
+        Assert.That(webOnly, Is.EquivalentTo(new[] { "GridPanel" }),
+            "GridPanel is the one deliberate web-only container. FormRetarget.Hoist removes the whole panel " +
+            "and names it; it must not hoist cell children, which have no pixel position.");
     }
 
     [Test]
