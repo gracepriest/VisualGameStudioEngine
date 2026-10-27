@@ -143,7 +143,7 @@ public class PortablePageRenderingTests
     {
         var page = Page();
         var combo = Box("ComboBox", "pick", w: 180);
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma";
         combo.Properties["Text"] = "Beta";
         page.Controls.Add(combo);
 
@@ -161,7 +161,7 @@ public class PortablePageRenderingTests
     {
         var page = Page();
         var combo = Box("ComboBox", "pick", w: 180);
-        combo.Properties["Items"] = "Alpha, Beta, Gamma";
+        combo.Properties["Items"] = "Alpha\nBeta\nGamma";
         combo.Properties["Text"] = "Beta";
         combo.Properties["SelectedIndex"] = "2";
         page.Controls.Add(combo);

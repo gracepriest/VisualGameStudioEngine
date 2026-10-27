@@ -28,6 +28,20 @@ public static class FormCss
             return FormFontValue.TryParse(value, out var font) ? font.Css : Array.Empty<(string, string)>();
         }
 
+        // PictureBox sizing fixes the image's fit and, for the unpainted modes, its anchor point.
+        if (property.CssConverter == FormCssConverter.PictureBoxSizeMode)
+        {
+            return property.Canonical(value) switch
+            {
+                "Normal" => new[] { ("object-fit", "none"), ("object-position", "left top") },
+                "StretchImage" => new[] { ("object-fit", "fill"), ("object-position", "center") },
+                "AutoSize" => new[] { ("object-fit", "none"), ("object-position", "left top") },
+                "CenterImage" => new[] { ("object-fit", "none"), ("object-position", "center") },
+                "Zoom" => new[] { ("object-fit", "contain"), ("object-position", "center") },
+                _ => Array.Empty<(string, string)>()
+            };
+        }
+
         var converted = property.CssConverter switch
         {
             FormCssConverter.None => IsSafeVerbatim(value) ? value : null,
@@ -40,6 +54,10 @@ public static class FormCss
             FormCssConverter.Cursor => FormCursors.CssFor(value),
             // AutoScroll=true → the element scrolls its overflow; false says nothing (the element's own overflow stands).
             FormCssConverter.AutoScrollToOverflow => bool.TryParse(value, out var scroll) && scroll ? "auto" : null,
+            FormCssConverter.BorderStyle => property.Canonical(value) switch
+            {
+                "None" => "none", "FixedSingle" => "1px solid", "Fixed3D" => "2px inset", _ => null
+            },
             // ⛔ Never a silent "no declaration": a converter added to the enum without an arm here
             // would drop its row from every page with nothing looking wrong.
             _ => throw new ArgumentOutOfRangeException(nameof(property), property.CssConverter,

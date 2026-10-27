@@ -120,7 +120,7 @@ public static class FormHandlers
             form.Target);
         return read.Problem == null && read.Style == FormStyle.Portable
             ? FormCodeStyle.Portable
-            : FormCodeStyle.Classic;
+            : default;
     }
 
     /// <summary>
@@ -137,15 +137,23 @@ public static class FormHandlers
     /// </list>
     /// </summary>
     public static FormHandlerShape Shape(FormBindOwner owner, FormEventDef evt, FormTarget target,
-        FormCodeStyle style = FormCodeStyle.Classic)
+        FormCodeStyle? style = null)
     {
-        if (style == FormCodeStyle.Portable)
+        var effective = style ?? StyleOf(owner.Form);
+        var winFormsParameters = new[]
         {
+            new FormHandlerParameter("sender", "Object"),
+            new FormHandlerParameter("e", evt.WinFormsArgs ?? "EventArgs")
+        };
+
+        if (effective != FormCodeStyle.Classic)
+        {
+            if (effective != FormCodeStyle.Portable)
+                throw new ArgumentOutOfRangeException(nameof(style), effective, "unknown form code style");
+
             // Portable code is WinForms-shaped even on a web document: AddHandler takes the
             // desktop delegate, so the handler lives below the init region with sender/EventArgs.
-            return new FormHandlerShape(
-                new[] { new FormHandlerParameter("sender", "Object"), new FormHandlerParameter("e", evt.WinFormsArgs ?? "EventArgs") },
-                FormHandlerPlacement.BelowInitRegion);
+            return new FormHandlerShape(winFormsParameters, FormHandlerPlacement.BelowInitRegion);
         }
 
         if (target == FormTarget.Web)
@@ -156,9 +164,7 @@ public static class FormHandlers
                 FormHandlerPlacement.AboveInitRegion);
         }
 
-        return new FormHandlerShape(
-            new[] { new FormHandlerParameter("sender", "Object"), new FormHandlerParameter("e", evt.WinFormsArgs ?? "EventArgs") },
-            FormHandlerPlacement.BelowInitRegion);
+        return new FormHandlerShape(winFormsParameters, FormHandlerPlacement.BelowInitRegion);
     }
 
     /// <summary>
@@ -404,7 +410,7 @@ public static class FormHandlers
     /// </summary>
     public static FormHandlerPlan Plan(
         FormDocument form, FormBindOwner owner, FormEventDef evt, string codeText, string? handlerName = null,
-        FormCodeStyle style = FormCodeStyle.Classic)
+        FormCodeStyle style = default)
     {
         var target = style == FormCodeStyle.Portable ? FormTarget.WinForms : form.Target;
         var eventName = FormEvents.NameOn(evt, target);
@@ -471,7 +477,7 @@ public static class FormHandlers
 
     private static FormHandlerPlan PlanHandler(
         FormDocument form, FormBindOwner owner, FormEventDef evt, string eventName, string handler, string codeText,
-        bool computed = false, FormCodeStyle style = FormCodeStyle.Classic)
+        bool computed = false, FormCodeStyle style = default)
     {
         var index = new Recognizer.SourceIndex(codeText);
         var scan = FormCodeScan.Scan(codeText, form.Name);

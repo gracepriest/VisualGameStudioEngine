@@ -190,6 +190,7 @@ public class FormCssTests
             FormCssConverter.ContentAlignmentHorizontal => (FormControlCatalog.Find("Label")!.Property("TextAlign")!, "MiddleLeft"),
             FormCssConverter.VisibleToDisplay => (new FormPropertyDef("X", FormPropertyType.Bool, "true",
                 CssProperty: "display", CssConverter: converter), "false"),
+            FormCssConverter.PictureBoxSizeMode => (FormControlCatalog.Find("PictureBox")!.Property("SizeMode")!, "CenterImage"),
             FormCssConverter.Font => (new FormPropertyDef("X", FormPropertyType.Font, CssProperty: "font",
                 CssConverter: converter), "Segoe UI, 9pt"),
             FormCssConverter.Padding => (new FormPropertyDef("X", FormPropertyType.Padding, CssProperty: "padding",
@@ -198,6 +199,7 @@ public class FormCssTests
                 CssConverter: converter), "Hand"),
             FormCssConverter.AutoScrollToOverflow => (new FormPropertyDef("X", FormPropertyType.Bool, "false",
                 CssProperty: "overflow", CssConverter: converter), "true"),
+            FormCssConverter.BorderStyle => (FormControlCatalog.Find("Panel")!.Property("BorderStyle")!, "FixedSingle"),
             _ => throw new ArgumentOutOfRangeException(nameof(converter), converter, "add a sample for the new converter")
         };
 

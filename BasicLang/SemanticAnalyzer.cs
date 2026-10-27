@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using BasicLang.Compiler.AST;
 using BasicLang.Compiler;
+using BasicLang.Forms;
 using BasicLang.Net;
 
 namespace BasicLang.Compiler.SemanticAnalysis
@@ -513,6 +514,26 @@ namespace BasicLang.Compiler.SemanticAnalysis
         /// closure (WinForms, WPF), so "not resolvable" is not evidence of anything there.
         /// </summary>
         private bool _netNativeBackend = true;
+
+        /// <summary>True when the program targets JavaScript (see <see cref="ConfigureTarget"/>).</summary>
+        private bool _isJavaScriptTarget;
+
+        /// <summary>True while a unit from the shipped portable library itself is analyzed.</summary>
+        private bool _inPortableLibrary;
+
+        /// <summary>Selects the web library's missing-member wording over the generic "no member" error.</summary>
+        public void ConfigureTarget(string? targetBackend, bool portableLibraryUnit = false)
+        {
+            _isJavaScriptTarget = string.Equals(targetBackend, "javascript", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(targetBackend, "js", StringComparison.OrdinalIgnoreCase);
+            _inPortableLibrary = portableLibraryUnit;
+        }
+
+        /// <summary>Task 34: the web library's missing-member wording (spec §5.11).</summary>
+        private void ReportWebUnavailableMember(string typeName, string memberName, int line, int column) =>
+            Error($"WebUnavailableMember: '{PortableLibraryTypes.SimpleName(typeName)}.{memberName}' is a " +
+                  "WinForms member that is not available on the web. Put desktop-only code inside " +
+                  "#If DESKTOP Then ... #End If.", line, column);
 
         /// <summary>
         /// P2a-2 Task 4 — receivers <see cref="ProbeNetMemberAccess"/> RESOLVED, keyed by the
@@ -10914,7 +10935,10 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
             else
             {
-                Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
+                if (_isJavaScriptTarget && PortableLibraryTypes.LibraryTypeName(withType) is { } libraryType)
+                    ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
+                else
+                    Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
         }
@@ -13376,6 +13400,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
                 return;
             }
 
+            // Task 34: `.Element` is the web escape hatch. On a desktop build the receiver's
+            // DECLARED type name decides; a receiver typed Object is left to csc.
+            if (!_isJavaScriptTarget
+                && string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
+                && PortableLibraryTypes.IsLibraryReceiver(objectType))
+            {
+                Error("ElementOnDesktop: '.Element' is web-only; wrap it in #If WEB Then ... #End If.",
+                    node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+                return;
+            }
+
             // `g.Length` on a rank-2 array is the row count natively and the FLATTENED count on
             // .NET — a silent wrong answer on one target or the other. Whole-array members are
             // refused for the same reason For Each is.
@@ -13434,6 +13470,18 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 SetNodeType(node, _typeManager.ObjectType);
             }
+            // A portable-library receiver's unknown member is the named web refusal, before the
+            // .NET fallback can accept a WinForms-only member (`Me.ShowDialog`, `btn.Nope`).
+            // `.Element` and Object's own members are the deliberate exceptions.
+            else if (_isJavaScriptTarget && !_inPortableLibrary
+                     && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryReceiver
+                     && !string.Equals(node.MemberName, "Element", StringComparison.OrdinalIgnoreCase)
+                     && !ObjectMemberNames.Contains(node.MemberName)
+                     && !DeclaresMember(objectType, node.MemberName))
+            {
+                ReportWebUnavailableMember(libraryReceiver, node.MemberName, node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
             // A BasicLang class whose members are all known is never a .NET type, whatever its name.
             else if (!LacksDeclaredMember(objectType, node.MemberName) && IsNetType(objectType.Name))
             {
@@ -13471,6 +13519,12 @@ namespace BasicLang.Compiler.SemanticAnalysis
             {
                 Error("Constructor chaining via Me.New is not supported. Move the shared initialization " +
                       "into a Private Sub and call it from each constructor", node.Line, node.Column);
+                SetNodeType(node, _typeManager.ObjectType);
+            }
+            else if (_isJavaScriptTarget && !_inPortableLibrary
+                     && PortableLibraryTypes.LibraryTypeName(objectType) is { } libraryType)
+            {
+                ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
             }
             else

@@ -6,6 +6,7 @@ using BasicLang.Compiler.AST;
 using BasicLang.Compiler.IR;
 using BasicLang.Compiler.IR.Optimization;
 using BasicLang.Compiler.SemanticAnalysis;
+using BasicLang.Forms;
 
 namespace BasicLang.Compiler
 {
@@ -184,6 +185,7 @@ namespace BasicLang.Compiler
             _registry = new ModuleRegistry(_resolver);
             _dependencyGraph = new DependencyGraph();
             _preprocessor = new Preprocessor();
+            _preprocessor.Define(IsJavaScriptTarget ? "WEB" : "DESKTOP");
 
             // Add configured search paths
             foreach (var path in _options.SearchPaths)
@@ -430,6 +432,20 @@ namespace BasicLang.Compiler
                 }
                 if (result.HasErrors) return FinalizeResult(result, startTime);
 
+                // Task 34: source-level web errors run before analysis so the user sees the named
+                // error rather than a follow-on missing-member or conversion error. Never for the
+                // library's own units.
+                if (IsJavaScriptTarget && projectUnits.Any(IsPortableLibraryUnit))
+                {
+                    var userUnits = projectUnits.Where(u => !IsPortableLibraryUnit(u)).ToList();
+                    foreach (var error in PortableWebSourceChecks.Check(
+                                 userUnits, (source, path) => _preprocessor.Process(source, path)))
+                    {
+                        result.AllErrors.Add(error);
+                    }
+                    if (result.HasErrors) return FinalizeResult(result, startTime);
+                }
+
                 // A program class must not silently shadow a portable-library class.
                 CheckPortableLibraryNameCollisions(projectUnits, result);
                 if (result.HasErrors) return FinalizeResult(result, startTime);
@@ -640,6 +656,14 @@ namespace BasicLang.Compiler
             if (File.Exists(dom) && !files.Any(f => string.Equals(f, dom, StringComparison.OrdinalIgnoreCase)))
                 files.Add(dom);
             return files;
+        }
+
+        private static bool IsPortableLibraryUnit(CompilationUnit unit)
+        {
+            var libraryDirectory = Path.GetFullPath(WebFormsLibraryDirectory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(unit.FilePath).StartsWith(libraryDirectory, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -912,6 +936,7 @@ namespace BasicLang.Compiler
                     _options.NetResolverFactory,
                     nativeBackend: string.Equals(_options.TargetBackend, "cpp",
                                                  StringComparison.OrdinalIgnoreCase));
+                analyzer.ConfigureTarget(_options.TargetBackend, IsPortableLibraryUnit(unit));
                 if (implicitImports != null)
                 {
                     analyzer.AddImplicitImports(implicitImports);

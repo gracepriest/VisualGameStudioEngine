@@ -2464,7 +2464,7 @@ public static class FormControlCatalog
             // ΓÜá The DOM has no TextChanged. `input` fires per keystroke, which is what TextChanged
             // means; `change` fires on blur and would be a different gesture wearing the same name.
             Events: TextBoxEvents(),
-            StretchesWhenStacked: true),
+            StretchesWhenStacked: true, MultilineTag: "textarea", PasswordProperty: "PasswordChar"),
         new("Button",      "Button",      "button",   null,       false, Common(Text, ButtonTextAlign, PaddingRow,
             new FormPropertyDef("DialogResult", FormPropertyType.Enum, "None",
                 new[] { "None", "OK", "Cancel", "Abort", "Retry", "Ignore", "Yes", "No", "TryAgain", "Continue" },
@@ -2493,7 +2493,9 @@ public static class FormControlCatalog
                 WinFormsEnumType: "Appearance", Targets: new[] { FormTarget.WinForms },
                 Category: FormPropertyCategory.Appearance, Description: "Controls the appearance of the check box.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Check,
-            Events: CheckBoxEvents()),
+            Events: CheckBoxEvents(),
+            CaptionWrapper: "label", CaptionTag: "span", EnableTarget: FormEnableTarget.InnerInput,
+            PortableCss: ".vgs-CheckBox { display: inline-flex; align-items: center; gap: 3px; }\n.vgs-CheckBox > input { margin: 0; flex: none; }"),
         new("RadioButton", "RadioButton", "input",    "radio",    false, Common(
             Text,
             RadioChecked,
@@ -2514,7 +2516,9 @@ public static class FormControlCatalog
                 Category: FormPropertyCategory.Appearance,
                 Description: "Controls whether the RadioButton appears as normal or as a Windows PushButton.")),
             DefaultWidth: 104, DefaultHeight: 24, Schematic: FormSchematic.Radio,
-            Events: RadioButtonEvents()),
+            Events: RadioButtonEvents(),
+            CaptionWrapper: "label", CaptionTag: "span", EnableTarget: FormEnableTarget.InnerInput,
+            PortableCss: ".vgs-RadioButton { display: inline-flex; align-items: center; gap: 3px; }\n.vgs-RadioButton > input { margin: 0; flex: none; }"),
         new("ComboBox",    "ComboBox",    "select",   null,       false, CommonColoured(WindowTextForeColor, WindowBackColor,
             Text,
             // Items is a get-only collection on WinForms ΓÇö assigning it is CS0200.
