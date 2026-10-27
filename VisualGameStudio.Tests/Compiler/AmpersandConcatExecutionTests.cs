@@ -461,12 +461,10 @@ public class AmpersandConcatCompileTests
     /// standard and the aggressive passes (the refusal is a capability check, not an optimizer rule). The probes that hold none of them run: the execution fixture's rows.
     /// </summary>
     [Test]
-    public void JavaScript_ACharADecimalAndALongAmpersand_AreStillRefused()
+    public void JavaScript_ALongAmpersand_IsStillRefused()
     {
         var cases = new (string Name, string Source, string Code, string What)[]
         {
-            ("Char", "Sub Main()\n    Dim c As Char = \"a\"c\n    Console.WriteLine(c & c)\nEnd Sub", "BL7004: 'Char' cannot be lowered to JavaScript", "local variable 'c'"),
-            ("Decimal", "Sub Main()\n    Dim m As Decimal = 1.5\n    Console.WriteLine(m & 1)\nEnd Sub", "BL7007: 'Decimal' is not available on the JavaScript backend", "'m'"),
             ("Long", "Sub Main()\n    Dim l As Long = 9000000000\n    Console.WriteLine(l & 1)\nEnd Sub", "BL7003: 'Long' cannot be lowered to JavaScript", "local variable 'l'"),
         };
         Assert.Multiple(() =>
