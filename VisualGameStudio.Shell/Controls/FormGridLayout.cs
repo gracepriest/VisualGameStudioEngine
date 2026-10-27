@@ -33,13 +33,8 @@ public static class FormGridLayout
     /// </summary>
     public static IReadOnlyList<string> ParseTracks(string? spec)
     {
-        if (string.IsNullOrWhiteSpace(spec))
-        {
-            return new[] { "1fr" };
-        }
-
-        var parts = spec.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return parts.Length == 0 ? new[] { "1fr" } : parts;
+        var parts = FormTracks.Split(spec);
+        return parts.Count == 0 ? new[] { "1fr" } : parts;
     }
 
     /// <summary>The gap between tracks, in form pixels. Non-pixel gaps are treated as none.</summary>

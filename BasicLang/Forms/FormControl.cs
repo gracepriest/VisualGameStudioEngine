@@ -64,6 +64,12 @@ public sealed class FormControl
     public FormGeometry? Geometry { get; set; }
 
     /// <summary>
+    /// This control's cell when its DIRECT parent is a GridPanel; null otherwise. See
+    /// <see cref="GridCell"/> for why this is not <see cref="Geometry"/>.
+    /// </summary>
+    public GridCell? GridCell { get; set; }
+
+    /// <summary>
     /// Catalog properties, keyed by the catalog's spelling. Ordered so a save does not reshuffle
     /// attributes the user has read a hundred times.
     /// </summary>
@@ -190,7 +196,8 @@ public sealed class FormControl
             Kind = Kind,
             Id = Id,
             TabIndex = TabIndex,
-            Geometry = Geometry?.Clone()
+            Geometry = Geometry?.Clone(),
+            GridCell = GridCell?.Clone()
         };
 
         foreach (var (key, value) in Properties)

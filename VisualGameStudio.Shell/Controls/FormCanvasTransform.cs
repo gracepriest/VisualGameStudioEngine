@@ -440,7 +440,7 @@ public sealed class FormCanvasTransform
         var origins = new Dictionary<FormControl, Point>(ReferenceEqualityComparer.Instance);
         var placed = FormVocabulary.IsPixel(document)
             ? Layout(document.Controls, new Point(0, 0), dock, origins).ToList()
-            : WebLayout(document).ToList();
+            : WebLayout(document, origins).ToList();
 
         // ⚠ Bands LAST, so a band paints over — and out-hit-tests — anything that overlaps it. Document order is
         // z-order everywhere in this class, and chrome is on top of the surface. ⚠ Scope call S12, recorded and NOT
@@ -913,7 +913,8 @@ public sealed class FormCanvasTransform
     /// guess is exactly the preview this canvas must not pretend to be. A <c>Canvas</c> page never comes here: it
     /// speaks pixels (<see cref="FormVocabulary.IsPixel(FormDocument)"/>) and takes the pixel walk.</para>
     /// </summary>
-    private static IEnumerable<FormLayoutEntry> WebLayout(FormDocument document)
+    private static IEnumerable<FormLayoutEntry> WebLayout(
+        FormDocument document, Dictionary<FormControl, Point> origins)
     {
         // ⚠ DELIBERATELY `Layout?.Kind`, not FormVocabulary.LayoutOf: LayoutOf reads a missing <Layout> as Grid for
         // VOCABULARY purposes, but a cell rectangle needs the page's actual Cols/Rows, and a layout-less page has
@@ -928,10 +929,50 @@ public sealed class FormCanvasTransform
         {
             if (control.Geometry is GridGeometry grid)
             {
-                yield return new FormLayoutEntry(
-                    control,
-                    FormGridLayout.CellRect(document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan),
-                    FormLayoutRole.Control);
+                var bounds = FormGridLayout.CellRect(
+                    document.Layout, surface, grid.Col, grid.Row, grid.ColSpan, grid.RowSpan);
+                origins[control] = bounds.TopLeft;
+                yield return new FormLayoutEntry(control, bounds, FormLayoutRole.Control);
+
+                if (FormGridPanel.Is(control))
+                {
+                    foreach (var nested in GridPanelChildren(control, bounds, origins))
+                    {
+                        yield return nested;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A GridPanel's children, in their cells. The panel's OWN rectangle is already resolved (pixels
+    /// on a Canvas page, a page cell on a Grid page); this only adds the cells inside it.
+    /// </summary>
+    private static IEnumerable<FormLayoutEntry> GridPanelChildren(
+        FormControl panel, Rect panelBounds, Dictionary<FormControl, Point> origins)
+    {
+        var layout = FormGridPanel.LayoutOf(panel);
+        foreach (var child in panel.Children)
+        {
+            var cell = child.GridCell ?? new GridCell();
+            var local = FormGridLayout.CellRect(
+                layout, panelBounds.Size, cell.Col, cell.Row, cell.ColSpan, cell.RowSpan);
+            var bounds = new Rect(
+                panelBounds.X + local.X, panelBounds.Y + local.Y, local.Width, local.Height);
+
+            origins[child] = bounds.TopLeft;
+            yield return new FormLayoutEntry(child, bounds, FormLayoutRole.Control);
+
+            // A nested GridPanel lays its own children out against its own cell rectangle. Other
+            // containers are deliberately not walked: a Panel child has no pixel geometry of its own
+            // in a cell, and inventing one is exactly what the model must not do.
+            if (FormGridPanel.Is(child))
+            {
+                foreach (var nested in GridPanelChildren(child, bounds, origins))
+                {
+                    yield return nested;
+                }
             }
         }
     }
@@ -962,6 +1003,16 @@ public sealed class FormCanvasTransform
             origins[control] = bounds.Value.TopLeft;
 
             yield return new FormLayoutEntry(control, bounds.Value, FormLayoutRole.Control);
+
+            if (FormGridPanel.Is(control))
+            {
+                foreach (var nested in GridPanelChildren(control, bounds.Value, origins))
+                {
+                    yield return nested;
+                }
+
+                continue;
+            }
 
             foreach (var nested in Layout(control.Children, bounds.Value.TopLeft, dock, origins))
             {

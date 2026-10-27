@@ -689,7 +689,8 @@ public partial class FormPropertyGridViewModel : ObservableObject
         "Defines the edges of the container to which a certain control is bound. When a control is anchored to " +
         "an edge, the distance between the control's closest edge and the specified edge will remain constant.";
     private const string DockDescription = "Defines which borders of the control are bound to the container.";
-    private const string CellDescription = "The page grid cell the control occupies (0-based).";
+    private const string CellDescription = "The grid cell the control occupies (0-based).";
+    private const string CellSpanDescription = "How many grid cells the control spans.";
     private const string TabIndexDescription = "Determines the index in the TAB order that this control will occupy.";
 
     /// <summary>
@@ -805,6 +806,30 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 break;
         }
 
+        // A GridPanel child's cell is in its PANEL, not in the page. The writer/reader keep this in
+        // FormControl.GridCell; the grid exposes the same four values, clamped to the panel's tracks.
+        if (FormGridPanel.Is(_file?.Model.ParentOf(control)))
+        {
+            var parent = _file!.Model.ParentOf(control)!;
+            var columns = FormGridPanel.ColumnCount(parent);
+            var rowsCount = FormGridPanel.RowCount(parent);
+
+            int Col() => control.GridCell?.Col ?? 0;
+            int Row() => control.GridCell?.Row ?? 0;
+            int ColSpan() => control.GridCell?.ColSpan ?? 1;
+            int RowSpan() => control.GridCell?.RowSpan ?? 1;
+            GridCell Cell() => control.GridCell ??= new GridCell();
+
+            rows.Add(IntRow("Col", Col,
+                v => Cell().Col = Math.Clamp(v, 0, Math.Max(0, columns - Math.Max(1, ColSpan()))), Changed, "Layout", CellDescription));
+            rows.Add(IntRow("Row", Row,
+                v => Cell().Row = Math.Clamp(v, 0, Math.Max(0, rowsCount - Math.Max(1, RowSpan()))), Changed, "Layout", CellDescription));
+            rows.Add(IntRow("ColSpan", ColSpan,
+                v => Cell().ColSpan = Math.Clamp(v, 1, Math.Max(1, columns - Col())), Changed, "Layout", CellSpanDescription));
+            rows.Add(IntRow("RowSpan", RowSpan,
+                v => Cell().RowSpan = Math.Clamp(v, 1, Math.Max(1, rowsCount - Row())), Changed, "Layout", CellSpanDescription));
+        }
+
         // Only a POSITIONED control has a tab order, and this is the same filter
         // FormDocument.RenumberTabIndexes and FormPlacement.NextTabIndex apply. A component (Tray), a
         // strip (Docked) and a menu item (Item) each have none: geometry rows were already absent for
@@ -852,6 +877,10 @@ public partial class FormPropertyGridViewModel : ObservableObject
                 target,
                 _file?.DegradedReason(control.Id, property.Name),
                 changed);
+            if (FormGridPanel.Is(control) && property.Name is "Columns" or "Rows")
+            {
+                row.WithEditor(FormRowEditor.GridTracks);
+            }
             // A part of an ambient row starts from what this control INHERITS (code review I1).
             var model = _file?.Model;
             var name = property.Name;

@@ -111,19 +111,21 @@ public class FormGridLayoutTests
     }
 
     [Test]
-    public void ATrackFunctionContainingACommaSplitsApart_MatchingWhatTheEmitterDoes()
+    public void ATrackFunctionContainingAComma_IsOneTrack()
     {
-        // ⛔ NOT a canvas bug, and worth knowing before someone "fixes" it here. `Cols` is a
-        // COMMA-SEPARATED list, so a CSS function with a comma in it — minmax(a,b), repeat(2,1fr),
-        // clamp() — cannot be expressed in this format at all. FormAssetEmitter.Tracks splits on
-        // the same commas and rejoins with spaces, so `minmax(100px, 1fr)` already ships as
-        // `minmax(100px 1fr)`: invalid CSS, today, with or without this canvas. The canvas splits
-        // identically ON PURPOSE — a canvas that guessed differently from the emitter would draw a
-        // grid the page does not have.
+        // ⛔ A CSS function's commas are not separators. Splitting them apart used to emit
+        // `minmax(100px 1fr)` — invalid CSS — and draw a three-column canvas the page did not have.
         var layout = Grid("minmax(100px, 1fr),1fr", "1fr");
 
-        Assert.That(FormGridLayout.ParseTracks(layout.Cols), Has.Count.EqualTo(3),
-            "three fragments, exactly as the emitter sees them");
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormTracks.Split(layout.Cols), Has.Count.EqualTo(2),
+                "minmax(...) is one track; the comma after it is the separator");
+            Assert.That(FormTracks.ToCss(layout.Cols), Is.EqualTo("minmax(100px, 1fr) 1fr"),
+                "the emitter keeps the function's own comma");
+            Assert.That(FormGridLayout.ParseTracks(layout.Cols), Has.Count.EqualTo(2),
+                "the canvas agrees with the page");
+        });
     }
 
     [Test]

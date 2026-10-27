@@ -382,7 +382,8 @@ public static class FormDocumentWriter
     /// The list is the tray's. Forwarded rather than acted on here — every place decision is made
     /// per CONTROL, from its catalog row, by <see cref="PlaceOf"/>.
     /// </param>
-    private static void ApplyControlList(XElement container, List<FormControl> controls, bool isComponent = false)
+    private static void ApplyControlList(
+        XElement container, List<FormControl> controls, bool isComponent = false, bool parentIsGridPanel = false)
     {
         var wanted = controls.Select(c => c.Id).ToList();
 
@@ -415,11 +416,11 @@ public static class FormDocumentWriter
 
             if (element == null)
             {
-                InsertPreservingIndent(container, ControlElement(control, isComponent), before: null);
+                InsertPreservingIndent(container, ControlElement(control, isComponent, parentIsGridPanel), before: null);
                 continue;
             }
 
-            ApplyControl(element, control, isComponent);
+            ApplyControl(element, control, isComponent, parentIsGridPanel);
         }
 
         ReorderToMatchModel(container, controls);
@@ -482,7 +483,8 @@ public static class FormDocumentWriter
     /// The element is the tray's. Forwarded from the list; the decisions below read
     /// <see cref="PlaceOf"/>.
     /// </param>
-    private static void ApplyControl(XElement element, FormControl control, bool isComponent = false)
+    private static void ApplyControl(
+        XElement element, FormControl control, bool isComponent = false, bool parentIsGridPanel = false)
     {
         // TabIndex is written on every POSITIONED control in v1, defaulting to document order on
         // creation — explicit rather than implied, so reordering the XML cannot silently reorder tab
@@ -512,23 +514,34 @@ public static class FormDocumentWriter
             // Each geometry writes only its own vocabulary. The model carries exactly one shape,
             // the reader selected it from the document's target, and nothing here converts between
             // them.
-            switch (control.Geometry)
+            if (parentIsGridPanel)
             {
-                case PixelGeometry pixel:
-                    SetIntAttributeIfChanged(element, "X", pixel.X, 0);
-                    SetIntAttributeIfChanged(element, "Y", pixel.Y, 0);
-                    SetIntAttributeIfChanged(element, "Width", pixel.Width, 0);
-                    SetIntAttributeIfChanged(element, "Height", pixel.Height, 0);
-                    SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
-                    SetAttributeIfChanged(element, "Dock", pixel.Dock);
-                    break;
+                var cell = control.GridCell ?? new GridCell();
+                SetIntAttributeIfChanged(element, "Col", cell.Col, 0);
+                SetIntAttributeIfChanged(element, "Row", cell.Row, 0);
+                SetOptionalIntAttribute(element, "ColSpan", cell.ColSpan, 1);
+                SetOptionalIntAttribute(element, "RowSpan", cell.RowSpan, 1);
+            }
+            else
+            {
+                switch (control.Geometry)
+                {
+                    case PixelGeometry pixel:
+                        SetIntAttributeIfChanged(element, "X", pixel.X, 0);
+                        SetIntAttributeIfChanged(element, "Y", pixel.Y, 0);
+                        SetIntAttributeIfChanged(element, "Width", pixel.Width, 0);
+                        SetIntAttributeIfChanged(element, "Height", pixel.Height, 0);
+                        SetAttributeIfChanged(element, "Anchor", pixel.Anchor);
+                        SetAttributeIfChanged(element, "Dock", pixel.Dock);
+                        break;
 
-                case GridGeometry grid:
-                    SetIntAttributeIfChanged(element, "Col", grid.Col, 0);
-                    SetIntAttributeIfChanged(element, "Row", grid.Row, 0);
-                    SetOptionalIntAttribute(element, "ColSpan", grid.ColSpan, 1);
-                    SetOptionalIntAttribute(element, "RowSpan", grid.RowSpan, 1);
-                    break;
+                    case GridGeometry grid:
+                        SetIntAttributeIfChanged(element, "Col", grid.Col, 0);
+                        SetIntAttributeIfChanged(element, "Row", grid.Row, 0);
+                        SetOptionalIntAttribute(element, "ColSpan", grid.ColSpan, 1);
+                        SetOptionalIntAttribute(element, "RowSpan", grid.RowSpan, 1);
+                        break;
+                }
             }
         }
 
@@ -568,7 +581,7 @@ public static class FormDocumentWriter
         // A tray component cannot nest; a strip holds its items and an item holds its sub-items.
         if (place != FormPlace.Tray)
         {
-            ApplyControlList(element, control.Children);
+            ApplyControlList(element, control.Children, parentIsGridPanel: control.Kind == "GridPanel");
         }
     }
 
@@ -761,7 +774,7 @@ public static class FormDocumentWriter
     }
 
     /// <param name="isComponent">The element is the tray's — see <see cref="PlaceOf"/>.</param>
-    private static XElement ControlElement(FormControl control, bool isComponent = false)
+    private static XElement ControlElement(FormControl control, bool isComponent = false, bool parentIsGridPanel = false)
     {
         var element = new XElement(control.Kind);
 
@@ -774,23 +787,34 @@ public static class FormDocumentWriter
 
         if (place == FormPlace.Positioned)
         {
-            switch (control.Geometry)
+            if (parentIsGridPanel)
             {
-                case PixelGeometry pixel:
-                    element.SetAttributeValue("X", pixel.X);
-                    element.SetAttributeValue("Y", pixel.Y);
-                    element.SetAttributeValue("Width", pixel.Width);
-                    element.SetAttributeValue("Height", pixel.Height);
-                    element.SetAttributeValue("Anchor", pixel.Anchor);
-                    element.SetAttributeValue("Dock", pixel.Dock);
-                    break;
+                var cell = control.GridCell ?? new GridCell();
+                element.SetAttributeValue("Col", cell.Col);
+                element.SetAttributeValue("Row", cell.Row);
+                if (cell.ColSpan != 1) element.SetAttributeValue("ColSpan", cell.ColSpan);
+                if (cell.RowSpan != 1) element.SetAttributeValue("RowSpan", cell.RowSpan);
+            }
+            else
+            {
+                switch (control.Geometry)
+                {
+                    case PixelGeometry pixel:
+                        element.SetAttributeValue("X", pixel.X);
+                        element.SetAttributeValue("Y", pixel.Y);
+                        element.SetAttributeValue("Width", pixel.Width);
+                        element.SetAttributeValue("Height", pixel.Height);
+                        element.SetAttributeValue("Anchor", pixel.Anchor);
+                        element.SetAttributeValue("Dock", pixel.Dock);
+                        break;
 
-                case GridGeometry grid:
-                    element.SetAttributeValue("Col", grid.Col);
-                    element.SetAttributeValue("Row", grid.Row);
-                    if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
-                    if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
-                    break;
+                    case GridGeometry grid:
+                        element.SetAttributeValue("Col", grid.Col);
+                        element.SetAttributeValue("Row", grid.Row);
+                        if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
+                        if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+                        break;
+                }
             }
 
             // ⛔ UNCONDITIONAL, unlike the Apply path's SetIntAttributeIfChanged — Create stamps the
@@ -848,7 +872,7 @@ public static class FormDocumentWriter
         {
             foreach (var child in control.Children)
             {
-                element.Add(ControlElement(child));
+                element.Add(ControlElement(child, parentIsGridPanel: control.Kind == "GridPanel"));
             }
         }
 

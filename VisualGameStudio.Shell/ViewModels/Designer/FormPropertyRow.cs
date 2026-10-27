@@ -23,7 +23,10 @@ public enum FormRowEditor
     AnchorPicker,
 
     /// <summary>The nine-region box: Top/Bottom/Left/Right/Fill/None.</summary>
-    DockPicker
+    DockPicker,
+
+    /// <summary>A GridPanel's track list: add/remove/reorder rows or columns.</summary>
+    GridTracks
 }
 
 /// <summary>
@@ -449,7 +452,7 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     /// <summary>The members' shared text, or "" when they differ (D-3: VS shows blank, never the primary's value).</summary>
     private string Shared(Func<FormPropertyRow, string> read) => AllShow(read) ? read(_members![0]) : "";
 
-    private readonly FormRowEditor _editor = FormRowEditor.Default;
+    private FormRowEditor _editor = FormRowEditor.Default;
 
     // ==================================================================
     // Composite rows (spec §3, slice 3 Task 6): Font → Name/Size/Bold/Italic/Underline, Size → Width/Height,
@@ -639,6 +642,49 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
 
     /// <summary>The nine-region Dock box (Task 26).</summary>
     public bool IsDockPicker => IsEditable && _editor == FormRowEditor.DockPicker;
+
+    /// <summary>A GridPanel's Columns/Rows list.</summary>
+    public bool IsGridTrackEditor => IsEditable && _editor == FormRowEditor.GridTracks;
+
+    /// <summary>
+    /// Adds one track to the end of a GridPanel's Columns/Rows list. The row's value is the same
+    /// comma-separated text the document stores, so this is one undoable edit.
+    /// </summary>
+    [RelayCommand]
+    private void AddGridTrack()
+    {
+        var tracks = FormTracks.Split(StringValue).ToList();
+        tracks.Add(Name == "Rows" ? "auto" : "1fr");
+        Commit(string.Join(",", tracks));
+    }
+
+    /// <summary>Removes the last track; clearing the list resets the row to its default.</summary>
+    [RelayCommand]
+    private void RemoveGridTrack()
+    {
+        var tracks = FormTracks.Split(StringValue).ToList();
+        if (tracks.Count == 0)
+        {
+            return;
+        }
+
+        tracks.RemoveAt(tracks.Count - 1);
+        if (tracks.Count == 0)
+        {
+            Reset();
+        }
+        else
+        {
+            Commit(string.Join(",", tracks));
+        }
+    }
+
+    /// <summary>Chooses a specialised editor after construction (catalog rows have no editor column).</summary>
+    internal FormPropertyRow WithEditor(FormRowEditor editor)
+    {
+        _editor = editor;
+        return this;
+    }
 
     /// <summary>
     /// A colour row: its value cell carries VS's colour drop-down (<c>FormColorDropDown</c>: Custom / Web / System, slice 4

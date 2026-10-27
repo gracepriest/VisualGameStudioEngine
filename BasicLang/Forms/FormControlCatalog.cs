@@ -2570,6 +2570,23 @@ public static class FormControlCatalog
             DefaultWidth: 120, DefaultHeight: 95, Schematic: FormSchematic.List,
             Events: ListBoxEvents(),
             StretchesWhenStacked: true),
+        new("GridPanel",   null,          "div",      null,       true,  Common(
+            new FormPropertyDef("Columns", FormPropertyType.String, "1fr,1fr",
+                Category: FormPropertyCategory.Layout,
+                Description: "The grid's column tracks, as a comma-separated CSS track list (e.g. 120px,1fr)."),
+            new FormPropertyDef("Rows", FormPropertyType.String, "auto,auto",
+                Category: FormPropertyCategory.Layout,
+                Description: "The grid's row tracks, as a comma-separated CSS track list (e.g. auto,auto)."),
+            new FormPropertyDef("Gap", FormPropertyType.String, "8px",
+                Category: FormPropertyCategory.Layout,
+                Description: "The space between the grid's cells, as a CSS length (e.g. 8px).")),
+            DefaultWidth: 320, DefaultHeight: 180, Schematic: FormSchematic.TableContainer,
+            Events: PanelEvents(),
+            DropValues: new Dictionary<string, string>
+            {
+                ["Columns"] = "1fr,1fr",
+                ["Rows"] = "auto,auto"
+            }),
         new("Panel",       "Panel",       "div",      null,       true,  Common(
             new FormPropertyDef("BorderStyle", FormPropertyType.Enum, "None",
                 new[] { "None", "FixedSingle", "Fixed3D" },

@@ -267,6 +267,19 @@ public static class FormDocumentReader
 
         CheckDuplicateIds(model, filePath, diagnostics, positions);
 
+        // A GridPanel's cells are validated over the finished model: the panel's track list and its
+        // children's cells must agree, and two children may not share a cell.
+        foreach (var panel in model.AllControls().Where(FormGridPanel.Is))
+        {
+            foreach (var problem in FormGridPanel.Validate(panel))
+            {
+                var element = positions.GetValueOrDefault(panel);
+                diagnostics.Add(Error(
+                    DesignCodes.GridCellConflict, problem, filePath,
+                    element == null ? 0 : Line(element), element == null ? 0 : Column(element)));
+            }
+        }
+
         return new FormFile(model, xml, text, filePath, diagnostics, degraded, degradedRoot);
     }
 
@@ -518,8 +531,23 @@ public static class FormDocumentReader
             // component rule), never to geometry — which would otherwise fire, because Dock is one
             // of ReadGeometry's six trigger attributes.
             TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0,
-            Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null
+            Geometry = place == FormPlace.Positioned && parentDefinition?.Kind != "GridPanel"
+                ? ReadGeometry(element, target, layout)
+                : null
         };
+
+        // A GridPanel child is positioned by the PANEL's grid, not by the page's pixel/cell layout.
+        // Its cell is kept separately so the same control can live under either page vocabulary.
+        if (parentDefinition?.Kind == "GridPanel" && place == FormPlace.Positioned)
+        {
+            control.GridCell = new GridCell
+            {
+                Col = IntAttribute(element, "Col") ?? 0,
+                Row = IntAttribute(element, "Row") ?? 0,
+                ColSpan = IntAttribute(element, "ColSpan") ?? 1,
+                RowSpan = IntAttribute(element, "RowSpan") ?? 1
+            };
+        }
 
         // Where this control came from, for the checks that run over the finished MODEL and would
         // otherwise have no position to report. FormControl is a class, so the default comparer is
@@ -576,6 +604,15 @@ public static class FormDocumentReader
             // branch the catalog's own Dock property was skipped out of the loop and never modelled —
             // and FormDocumentWriter's "a catalog property the model dropped" sweep then DELETED
             // Dock="Top" from every strip on the first save.
+            if (parentDefinition?.Kind == "GridPanel" &&
+                name is "Col" or "Row" or "ColSpan" or "RowSpan")
+            {
+                // Consumed into FormControl.GridCell above. On a Canvas page these are not the
+                // page's structural vocabulary, so without this they would become unknown
+                // attributes and the first unrelated save would keep a second copy.
+                continue;
+            }
+
             if (place == FormPlace.Positioned
                     ? FormControlCatalog.IsStructural(name, target, layout)
                     : string.Equals(name, "Id", StringComparison.OrdinalIgnoreCase))

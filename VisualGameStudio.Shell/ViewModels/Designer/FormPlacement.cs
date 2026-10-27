@@ -115,6 +115,56 @@ public static class FormPlacement
         var origin = container?.Origin ?? new Point(0, 0);
         var local = new Point(x - origin.X, y - origin.Y);
 
+        // A GridPanel positions its children by the PANEL's cells, never by pixels. The cell under
+        // the pointer is the one the control lands in; a collision is refused here, before the
+        // document can hold two controls in one cell.
+        if (FormGridPanel.Is(container?.Container) && container is { } target)
+        {
+            var panel = target.Container;
+            if (definition.IsContainer && definition.Kind != FormGridPanel.Kind)
+            {
+                return new FormPlacementResult(
+                    null,
+                    $"'{definition.Kind}' is a container; a GridPanel cell currently holds a control or a nested GridPanel.");
+            }
+
+            var size = panel.Geometry is PixelGeometry panelPixel
+                ? new Size(panelPixel.Width, panelPixel.Height)
+                : FormCanvasTransform.SurfaceSize(document);
+            var cell = FormGridLayout.CellAt(FormGridPanel.LayoutOf(panel), size, local);
+            if (cell == null)
+            {
+                return new FormPlacementResult(null, "That point is outside the GridPanel.");
+            }
+
+            var candidate = new GridCell { Col = cell.Value.Col, Row = cell.Value.Row };
+            var occupied = panel.Children.FirstOrDefault(child =>
+                child.GridCell is { } existing && FormGridPanel.Overlaps(candidate, existing));
+            if (occupied != null)
+            {
+                return new FormPlacementResult(
+                    null,
+                    $"Cell ({candidate.Col},{candidate.Row}) in '{panel.Id}' is already occupied by '{occupied.Id}'.");
+            }
+
+            var childControl = new FormControl
+            {
+                Kind = definition.Kind,
+                Id = NextId(document, definition.Kind),
+                TabIndex = NextTabIndex(document),
+                GridCell = candidate
+            };
+
+            if (definition.Property("Text") != null)
+            {
+                childControl.Properties["Text"] = childControl.Id;
+            }
+
+            ApplyDropValues(childControl, definition);
+            panel.Children.Add(childControl);
+            return new FormPlacementResult(childControl, null);
+        }
+
         var (surfaceWidth, surfaceHeight) = FormGeometryEdit.SurfaceOf(document, container?.Container, docking);
 
         var control = new FormControl
@@ -198,6 +248,63 @@ public static class FormPlacement
         if (cell == null)
         {
             return new FormPlacementResult(null, "That is outside the page.");
+        }
+
+        // A GridPanel occupying this page cell takes the drop into its own grid, not into the page.
+        var pagePoint = new Point(x, y);
+        var panel = document.Controls.FirstOrDefault(candidate =>
+            FormGridPanel.Is(candidate) &&
+            candidate.Geometry is GridGeometry panelCell &&
+            FormGridLayout.CellRect(
+                document.Layout, FormCanvasTransform.SurfaceSize(document),
+                panelCell.Col, panelCell.Row, panelCell.ColSpan, panelCell.RowSpan)
+                .Contains(pagePoint));
+        if (panel != null)
+        {
+            if (definition.IsContainer && definition.Kind != FormGridPanel.Kind)
+            {
+                return new FormPlacementResult(
+                    null,
+                    $"'{definition.Kind}' is a container; a GridPanel cell currently holds a control or a nested GridPanel.");
+            }
+
+            var panelRect = FormGridLayout.CellRect(
+                document.Layout, FormCanvasTransform.SurfaceSize(document),
+                ((GridGeometry)panel.Geometry!).Col, ((GridGeometry)panel.Geometry!).Row,
+                ((GridGeometry)panel.Geometry!).ColSpan, ((GridGeometry)panel.Geometry!).RowSpan);
+            var local = new Point(x - panelRect.X, y - panelRect.Y);
+            var inner = FormGridLayout.CellAt(FormGridPanel.LayoutOf(panel), panelRect.Size, local);
+            if (inner == null)
+            {
+                return new FormPlacementResult(null, "That point is outside the GridPanel.");
+            }
+
+            var innerCell = new GridCell { Col = inner.Value.Col, Row = inner.Value.Row };
+            var occupied = panel.Children.FirstOrDefault(child =>
+                child.GridCell is { } existing && FormGridPanel.Overlaps(innerCell, existing));
+            if (occupied != null)
+            {
+                return new FormPlacementResult(
+                    null,
+                    $"Cell ({innerCell.Col},{innerCell.Row}) in '{panel.Id}' is already occupied by '{occupied.Id}'.");
+            }
+
+            var childControl = new FormControl
+            {
+                Kind = definition.Kind,
+                Id = NextId(document, definition.Kind),
+                TabIndex = NextTabIndex(document),
+                GridCell = innerCell
+            };
+
+            if (definition.Property("Text") != null)
+            {
+                childControl.Properties["Text"] = childControl.Id;
+            }
+
+            ApplyDropValues(childControl, definition);
+            panel.Children.Add(childControl);
+            return new FormPlacementResult(childControl, null);
         }
 
         var control = new FormControl

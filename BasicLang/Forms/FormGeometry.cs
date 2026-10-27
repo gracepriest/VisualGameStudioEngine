@@ -84,6 +84,30 @@ public sealed class GridGeometry : FormGeometry
     };
 }
 
+/// <summary>
+/// A control's cell inside a <c>GridPanel</c> — independent of <see cref="FormGeometry"/>.
+///
+/// <para>⛔ A GridPanel can sit on a Canvas page (its own geometry is pixels) or on a page Grid
+/// (its own geometry is a page cell). Its children need a cell in the PANEL's grid in either case,
+/// and one control has only one <see cref="FormControl.Geometry"/>. Keeping the cell separate is
+/// what lets the same GridPanel work on both page vocabularies without inventing a second
+/// control object.</para>
+/// </summary>
+public sealed class GridCell
+{
+    public int Col { get; set; }
+    public int Row { get; set; }
+
+    /// <summary>Grid span; 1 means "one cell" and is not written out.</summary>
+    public int ColSpan { get; set; } = 1;
+    public int RowSpan { get; set; } = 1;
+
+    public GridCell Clone() => new()
+    {
+        Col = Col, Row = Row, ColSpan = ColSpan, RowSpan = RowSpan
+    };
+}
+
 /// <summary>How a <c>.blwebform</c> arranges its controls (D3).</summary>
 public enum FormLayoutKind
 {

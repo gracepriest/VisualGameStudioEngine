@@ -901,6 +901,7 @@ public class FormCanvasControl : Control
         // Take focus so the design view's key bindings (Ctrl+Z, Ctrl+Y) are on this element's
         // route rather than the hidden editor's.
         Focus();
+        _dragGridPanel = null;
 
         // ⛔ Every press CONSUMES the rename arming — a right press, a Type Here press, a handle or
         // grip press, a background press. Only the ordinary item press below re-arms it, so "the
@@ -1050,6 +1051,16 @@ public class FormCanvasControl : Control
         }
         // ⛔ Not for a DOCKED primary (spec §7a, pre-flight B4): "a drag starting on it selects only". FormGeometryEdit
         // refuses to move it anyway, but a drag armed here would still carry every OTHER selected control along.
+        else if (SelectedControl is { } cellChild && cellChild.GridCell != null &&
+                 document.ParentOf(cellChild) is { } cellPanel && FormGridPanel.Is(cellPanel))
+        {
+            // A GridPanel child moves between CELLS; it has no pixel geometry to rewind.
+            _dragHandle = FormResizeHandle.None;
+            _dragOrigin = point;
+            _dragGridPanel = cellPanel;
+            _dragChanged = false;
+            e.Pointer.Capture(this);
+        }
         else if (SelectedControl?.Geometry is PixelGeometry pixel && FormDockLayout.EdgeOf(SelectedControl) == null)
         {
             _dragHandle = handle;
@@ -1176,6 +1187,43 @@ public class FormCanvasControl : Control
         var dx = (int)Math.Round(total.X);
         var dy = (int)Math.Round(total.Y);
 
+        if (_dragGridPanel is { } draggedPanel && control.GridCell is { } draggedCell)
+        {
+            var panelEntry = FormCanvasTransform.Layout(document)
+                .FirstOrDefault(entry => ReferenceEquals(entry.Control, draggedPanel));
+            if (panelEntry.Control != null)
+            {
+                var pointer = _transform.ToForm(e.GetPosition(this));
+                var local = new Point(pointer.X - panelEntry.Bounds.X, pointer.Y - panelEntry.Bounds.Y);
+                var target = FormGridLayout.CellAt(
+                    FormGridPanel.LayoutOf(draggedPanel), panelEntry.Bounds.Size, local);
+                if (target is { } next &&
+                    next.Col + draggedCell.ColSpan <= FormGridPanel.ColumnCount(draggedPanel) &&
+                    next.Row + draggedCell.RowSpan <= FormGridPanel.RowCount(draggedPanel))
+                {
+                    var candidate = new GridCell
+                    {
+                        Col = next.Col, Row = next.Row,
+                        ColSpan = draggedCell.ColSpan, RowSpan = draggedCell.RowSpan
+                    };
+                    var occupied = draggedPanel.Children.Any(child =>
+                        !ReferenceEquals(child, control) &&
+                        child.GridCell is { } other &&
+                        FormGridPanel.Overlaps(candidate, other));
+                    if (!occupied && (draggedCell.Col != next.Col || draggedCell.Row != next.Row))
+                    {
+                        draggedCell.Col = next.Col;
+                        draggedCell.Row = next.Row;
+                        _dragChanged = true;
+                        InvalidateVisual();
+                    }
+                }
+            }
+
+            e.Handled = true;
+            return;
+        }
+
         bool changed;
         if (control.Geometry is GridGeometry)
         {
@@ -1274,6 +1322,7 @@ public class FormCanvasControl : Control
         var wasDragging = _dragOrigin != null;
         _dragOrigin = null;
         _dragHandle = FormResizeHandle.None;
+        _dragGridPanel = null;
         _formGrip = FormResizeHandle.None;
         e.Pointer.Capture(null);
 
@@ -1449,6 +1498,9 @@ public class FormCanvasControl : Control
     private FormResizeHandle _dragHandle;
     private (int X, int Y, int Width, int Height) _dragStart;
     private bool _dragChanged;
+
+    /// <summary>The GridPanel whose cell is being dragged, or null for an ordinary pixel/grid drag.</summary>
+    private FormControl? _dragGridPanel;
 
     /// <summary>
     /// Which edge of the FORM is being dragged, or None. Separate from <see cref="_dragHandle"/>,
@@ -1674,6 +1726,12 @@ public class FormCanvasControl : Control
             // A DOCKED primary (spec §7a): selected, but not draggable — outlined like a secondary member, never
             // handled. Without this a click on a docked Panel shows nothing at all (pre-flight decision 1).
             context.DrawRectangle(null, SecondarySelectionPen, docked);
+        }
+        else if (SelectedControl?.GridCell != null && CanvasBoundsInFrame(SelectedControl) is { } gridChild)
+        {
+            // A GridPanel child has no pixel geometry (its cell is the position), so it gets no
+            // resize handles. It must still show that it is selected.
+            context.DrawRectangle(null, SecondarySelectionPen, gridChild);
         }
 
         // The rubber band, over everything — it is transient and must never be hidden behind a

@@ -451,6 +451,17 @@ public static class FormRetarget
         /// </remarks>
         private void Hoist(FormControl source, List<FormControl> into, string where, (int X, int Y) offset)
         {
+            // A GridPanel's children are CELLS in the panel, not positioned controls on the form.
+            // Hoisting them would leave controls with no pixel geometry; the whole container is the
+            // loss, and it says so by name.
+            if (FormGridPanel.Is(source))
+            {
+                Warn(DesignCodes.RetargetControlLost,
+                    $"'{source.Id}' is a GridPanel, which is web-only in this pass; it and its " +
+                    $"{source.Children.Count} child control(s) were removed.");
+                return;
+            }
+
             var childOffset = source.Geometry is PixelGeometry pixel
                 ? (offset.X + pixel.X, offset.Y + pixel.Y)
                 : offset;

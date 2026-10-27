@@ -246,6 +246,21 @@
                        ⚠ The flyout's content is a popup, logically parented to its button, so it inherits the
                        row as its DataContext (asserted by the real-view tests, not assumed). -->
 
+                  <!-- A GridPanel's Columns/Rows: the track list as text plus add/remove. The text is the
+                       document's own comma list; FormTracks keeps CSS-function commas intact. -->
+                  <DockPanel IsVisible="{Binding IsGridTrackEditor}" Margin="4,1,4,1" VerticalAlignment="Center">
+                    <Button DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,2,0"
+                            FontSize="10" Padding="5,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="+" Command="{Binding AddGridTrackCommand}"
+                            ToolTip.Tip="Add a track" AutomationProperties.Name="Add a track"/>
+                    <Button DockPanel.Dock="Left" Classes="dropDown" Margin="0,0,4,0"
+                            FontSize="10" Padding="5,0" MinHeight="0" VerticalAlignment="Center"
+                            Content="&#x2212;" Command="{Binding RemoveGridTrackCommand}"
+                            ToolTip.Tip="Remove the last track" AutomationProperties.Name="Remove the last track"/>
+                    <TextBox Text="{Binding StringValue, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             MinHeight="0" Padding="3,1" FontSize="11" VerticalAlignment="Center"/>
+                  </DockPanel>
+
                   <!-- ⛔ Task 26: the Anchor box. Four edge bars around a centre — click an edge to
                        anchor to it. ⚠ Pixel geometry only: the grid never builds this row for a
                        .blwebform control, so there is no `hide on web` rule here to forget. -->

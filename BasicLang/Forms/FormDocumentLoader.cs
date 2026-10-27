@@ -73,9 +73,44 @@ public static class FormDocumentLoader
             var file = FormDocumentReader.Read(path, text);
             if (file.IsRefused)
             {
-                warn?.Invoke(
+                var fatal = file.Diagnostics.Where(d => !d.IsWarning).ToList();
+                var message =
                     $"'{Path.GetFileName(path)}' {consequence}: " +
-                    string.Join("; ", file.Diagnostics.Where(d => !d.IsWarning).Select(d => d.Message)));
+                    string.Join("; ", fatal.Select(d => $"{d.Code}: {d.Message}"));
+
+                // ⛔ A GridPanel cell conflict is a hard error on the build routes; a malformed
+                // document remains a warning-and-skip, as before.
+                if (error != null && fatal.Any(d => d.Code == DesignCodes.GridCellConflict))
+                {
+                    error(message);
+                }
+                else
+                {
+                    warn?.Invoke(message);
+                }
+
+                continue;
+            }
+
+            var gridProblems = file.Model.AllControls()
+                .Where(FormGridPanel.Is)
+                .SelectMany(panel => FormGridPanel.Validate(panel)
+                    .Select(problem => $"{DesignCodes.GridCellConflict}: '{Path.GetFileName(path)}': {problem}"))
+                .ToList();
+            if (gridProblems.Count > 0)
+            {
+                foreach (var problem in gridProblems)
+                {
+                    if (error != null)
+                    {
+                        error(problem);
+                    }
+                    else
+                    {
+                        warn?.Invoke(problem);
+                    }
+                }
+
                 continue;
             }
 

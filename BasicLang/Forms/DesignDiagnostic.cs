@@ -89,8 +89,14 @@ public static class DesignCodes
     //                   second owner keeps its bind under a NEW name and stub — a WARNING naming both
     //                   (property-grid slice 5 review round 6; FormRetarget.ConvertToPair)
     //
-    // The next claim starts at BL8039. That is not the band being full — BL8039..BL8999 are simply
-    // unclaimed. ⚠ feat/portable-controls (piece 2) was also eyeing BL8036 — re-check at merge.
+    //   BL8039          a DOM-style code-behind opened as a web form (FormCodeConversion's MixedCodeStyle)
+    //   BL8040          DOM API use outside the designer regions (FormCodeConversion; warning)
+    //   BL8041          a conversion handler that is not simple enough to rewrite (warning)
+    //   BL8042          a desktop-only control on a web form (Task 46; ERROR on both build routes)
+    //   BL8043          a GridPanel child's cell is missing, out of range, or overlaps a sibling
+    //
+    // The next claim starts at BL8044. That is not the band being full — BL8044..BL8999 are simply
+    // unclaimed.
     //
     // Nothing in this band lives in BasicLang.Compiler.ErrorCode as a string; the enum registration
     // there is for discoverability only, and adding a member there does not claim a number here.
@@ -154,6 +160,12 @@ public static class DesignCodes
 
     /// <summary>A web form uses a WinForms-only control, so its page cannot be built.</summary>
     public const string DesktopOnlyKind = "BL8042";
+
+    /// <summary>
+    /// A GridPanel child cannot be laid out: no cell, a non-positive span, a cell outside the
+    /// panel's explicit track list, or two children whose cells intersect.
+    /// </summary>
+    public const string GridCellConflict = "BL8043";
 
     /// <summary>
     /// A handler is declared AFTER the designer region that wires it. An <c>AddressOf</c> naming a

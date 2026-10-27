@@ -6,12 +6,12 @@ namespace BasicLang.Forms;
 /// <summary>
 /// Emits a form document's page and stylesheet at <b>build</b> time (D6).
 ///
-/// <para>G¢ö Build time, not designer-save time. Generated-on-save artifacts go stale:
+/// <para>Gï¿½ï¿½ Build time, not designer-save time. Generated-on-save artifacts go stale:
 /// <c>basiclang build</c> on a clean checkout, or any build with the designer closed, would produce
 /// a page with no markup and no styling.</para>
 ///
-/// <para>G¢ö It writes into <b>the directory it is handed</b> and never computes one. The two entry
-/// points disagree GÇö the IDE uses <c>bin\Debug</c> and the CLI <c>bin\Debug\&lt;tfm&gt;</c> GÇö so
+/// <para>Gï¿½ï¿½ It writes into <b>the directory it is handed</b> and never computes one. The two entry
+/// points disagree Gï¿½ï¿½ the IDE uses <c>bin\Debug</c> and the CLI <c>bin\Debug\&lt;tfm&gt;</c> Gï¿½ï¿½ so
 /// reusing the JavaScript emitter's own output directory makes them agree automatically instead of
 /// adding a third path computation to keep in step.</para>
 /// </summary>
@@ -22,21 +22,21 @@ public static class FormAssetEmitter
     /// <c>design --check</c> can collision-check it once with <c>BL8031</c>; per-control fields are
     /// class members and cannot collide across forms.
     ///
-    /// <para>G¢öG¢ö <b>It is a SHARED METHOD ON A CLASS</b>, and the two shapes that look more
-    /// natural were each measured and each rejected GÇö with a real <c>BasicLang build</c>, and then
+    /// <para>Gï¿½ï¿½Gï¿½ï¿½ <b>It is a SHARED METHOD ON A CLASS</b>, and the two shapes that look more
+    /// natural were each measured and each rejected Gï¿½ï¿½ with a real <c>BasicLang build</c>, and then
     /// by RUNNING what came out:</para>
     /// <list type="number">
     ///   <item><b>A bare top-level Sub</b> (what D7 describes) does not COMPILE across files. A
     ///   <c>Sub Helper()</c> in one .bas called as <c>Helper()</c> from another fails with <i>"no
     ///   lowering for 'Helper.Helper'"</i>, and nothing in that message names the cause. Not
-    ///   specific to generated code GÇö two hand-written files do it too.</item>
+    ///   specific to generated code Gï¿½ï¿½ two hand-written files do it too.</item>
     ///   <item><b><c>Public Module</c> compiles and then throws at RUN TIME.</b> The JavaScript
     ///   backend FLATTENS a module's members to bare globals (<c>function VgsDispatchForm()</c>)
     ///   while emitting the call site qualified (<c>VgsForms.VgsDispatchForm()</c>), so the emitted
     ///   script references a <c>VgsForms</c> that appears nowhere in the file and every page died
     ///   on load with <i>ReferenceError: VgsForms is not defined</i>. The build was green, every
     ///   expected string was present, and the feature did not work. That is a COMPILER bug, not a
-    ///   designer one GÇö see docs/form-designer-followups.md.</item>
+    ///   designer one Gï¿½ï¿½ see docs/form-designer-followups.md.</item>
     /// </list>
     /// <para>A class with a <c>Shared</c> method emits a real <c>class VgsForms</c> with a
     /// <c>static</c> member, which is what the qualified call resolves against.
@@ -45,13 +45,13 @@ public static class FormAssetEmitter
     /// </summary>
     public const string DispatchSubName = "VgsDispatchForm";
 
-    /// <summary>The class the dispatch lives on GÇö see <see cref="DispatchSubName"/> for why.</summary>
+    /// <summary>The class the dispatch lives on Gï¿½ï¿½ see <see cref="DispatchSubName"/> for why.</summary>
     public const string DispatchModuleName = "VgsForms";
 
     /// <summary>
-    /// Exactly what a user MAY write to start the form at a point of their choosing GÇö after an Await, from a button.
+    /// Exactly what a user MAY write to start the form at a point of their choosing Gï¿½ï¿½ after an Await, from a button.
     /// Never required: with no such call anywhere, the JavaScript backend dispatches after <c>Main</c> by itself
-    /// (<see cref="IsStartupDispatch"/>). With one, it does NOT GÇö the user decides when GÇö and the dispatch runs once.
+    /// (<see cref="IsStartupDispatch"/>). With one, it does NOT Gï¿½ï¿½ the user decides when Gï¿½ï¿½ and the dispatch runs once.
     /// </summary>
     public const string DispatchCall = DispatchModuleName + "." + DispatchSubName + "()";
 
@@ -59,23 +59,23 @@ public static class FormAssetEmitter
     private const string DispatchedFieldName = "vgsDispatched";
 
     /// <summary>
-    /// G¢öG¢ö THE startup rule (owner decision 2026-09-28: <b>Sub Main in a web project with forms is STARTUP, like
-    /// WinForms</b>): the program's entry point runs <c>Main</c> first GÇö so anything it adds to the page is there GÇö and
+    /// Gï¿½ï¿½Gï¿½ï¿½ THE startup rule (owner decision 2026-09-28: <b>Sub Main in a web project with forms is STARTUP, like
+    /// WinForms</b>): the program's entry point runs <c>Main</c> first Gï¿½ï¿½ so anything it adds to the page is there Gï¿½ï¿½ and
     /// then starts the page's form, as <c>Application.Run(New Form1)</c> shows the form after the startup code. With no
     /// Main, the form starts on load.
     ///
-    /// <para>G¢ö Only when NO user code calls <see cref="DispatchCall"/> (review of 27af2e46): a user who writes that
+    /// <para>Gï¿½ï¿½ Only when NO user code calls <see cref="DispatchCall"/> (review of 27af2e46): a user who writes that
     /// call chose when the form starts, and the automatic start used to pre-empt them (an Async Main returns at its
-    /// first Await). GÜá A Main that THROWS stops the script and the form never starts GÇö the WinForms behaviour of a Main
+    /// first Await). Gï¿½ï¿½ A Main that THROWS stops the script and the form never starts Gï¿½ï¿½ the WinForms behaviour of a Main
     /// that throws before <c>Application.Run</c>.</para>
     ///
     /// <para>The JavaScript backend asks THIS, once, when it writes the entry point: is <paramref name="className"/> /
     /// <paramref name="methodName"/> the generated dispatch (a shared method on the generated class)? The class exists
-    /// only when <see cref="FormDispatch.Write"/> put it in the build GÇö a project with forms that have code-behind GÇö so
+    /// only when <see cref="FormDispatch.Write"/> put it in the build Gï¿½ï¿½ a project with forms that have code-behind Gï¿½ï¿½ so
     /// a program without forms is untouched. One rule, in the backend's entry point, reached identically by the CLI
     /// and the IDE because both compile the same generated file; never a second copy per build route.</para>
     ///
-    /// <para>GÜá By name. A user's own <c>VgsForms</c> class in a project with forms is already a second declaration of
+    /// <para>Gï¿½ï¿½ By name. A user's own <c>VgsForms</c> class in a project with forms is already a second declaration of
     /// the generated one; the reserved BL8031 (<c>design --check</c>) is the number set aside to name that
     /// collision.</para>
     /// </summary>
@@ -106,7 +106,7 @@ public static class FormAssetEmitter
         {
             if (form.Target != FormTarget.Web)
             {
-                // A .blform is a desktop window; it has no page. Skipping silently is correct GÇö
+                // A .blform is a desktop window; it has no page. Skipping silently is correct Gï¿½ï¿½
                 // a mixed project is normal.
                 continue;
             }
@@ -139,7 +139,7 @@ public static class FormAssetEmitter
     // ==================================================================
 
     /// <summary>
-    /// The page. Ids are stable GÇö they are the control ids from the document, which is what lets the
+    /// The page. Ids are stable Gï¿½ï¿½ they are the control ids from the document, which is what lets the
     /// generated <c>InitializeComponent</c> find each element with <c>getElementById</c>.
     /// </summary>
     public static string Html(FormDocument form, string scriptFileName, FormStyle style = FormStyle.Dom)
@@ -148,10 +148,10 @@ public static class FormAssetEmitter
         sb.Append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
         sb.Append("<meta charset=\"utf-8\">\n");
         sb.Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-        // Text ?? Name (spec -º2.3): the page title follows the caption the user set, or the form's name.
+        // Text ?? Name (spec -ï¿½2.3): the page title follows the caption the user set, or the form's name.
         sb.Append($"<title>{Text(form.Text ?? form.Name)}</title>\n");
 
-        // Slice 4 D-5f: the Form's Icon is the page's icon GÇö through the catalog's web tier, percent-encoded.
+        // Slice 4 D-5f: the Form's Icon is the page's icon Gï¿½ï¿½ through the catalog's web tier, percent-encoded.
         if (form.Properties.TryGetValue("Icon", out var icon) &&
             FormControlCatalog.FormRoot.Property("Icon") is { } iconRow && iconRow.Accepts(icon, FormTarget.Web) &&
             FormAssetPaths.PageUrl(icon) is { } href)
@@ -166,7 +166,7 @@ public static class FormAssetEmitter
         // naming itself, with a single shared script.
         sb.Append($"<body data-form=\"{Attr(form.Name)}\">\n");
 
-        // G¢ö ONE vocabulary test (spec 2026-09-27 -º2.1): a Canvas page speaks pixels, Grid/Flow speak cells.
+        // Gï¿½ï¿½ ONE vocabulary test (spec 2026-09-27 -ï¿½2.1): a Canvas page speaks pixels, Grid/Flow speak cells.
         if (FormVocabulary.IsPixel(form))
         {
             AppendCanvasBody(sb, form, style == FormStyle.Portable);
@@ -182,8 +182,8 @@ public static class FormAssetEmitter
     }
 
     /// <summary>
-    /// A Grid/Flow page's body. G¢ö A Docked strip is PAGE CHROME, not form content (spec -º4) GÇö on a Grid/Flow page.
-    /// It sits OUTSIDE <c>&lt;div class="vgs-form"&gt;</c> because that div is the layout container GÇö a Grid or Flow
+    /// A Grid/Flow page's body. Gï¿½ï¿½ A Docked strip is PAGE CHROME, not form content (spec -ï¿½4) Gï¿½ï¿½ on a Grid/Flow page.
+    /// It sits OUTSIDE <c>&lt;div class="vgs-form"&gt;</c> because that div is the layout container Gï¿½ï¿½ a Grid or Flow
     /// box whose tracks the user authored for their own controls. A <c>&lt;nav&gt;</c> placed inside it would consume
     /// a cell nobody declared and push every control one place along, from a green build. (A Canvas page puts strips
     /// INSIDE: <see cref="AppendCanvasBody"/>.)
@@ -228,10 +228,10 @@ public static class FormAssetEmitter
 
         sb.Append("</div>\n");
 
-        // G¢ö Bottom chrome in REVERSE document order. Same algebra as the canvas bands: the
+        // Gï¿½ï¿½ Bottom chrome in REVERSE document order. Same algebra as the canvas bands: the
         // FIRST-documented Bottom strip stacks nearest the true bottom edge, so on the page it is
         // emitted LAST, closest to the end of <body>. Forward order here would put the status bar
-        // below a bottom toolbar on the page and above it in the designer GÇö the same document
+        // below a bottom toolbar on the page and above it in the designer Gï¿½ï¿½ the same document
         // rendering two ways.
         for (var i = bottom.Count - 1; i >= 0; i--)
         {
@@ -247,10 +247,10 @@ public static class FormAssetEmitter
     }
 
     /// <summary>
-    /// A Canvas page's body (spec 2026-09-27 -º3). G¢ö The coordinate space is the WinForms CLIENT AREA, strips
+    /// A Canvas page's body (spec 2026-09-27 -ï¿½3). Gï¿½ï¿½ The coordinate space is the WinForms CLIENT AREA, strips
     /// included: every strip is an absolutely positioned band INSIDE <c>.vgs-form</c> at
     /// <see cref="FormDockLayout"/>'s rectangle (written by <see cref="CanvasCss"/>), so a control at Y=30 sits 6px
-    /// below a 24px menu exactly as in WinForms. Everything GÇö strips too GÇö in DOCUMENT order: absolutely positioned
+    /// below a 24px menu exactly as in WinForms. Everything Gï¿½ï¿½ strips too Gï¿½ï¿½ in DOCUMENT order: absolutely positioned
     /// siblings paint later-on-top, which is WinForms' "last in the list is in front" (scope call S12).
     /// </summary>
     private static void AppendCanvasBody(StringBuilder sb, FormDocument form, bool portable)
@@ -263,7 +263,7 @@ public static class FormAssetEmitter
             AppendControl(sb, control, indent: "  ", portable, FormAreaId(form), designer: designer);
         }
 
-        // <Literal> flows at the form area's top-left, under the positioned controls (spec -º3). G¢ö Wrapped (Task 10
+        // <Literal> flows at the form area's top-left, under the positioned controls (spec -ï¿½3). Gï¿½ï¿½ Wrapped (Task 10
         // review M-4): below the breakpoint the form area is a flex column, and the literal's markup would be an
         // unordered flex item (order 0) landing BETWEEN the stacked controls. The wrapper is what the phone query
         // orders last (AppendStackedQuery). On the desktop an unpositioned div flows exactly where its content did.
@@ -276,7 +276,7 @@ public static class FormAssetEmitter
 
         sb.Append("</div>\n");
 
-        // G¢ö Owner decision 2026-09-27: the page re-docks when user code shows or hides a docked control. A CLASSIC
+        // Gï¿½ï¿½ Owner decision 2026-09-27: the page re-docks when user code shows or hides a docked control. A CLASSIC
         // script after the form area (the elements exist) and before the module (it observes InitializeComponent).
         if (FormDockScript.PageScript(form, clientAreas: portable) is { } dock)
         {
@@ -288,7 +288,7 @@ public static class FormAssetEmitter
     {
         if (!string.IsNullOrEmpty(form.Literal))
         {
-            // G¢ö Passes through UNTOUCHED GÇö the runat="server" inversion (D9). Not escaped, because
+            // Gï¿½ï¿½ Passes through UNTOUCHED Gï¿½ï¿½ the runat="server" inversion (D9). Not escaped, because
             // it is markup the user wrote to be markup; the canvas shows it read-only for the same
             // reason.
             sb.Append(form.Literal);
@@ -321,7 +321,7 @@ public static class FormAssetEmitter
         var tag = definition?.HtmlTag;
         if (tag == null)
         {
-            // No catalog row for this target GÇö the document round-trips it, but there is no markup
+            // No catalog row for this target Gï¿½ï¿½ the document round-trips it, but there is no markup
             // we can honestly emit for it. Left as a comment so the gap is visible in the output
             // rather than silently absent from the page.
             sb.Append($"{indent}<!-- {Text(control.Id)}: '{Text(control.Kind)}' has no web catalog row -->\n");
@@ -330,11 +330,11 @@ public static class FormAssetEmitter
 
         sb.Append($"{indent}<{tag} id=\"{Attr(control.Id)}\"");
 
-        // D2's web-only CssClass JOINS the element's own class (a second class= attribute is invalid HTML) GÇö only a value
+        // D2's web-only CssClass JOINS the element's own class (a second class= attribute is invalid HTML) Gï¿½ï¿½ only a value
         // the row accepts (class-name tokens): anything else is Degraded and the element keeps its own class alone.
         sb.Append($" class=\"vgs-{Attr(control.Kind)}{Attr(ExtraClasses(control))}\"");
 
-        // Chrome is the one part of a form whose meaning the DOM cannot infer from its tag GÇö a
+        // Chrome is the one part of a form whose meaning the DOM cannot infer from its tag Gï¿½ï¿½ a
         // <menu> is not a toolbar and an <li> is not a separator to a screen reader. Stated on the
         // ROW, so a kind that needs a role declares one rather than the emitter carrying a list.
         if (definition!.HtmlRole != null)
@@ -342,9 +342,9 @@ public static class FormAssetEmitter
             sb.Append($" role=\"{Attr(definition.HtmlRole)}\"");
         }
 
-        // G¢ö Only a POSITIONED control takes a tab stop. A strip and an item have no TabIndex in the
+        // Gï¿½ï¿½ Only a POSITIONED control takes a tab stop. A strip and an item have no TabIndex in the
         // document at all (Task 14 stopped writing one), so an unconditional tabindex="0" here put
-        // every menu item into the page's tab order at the same rank GÇö Tab walking a dozen dead
+        // every menu item into the page's tab order at the same rank Gï¿½ï¿½ Tab walking a dozen dead
         // <li>s before reaching the first real control, from a document that says nothing of the
         // sort.
         if (definition.Place == FormPlace.Positioned)
@@ -359,10 +359,10 @@ public static class FormAssetEmitter
 
         var text = control.Properties.TryGetValue("Text", out var t) ? t : null;
 
-        // G¢ö An item's caption carries a WinForms ACCELERATOR mark: "&File" means File with F
+        // Gï¿½ï¿½ An item's caption carries a WinForms ACCELERATOR mark: "&File" means File with F
         // underlined, and "&&" is a literal ampersand. The generic escaper turns both into
-        // "&amp;" GÇö "&amp;File" reaches the page as the visible text "&File". G¢ö FormAccelerator is
-        // the ONE rule GÇö the designer canvas draws the same display text, and FormPlacement.ItemId
+        // "&amp;" Gï¿½ï¿½ "&amp;File" reaches the page as the visible text "&File". Gï¿½ï¿½ FormAccelerator is
+        // the ONE rule Gï¿½ï¿½ the designer canvas draws the same display text, and FormPlacement.ItemId
         // derives an item's id from it. A private copy here is how the page and the designer came
         // to disagree about what "&Open" looks like.
         if (text != null && definition.Place == FormPlace.Item)
@@ -370,7 +370,7 @@ public static class FormAssetEmitter
             text = FormAccelerator.Display(text).Display;
         }
 
-        // G¢ö A <select> takes <option> children and NOTHING else. Its Text was being written as a
+        // Gï¿½ï¿½ A <select> takes <option> children and NOTHING else. Its Text was being written as a
         // bare text node inside the element, which browsers drop or render as stray text above the
         // list. A ComboBox's Text is its label, not its content, so it becomes a title attribute.
         var isSelect = string.Equals(tag, "select", StringComparison.Ordinal);
@@ -393,12 +393,12 @@ public static class FormAssetEmitter
         if (Flag(control, "ReadOnly") == true) sb.Append(" readonly");
         if (Flag(control, "MultiSelect") == true) sb.Append(" multiple");
 
-        // G¢ö Driven from the CATALOG, not from a list here. WinForms `Minimum` is HTML `min`, and an
+        // Gï¿½ï¿½ Driven from the CATALOG, not from a list here. WinForms `Minimum` is HTML `min`, and an
         // `if` per property would be a second list beside FormControlCatalog that goes stale the day
-        // a row is added GÇö the exact failure the catalog exists to prevent. A row declares its
+        // a row is added Gï¿½ï¿½ the exact failure the catalog exists to prevent. A row declares its
         // HtmlAttribute or it does not reach the page at all.
         //
-        // GÜá Skipped where the property does not apply to the web (Targets), so a WinForms-only row
+        // Gï¿½ï¿½ Skipped where the property does not apply to the web (Targets), so a WinForms-only row
         // like DecimalPlaces cannot leak an attribute <input type="number"> has never heard of.
         foreach (var property in definition.Properties)
         {
@@ -410,10 +410,10 @@ public static class FormAssetEmitter
                 continue;
             }
 
-            // G¢ö An Int row (min/max/value/step/maxlength) is re-emitted from the PARSED number, as
-            // WinForms emits it GÇö and a value the catalog refuses is not emitted at all, because
+            // Gï¿½ï¿½ An Int row (min/max/value/step/maxlength) is re-emitted from the PARSED number, as
+            // WinForms emits it Gï¿½ï¿½ and a value the catalog refuses is not emitted at all, because
             // WinForms emits nothing for a Degraded value and the two targets must agree on what the
-            // document says. Verbatim text let "5\r\n" or "GêÆ5" reach the page as an attribute.
+            // document says. Verbatim text let "5\r\n" or "Gï¿½ï¿½5" reach the page as an attribute.
             if (property.Type == FormPropertyType.Int)
             {
                 if (!FormPropertyDef.TryParseInt(raw, out var number))
@@ -434,7 +434,7 @@ public static class FormAssetEmitter
             sb.Append($" name=\"{Attr(group)}\"");
         }
 
-        // G¢ö Slice 4 D-5f: the src goes through the catalog's web tier (a rooted path GÇö the author's disk GÇö is refused and
+        // Gï¿½ï¿½ Slice 4 D-5f: the src goes through the catalog's web tier (a rooted path Gï¿½ï¿½ the author's disk Gï¿½ï¿½ is refused and
         // never emitted) and is percent-encoded per segment (FormAssetPaths.PageUrl); Attr alone let a space or # break it.
         if (string.Equals(tag, "img", StringComparison.Ordinal) &&
             control.Properties.TryGetValue("Image", out var image))
@@ -454,19 +454,19 @@ public static class FormAssetEmitter
 
         sb.Append('>');
 
-        // G¢öG¢ö Items reach the page as <option>s or they do not reach it at all. The WinForms side
+        // Gï¿½ï¿½Gï¿½ï¿½ Items reach the page as <option>s or they do not reach it at all. The WinForms side
         // emits Items.Add(...) per entry, so without this a ComboBox rendered as an EMPTY dropdown
-        // on the web and a populated one on the desktop GÇö from the same document. That is the
+        // on the web and a populated one on the desktop Gï¿½ï¿½ from the same document. That is the
         // designer/runtime divergence D9 exists to prevent, across targets instead of within one.
         if (isSelect && control.Properties.TryGetValue("Items", out var items))
         {
-            // G¢ö SelectedIndex is the SAME divergence one property over. WinForms emits
+            // Gï¿½ï¿½ SelectedIndex is the SAME divergence one property over. WinForms emits
             // `cmb.SelectedIndex = 2`; the page has no such property, and without marking the
             // option the desktop opened on the user's chosen entry while the web opened on the
             // first one. It is an INDEX into this list, so it can only be resolved here, where the
             // list is being written.
             //
-            // GÜá Read with the catalog's TryParseInt, never int.TryParse: a "1\r\n" the desktop judges
+            // Gï¿½ï¿½ Read with the catalog's TryParseInt, never int.TryParse: a "1\r\n" the desktop judges
             // Degraded (and emits nothing for) must not mark an option on the page either.
             var selected = control.Properties.TryGetValue("SelectedIndex", out var raw) &&
                            FormPropertyDef.TryParseInt(raw, out var parsed)
@@ -493,9 +493,9 @@ public static class FormAssetEmitter
         {
             sb.Append('\n');
 
-            // A menu's children are LIST ITEMS, and an <li> outside a list is not a list item GÇö
+            // A menu's children are LIST ITEMS, and an <li> outside a list is not a list item Gï¿½ï¿½
             // the wrapper is the row's, not the control's own tag, because the same <li> nests
-            // inside another <li>'s <ul> to make a submenu. Declared on the row (spec -º4) so the
+            // inside another <li>'s <ul> to make a submenu. Declared on the row (spec -ï¿½4) so the
             // emitter never asks what kind this is.
             var wrapper = definition.HtmlChildrenWrapper;
             var childIndent = indent + "  ";
@@ -669,8 +669,8 @@ public static class FormAssetEmitter
 
     /// <summary>
     /// The layout, as CSS. Grid and Flow are the CELL vocabularies (D3); a <c>Canvas</c> page speaks PIXELS (spec
-    /// 2026-09-27) and takes <see cref="CanvasCss"/>. G¢ö The one vocabulary test is
-    /// <see cref="FormVocabulary.IsPixel(FormDocument)"/>, asked first GÇö never the target, never the switch below.
+    /// 2026-09-27) and takes <see cref="CanvasCss"/>. Gï¿½ï¿½ The one vocabulary test is
+    /// <see cref="FormVocabulary.IsPixel(FormDocument)"/>, asked first Gï¿½ï¿½ never the target, never the switch below.
     /// </summary>
     public static string Css(FormDocument form, FormStyle style = FormStyle.Dom)
     {
@@ -690,7 +690,7 @@ public static class FormAssetEmitter
         {
             case FormLayoutKind.Grid:
                 sb.Append("  display: grid;\n");
-                // G¢ö The document stores a CSS track list comma-separated ("120px,1fr") because it is
+                // Gï¿½ï¿½ The document stores a CSS track list comma-separated ("120px,1fr") because it is
                 // one XML attribute; CSS wants it space-separated. Converting here rather than
                 // storing it CSS-ready keeps the attribute readable and un-ambiguous to split.
                 if (!string.IsNullOrEmpty(layout.Cols))
@@ -721,7 +721,7 @@ public static class FormAssetEmitter
 
         foreach (var control in form.AllControls())
         {
-            AppendControlCss(sb, control, layout, portable);
+            AppendControlCss(sb, control, layout, portable, form.ParentOf(control)?.Kind);
         }
 
         AppendKindCss(sb, form, portable);
@@ -731,12 +731,12 @@ public static class FormAssetEmitter
     }
 
     /// <summary>
-    /// The FORM's own web rows (spec -º2.3, slice 3): BackColor, ForeColor and Font become ONE <c>body { GÇª }</c> rule GÇö the
+    /// The FORM's own web rows (spec -ï¿½2.3, slice 3): BackColor, ForeColor and Font become ONE <c>body { GÇª }</c> rule Gï¿½ï¿½ the
     /// whole page is the client area, so every control and every Docked strip inherits them exactly as WinForms' ambient
     /// properties inherit from the Form. Walked from <see cref="FormControlCatalog.FormRoot"/> through <see cref="FormCss"/>,
-    /// the same converters a control's rows use GÇö never a list here.
+    /// the same converters a control's rows use Gï¿½ï¿½ never a list here.
     ///
-    /// <para>GÜá A SEPARATE rule (pre-flight B3): the Canvas stylesheet already owns a <c>body { margin: 0; display: flex; GÇª }</c>
+    /// <para>Gï¿½ï¿½ A SEPARATE rule (pre-flight B3): the Canvas stylesheet already owns a <c>body { margin: 0; display: flex; GÇª }</c>
     /// layout rule, and CSS merges the two; nothing rewrites it. Nothing is written when the form carries none of these.</para>
     /// </summary>
     private static void AppendRootCss(StringBuilder sb, FormDocument form)
@@ -754,11 +754,11 @@ public static class FormAssetEmitter
             sb.Append($"body {{ {string.Join("; ", declarations)}; }}\n");
         }
 
-        // G¢ö Measured (slice 3 task 7, Edge's computed style): a browser does NOT inherit the body's font into its FORM
-        // controls GÇö the user-agent sheet gives <button>/<input>/<select>/<textarea> their own GÇö so a Form Font on body
-        // left every button regular while the WinForms window made it bold (Font is ambient on every control). G¢ö Code
+        // Gï¿½ï¿½ Measured (slice 3 task 7, Edge's computed style): a browser does NOT inherit the body's font into its FORM
+        // controls Gï¿½ï¿½ the user-agent sheet gives <button>/<input>/<select>/<textarea> their own Gï¿½ï¿½ so a Form Font on body
+        // left every button regular while the WinForms window made it bold (Font is ambient on every control). Gï¿½ï¿½ Code
         // review I2: a CONTAINER's Font is ambient too (a Button in a bold GroupBox is bold), so the rule is written when a
-        // Font is present ANYWHERE on the page GÇö the Form or any control GÇö and a page with none keeps the user agent's look
+        // Font is present ANYWHERE on the page Gï¿½ï¿½ the Form or any control Gï¿½ï¿½ and a page with none keeps the user agent's look
         // (the measured pixel pages stay byte-identical). ForeColor likewise reaches a <button> (Button.ForeColor is
         // ambient); a TextBox's is WindowText in WinForms, not its parent's, so inputs keep their own colour.
         if (HasValueAnywhere(form, "Font"))
@@ -773,8 +773,8 @@ public static class FormAssetEmitter
     }
 
     /// <summary>
-    /// Whether the page carries a USABLE web value for <paramref name="name"/> anywhere GÇö on the Form (its FormRoot row) or
-    /// on any control. GÜá Usable: a Degraded value is never emitted, so nothing on the page could inherit it.
+    /// Whether the page carries a USABLE web value for <paramref name="name"/> anywhere Gï¿½ï¿½ on the Form (its FormRoot row) or
+    /// on any control. Gï¿½ï¿½ Usable: a Degraded value is never emitted, so nothing on the page could inherit it.
     /// </summary>
     private static bool HasValueAnywhere(FormDocument form, string name) =>
         (FormControlCatalog.FormRoot.Property(name) is { } row && FormRootValues.Applies(row, form) &&
@@ -785,8 +785,8 @@ public static class FormAssetEmitter
             controlRow.Accepts(own, FormTarget.Web));
 
     /// <summary>
-    /// Per-KIND chrome styling, appended ONCE however many controls of that kind the page has (spec -º4). A menu is the
-    /// one control whose appearance is not optional GÇö an unstyled <c>&lt;ul&gt;</c> of <c>&lt;li&gt;</c>s is a
+    /// Per-KIND chrome styling, appended ONCE however many controls of that kind the page has (spec -ï¿½4). A menu is the
+    /// one control whose appearance is not optional Gï¿½ï¿½ an unstyled <c>&lt;ul&gt;</c> of <c>&lt;li&gt;</c>s is a
     /// bulleted vertical list, not a menu bar, and its submenus are all open at once. Distinct() on the block itself,
     /// because the rule is "one block per kind present" and two ToolStrips are one kind.
     /// </summary>
@@ -811,29 +811,41 @@ public static class FormAssetEmitter
         sb.Append("[data-vgs-control] { box-sizing: border-box; }\n.vgs-disabled { opacity: 0.65; }\n");
     }
 
-    private static void AppendControlCss(StringBuilder sb, FormControl control, FormLayout layout, bool portable = false)
+    private static void AppendControlCss(
+        StringBuilder sb, FormControl control, FormLayout layout, bool portable = false, string? parentKind = null)
     {
         var rules = new List<string>();
 
-        if (control.Geometry is GridGeometry grid && layout.Kind == FormLayoutKind.Grid)
+        var isGridPanel = FormGridPanel.Is(control);
+        if (isGridPanel)
         {
-            // GÜá CSS grid lines are 1-based; the document's Col/Row are 0-based (the spec's worked
-            // example puts the first control at Col="0" Row="0"). Off by one here puts every
-            // control one cell down and to the right, which looks like a layout bug and is an
-            // indexing one.
+            AddGridPanelRules(rules, control);
+        }
+        if (string.Equals(parentKind, "GridPanel", StringComparison.Ordinal) && control.GridCell is { } cell)
+        {
+            // A child of a GridPanel is positioned by the PANEL's grid, not by the page's.
+            AddGridCellRules(rules, cell);
+        }
+
+        if (!string.Equals(parentKind, "GridPanel", StringComparison.Ordinal) &&
+            control.Geometry is GridGeometry grid && layout.Kind == FormLayoutKind.Grid)
+        {
+            // â›” ONLY direct children of the page's .vgs-form take page coordinates. A nested
+            // GridPanel child has a cell in its PANEL; writing page lines too would place it twice.
+            // CSS grid lines are 1-based; the document's Col/Row are 0-based.
             //
-            // GÜá Invariant, like every number this emitter writes: a U+2212 minus is not CSS.
+            // â›” Invariant, like every number this emitter writes: a U+2212 minus is not CSS.
             rules.Add("grid-column: " + Number(grid.Col + 1) + (grid.ColSpan > 1 ? " / span " + Number(grid.ColSpan) : ""));
             rules.Add("grid-row: " + Number(grid.Row + 1) + (grid.RowSpan > 1 ? " / span " + Number(grid.RowSpan) : ""));
         }
 
-        // G¢öG¢ö Driven from the CATALOG (spec -º2.1). The four rules that used to be hard-coded here GÇö
-        // ForeColor, BackColor, TextAlign, Visible GÇö MOVED onto each row's CssProperty in the same
+        // â›”â›” Driven from the CATALOG (spec -ï¿½2.1). The four rules that used to be hard-coded here Gï¿½ï¿½
+        // ForeColor, BackColor, TextAlign, Visible Gï¿½ï¿½ MOVED onto each row's CssProperty in the same
         // commit: two sources would emit duplicate or conflicting declarations. A row declares its CSS
         // meaning or it does not reach the stylesheet, exactly as HtmlAttribute works for markup.
         // (Visible=false stays CSS, not a missing element: getElementById must still find it.)
         //
-        // GÜá Order is CATALOG order now (it was fore/back/align/display). No test depends on the order GÇö
+        // Gï¿½ï¿½ Order is CATALOG order now (it was fore/back/align/display). No test depends on the order Gï¿½ï¿½
         // FormAssetEmitterTests asserts the exact text only for grid-only rules.
         rules.AddRange(CatalogDeclarations(control, portable));
 
@@ -845,9 +857,46 @@ public static class FormAssetEmitter
         sb.Append($"#{control.Id} {{ {string.Join("; ", rules)}; }}\n");
     }
 
+    /// <summary>The property's explicit value, else the catalog row's default.</summary>
+    private static string? PropertyOr(FormControl control, FormControlDef definition, string name) =>
+        control.Properties.TryGetValue(name, out var value) ? value : definition.Property(name)?.Default;
+
+    /// <summary>The panel's own grid declarations, shared by the page-Grid and Canvas stylesheets.</summary>
+    private static void AddGridPanelRules(List<string> rules, FormControl panel)
+    {
+        rules.Add("display: grid");
+        var definition = panel.Definition!;
+        var columns = PropertyOr(panel, definition, "Columns");
+        var rows = PropertyOr(panel, definition, "Rows");
+        var gap = PropertyOr(panel, definition, "Gap");
+
+        if (!string.IsNullOrWhiteSpace(columns))
+        {
+            rules.Add("grid-template-columns: " + Tracks(columns));
+        }
+
+        if (!string.IsNullOrWhiteSpace(rows))
+        {
+            rules.Add("grid-template-rows: " + Tracks(rows));
+        }
+
+        if (!string.IsNullOrWhiteSpace(gap))
+        {
+            rules.Add("gap: " + gap);
+        }
+    }
+
+    /// <summary>A GridPanel child's cell, in the 1-based CSS grid lines.</summary>
+    private static void AddGridCellRules(List<string> rules, GridCell cell)
+    {
+        rules.Add("grid-column: " + Number(cell.Col + 1) + (cell.ColSpan > 1 ? " / span " + Number(cell.ColSpan) : ""));
+        rules.Add("grid-row: " + Number(cell.Row + 1) + (cell.RowSpan > 1 ? " / span " + Number(cell.RowSpan) : ""));
+    }
+
+
     /// <summary>
-    /// The row-driven declarations for <paramref name="control"/> (spec -º2.1), as <c>property: value</c>, in CATALOG
-    /// order GÇö the one walk both vocabularies use. <see cref="FormCss"/> converts each value.
+    /// The row-driven declarations for <paramref name="control"/> (spec -ï¿½2.1), as <c>property: value</c>, in CATALOG
+    /// order Gï¿½ï¿½ the one walk both vocabularies use. <see cref="FormCss"/> converts each value.
     /// </summary>
     private static List<string> CatalogDeclarations(FormControl control, bool portable = false)
     {
@@ -866,7 +915,7 @@ public static class FormAssetEmitter
                 continue;
             }
 
-            // G¢ö Every declaration the row produces GÇö a Font is five (slice 3 pre-flight B2).
+            // Gï¿½ï¿½ Every declaration the row produces Gï¿½ï¿½ a Font is five (slice 3 pre-flight B2).
             foreach (var (css, value) in FormCss.Declarations(property, raw))
             {
                 declarations.Add($"{css}: {value}");
@@ -877,22 +926,22 @@ public static class FormAssetEmitter
     }
 
     // ==================================================================
-    // A Canvas page (spec 2026-09-27 -º3, -º4, -º5)
+    // A Canvas page (spec 2026-09-27 -ï¿½3, -ï¿½4, -ï¿½5)
     // ==================================================================
 
     /// <summary>
-    /// A Canvas page's stylesheet. The form area fills the window with the DESIGN SIZE as its minimum (larger GåÆ
-    /// controls follow their anchors; smaller GåÆ the page scrolls, never squashes). Every positioned control and strip
-    /// is absolutely placed by the pure deciders GÇö <see cref="FormAnchorCss"/> for anchors,
-    /// <see cref="FormDockLayout"/> for everything docked GÇö and nothing here re-derives either.
+    /// A Canvas page's stylesheet. The form area fills the window with the DESIGN SIZE as its minimum (larger Gï¿½ï¿½
+    /// controls follow their anchors; smaller Gï¿½ï¿½ the page scrolls, never squashes). Every positioned control and strip
+    /// is absolutely placed by the pure deciders Gï¿½ï¿½ <see cref="FormAnchorCss"/> for anchors,
+    /// <see cref="FormDockLayout"/> for everything docked Gï¿½ï¿½ and nothing here re-derives either.
     ///
-    /// <para>G¢ö The page's FIRST state is <see cref="FormDockMode.Runtime"/> (owner decision 2026-09-27): a hidden
-    /// control takes no space, so the next docked control closes the gap. Where Runtime has no answer GÇö a hidden docked
-    /// control, a child of a hidden container GÇö the Designer answer is written instead, and the page's reflow script
+    /// <para>Gï¿½ï¿½ The page's FIRST state is <see cref="FormDockMode.Runtime"/> (owner decision 2026-09-27): a hidden
+    /// control takes no space, so the next docked control closes the gap. Where Runtime has no answer Gï¿½ï¿½ a hidden docked
+    /// control, a child of a hidden container Gï¿½ï¿½ the Designer answer is written instead, and the page's reflow script
     /// (<see cref="FormDockScript"/>) overwrites it the moment that control is shown.</para>
     ///
-    /// <para>GÜá A non-positive Width/Height writes no size (spec -º3), so such a control is CONTENT-sized here and
-    /// invisible on WinForms GÇö an accepted divergence. GÜá Children are positioned against their container's PADDING
+    /// <para>Gï¿½ï¿½ A non-positive Width/Height writes no size (spec -ï¿½3), so such a control is CONTENT-sized here and
+    /// invisible on WinForms Gï¿½ï¿½ an accepted divergence. Gï¿½ï¿½ Children are positioned against their container's PADDING
     /// box, i.e. inside any CSS border (a GroupBox's fieldset), as WinForms positions them inside its
     /// DisplayRectangle; the amounts differ and the Task 12/13 harness measures them.</para>
     /// </summary>
@@ -905,20 +954,20 @@ public static class FormAssetEmitter
 
         sb.Append($"/* Generated from {form.Name}{form.FileExtension}. Edits here are overwritten on build. */\n");
 
-        // G¢öG¢ö The page body is a COLUMN and the form area takes the space LEFT OVER (owner decision 2026-09-28: Sub
+        // Gï¿½ï¿½Gï¿½ï¿½ The page body is a COLUMN and the form area takes the space LEFT OVER (owner decision 2026-09-28: Sub
         // Main is startup, like WinForms, and what it adds to the page stays visible). The form area used to be
-        // `height: 100vh`, so a heading Main appended to the body sat exactly one viewport down GÇö the owner's blank page
+        // `height: 100vh`, so a heading Main appended to the body sat exactly one viewport down Gï¿½ï¿½ the owner's blank page
         // with a scrollbar. Now content Main puts before or after the form area is on screen when there is room, the
         // form area still fills the window when there is none (with nothing else on the page it is exactly the
-        // viewport, as before GÇö the Edge/WinForms harness numbers do not move), and anchors and docks follow its REAL
+        // viewport, as before Gï¿½ï¿½ the Edge/WinForms harness numbers do not move), and anchors and docks follow its REAL
         // size because every inset is against .vgs-form, never the viewport.
         //
-        // GÜá "When there is room": the form area never goes below its design height, so on a window no taller than the
-        // design (plus Main's content) that content is below the fold and the page scrolls to it GÇö the scroll-not-squash
-        // rule wins. GÜá align-items: flex-start (review of 27af2e46, measured in Edge): a column STRETCHES every child
+        // Gï¿½ï¿½ "When there is room": the form area never goes below its design height, so on a window no taller than the
+        // design (plus Main's content) that content is below the fold and the page scrolls to it Gï¿½ï¿½ the scroll-not-squash
+        // rule wins. Gï¿½ï¿½ align-items: flex-start (review of 27af2e46, measured in Edge): a column STRETCHES every child
         // across its width by default, so the template's "Click me" button rendered 1024px wide. Main's elements keep
         // their own width; only the form area stretches (align-self below).
-        // G¢ö KNOWN LIMIT, measured: in a column EVERY direct child of <body> is its own row, so two inline elements Main
+        // Gï¿½ï¿½ KNOWN LIMIT, measured: in a column EVERY direct child of <body> is its own row, so two inline elements Main
         // appends straight to the body (two <span>s) stack instead of sharing a line. Wrap inline content in one element
         // (a <div> or <p>) to keep it on one line. No pure-CSS layout gives both "the form area takes the remaining
         // height" and "loose inline body children share a line".
@@ -927,13 +976,13 @@ public static class FormAssetEmitter
         sb.Append(".vgs-form {\n");
         sb.Append("  position: relative;\n");
 
-        // G¢ö Its own block formatting context (Task 10 review N-1, measured in Chromium): otherwise a <Literal> whose
+        // Gï¿½ï¿½ Its own block formatting context (Task 10 review N-1, measured in Chromium): otherwise a <Literal> whose
         // first element has a top margin (<p>, <h1>, <ul>) collapses that margin through .vgs-literal and .vgs-form,
-        // and the WHOLE form area GÇö every positioned control with it GÇö moves down. The phone query's display:flex
+        // and the WHOLE form area Gï¿½ï¿½ every positioned control with it Gï¿½ï¿½ moves down. The phone query's display:flex
         // overrides this below the breakpoint. (It is the form area's INSIDE; the body's flex column is its outside.)
         sb.Append("  display: flow-root;\n");
 
-        // Grows into the column's free space; never shrinks below its content or its design size GÇö below the design
+        // Grows into the column's free space; never shrinks below its content or its design size Gï¿½ï¿½ below the design
         // size the page scrolls, it never squashes.
         sb.Append("  flex: 1 0 auto;\n");
         sb.Append("  align-self: stretch;\n");
@@ -943,7 +992,7 @@ public static class FormAssetEmitter
         sb.Append("  box-sizing: border-box;\n");
         sb.Append("}\n");
 
-        // G¢ö The UA's [hidden]{display:none} loses to the phone query's display:flex on a container, so a control
+        // Gï¿½ï¿½ The UA's [hidden]{display:none} loses to the phone query's display:flex on a container, so a control
         // user code hid with `el.hidden = True` would reappear below the breakpoint.
         if (portable) AppendPortableCss(sb);
         else sb.Append(".vgs-form [hidden] { display: none !important; }\n");
@@ -955,10 +1004,10 @@ public static class FormAssetEmitter
     }
 
     /// <summary>
-    /// Below the phone breakpoint (spec -º5) the form area is ONE flex column. Every control goes
+    /// Below the phone breakpoint (spec -ï¿½5) the form area is ONE flex column. Every control goes
     /// <c>position: static</c> (otherwise <c>order</c> does nothing), in <see cref="FormReadingOrder"/>'s order per
     /// sibling list; top strips first and bottom strips last; a docked control is an ordinary row. HTML order is
-    /// unchanged. G¢ö The breakpoint is <see cref="FormLayout.EffectiveMobileBreakpoint"/> GÇö the one rule; 0 never
+    /// unchanged. Gï¿½ï¿½ The breakpoint is <see cref="FormLayout.EffectiveMobileBreakpoint"/> Gï¿½ï¿½ the one rule; 0 never
     /// stacks, a Degraded value gives the default.
     /// </summary>
     private static void AppendStackedQuery(StringBuilder sb, FormDocument form, FormDockLayoutResult designer, bool portable)
@@ -970,7 +1019,7 @@ public static class FormAssetEmitter
         }
 
         sb.Append($"@media (width < {Number(breakpoint)}px) {{\n");
-        // flex: none GÇö the stacked form area is its content's height; it does not grow into the body column's free
+        // flex: none Gï¿½ï¿½ the stacked form area is its content's height; it does not grow into the body column's free
         // space below the breakpoint.
         sb.Append("  .vgs-form { display: flex; flex-direction: column; gap: 8px; flex: none; min-width: 0; min-height: 0; }\n");
         var ordered = AppendStacked(sb, form.Controls, designer, portable);
@@ -987,11 +1036,11 @@ public static class FormAssetEmitter
     /// <summary>
     /// One sibling list's stacked rules, then each container's children inside it.
     ///
-    /// <para>GÜá Every rectangle here is the DESIGNER picture (a docked control's resolved rect; an undocked control's
+    /// <para>Gï¿½ï¿½ Every rectangle here is the DESIGNER picture (a docked control's resolved rect; an undocked control's
     /// stored one). CSS <c>order</c> is static, so ordering by the design keeps it the same whichever controls user
     /// code has hidden; a hidden control stays <c>display:none</c> and its order only matters once shown.</para>
     ///
-    /// <para>Returns how many of <paramref name="siblings"/> were given an order (0..nGêÆ1).</para>
+    /// <para>Returns how many of <paramref name="siblings"/> were given an order (0..nGï¿½ï¿½1).</para>
     /// </summary>
     private static int AppendStacked(
         StringBuilder sb, IReadOnlyList<FormControl> siblings, FormDockLayoutResult designer, bool portable)
@@ -1043,7 +1092,7 @@ public static class FormAssetEmitter
         }
         else if (definition?.StretchesWhenStacked == true)
         {
-            // G¢ö The catalog's facet (spec -º5), never a Kind switch.
+            // Gï¿½ï¿½ The catalog's facet (spec -ï¿½5), never a Kind switch.
             rules.Add("align-self: stretch");
             rules.Add("width: auto");
             if (rect.Height > 0 && !isContainer)
@@ -1073,9 +1122,12 @@ public static class FormAssetEmitter
         {
             rules.Add("height: auto");
 
-            // G¢ö Never write display for a control whose own catalog CSS writes it (Visible=false GåÆ display:none):
+            // â›” Never write display for a control whose own catalog CSS writes it (Visible=false Gï¿½ï¿½ display:none):
             // this later declaration would un-hide it on phones.
-            if (!CatalogDeclarations(control, portable).Any(d => d.StartsWith("display:", StringComparison.Ordinal)))
+            // A GridPanel keeps its own grid on a phone (D6); a flex column here would silently replace
+            // the tracks the user authored.
+            if (!FormGridPanel.Is(control) &&
+                !CatalogDeclarations(control, portable).Any(d => d.StartsWith("display:", StringComparison.Ordinal)))
             {
                 rules.Add("display: flex");
                 rules.Add("flex-direction: column");
@@ -1094,9 +1146,32 @@ public static class FormAssetEmitter
         {
             var rules = new List<string>();
 
+            if (FormGridPanel.Is(control))
+            {
+                // A GridPanel on a Canvas page is an absolutely positioned box whose INSIDE is the
+                // panel's own grid. Its children are grid items, never pixel-positioned.
+                if (CanvasPlacement(control, parent, runtime, designer) is { } panelPlacement)
+                {
+                    rules.Add("position: absolute");
+                    rules.Add("box-sizing: border-box");
+                    rules.Add("margin: 0");
+                    rules.AddRange(panelPlacement.Select(d => $"{d.Property}: {d.Value}"));
+                }
+
+                AddGridPanelRules(rules, control);
+                rules.AddRange(CatalogDeclarations(control, portable));
+                sb.Append($"#{control.Id} {{ {string.Join("; ", rules)}; }}\n");
+                foreach (var child in control.Children)
+                {
+                    AppendGridChildCss(sb, child, portable);
+                }
+
+                continue;
+            }
+
             if (CanvasPlacement(control, parent, runtime, designer) is { } placement)
             {
-                // G¢ö margin: 0 GÇö an absolutely positioned box is placed by its MARGIN edge, and the UA gives a
+                // Gï¿½ï¿½ margin: 0 Gï¿½ï¿½ an absolutely positioned box is placed by its MARGIN edge, and the UA gives a
                 // checkbox/radio `margin: 3px 3px 0 5px` and a fieldset `0 2px`: the control would land off its X/Y.
                 // box-sizing: the outer box IS the design Width x Height, WinForms' Size.
                 rules.Add("position: absolute");
@@ -1112,8 +1187,8 @@ public static class FormAssetEmitter
                 sb.Append($"#{control.Id} {{ {string.Join("; ", rules)}; }}\n");
             }
 
-            // G¢ö A strip's OPEN dropdown must not open under the controls after it (strips are in document order,
-            // S12): WinForms opens it as its own window. Its row's children-wrapper lists are lifted GÇö the bar's own
+            // Gï¿½ï¿½ A strip's OPEN dropdown must not open under the controls after it (strips are in document order,
+            // S12): WinForms opens it as its own window. Its row's children-wrapper lists are lifted Gï¿½ï¿½ the bar's own
             // list is static, where z-index does nothing; every nested one is absolutely positioned.
             if (control.Definition is { Place: FormPlace.Docked, HtmlChildrenWrapper: { } wrapper })
             {
@@ -1121,6 +1196,31 @@ public static class FormAssetEmitter
             }
 
             AppendCanvasControls(sb, control.Children, control, runtime, designer, portable);
+        }
+    }
+
+    /// <summary>
+    /// A GridPanel child in a Canvas page: its cell rules, its own catalog declarations, and â€” when
+    /// the child is itself a GridPanel â€” that nested panel's grid and children.
+    /// </summary>
+    private static void AppendGridChildCss(StringBuilder sb, FormControl child, bool portable)
+    {
+        var rules = new List<string>();
+        AddGridCellRules(rules, child.GridCell ?? new GridCell());
+        if (FormGridPanel.Is(child))
+        {
+            AddGridPanelRules(rules, child);
+        }
+
+        rules.AddRange(CatalogDeclarations(child, portable));
+        sb.Append($"#{child.Id} {{ {string.Join("; ", rules)}; }}\n");
+
+        if (FormGridPanel.Is(child))
+        {
+            foreach (var grandchild in child.Children)
+            {
+                AppendGridChildCss(sb, grandchild, portable);
+            }
         }
     }
 
@@ -1148,9 +1248,9 @@ public static class FormAssetEmitter
             return null;
         }
 
-        // G¢ö The container's size is FormDockLayoutResult's GÇö ClientSizeOf's one answer (a docked Panel's RESOLVED
+        // Gï¿½ï¿½ The container's size is FormDockLayoutResult's Gï¿½ï¿½ ClientSizeOf's one answer (a docked Panel's RESOLVED
         // bounds), never re-derived here and never the stored size of a docked container.
-        // G¢öG¢ö The DESIGNER answer (every sibling visible), never the Runtime one. The insets written below are
+        // Gï¿½ï¿½Gï¿½ï¿½ The DESIGNER answer (every sibling visible), never the Runtime one. The insets written below are
         // DISTANCES, and WinForms captures its anchor distances when a child is added, at the size the region writer
         // gives a docked container: its Designer size. The two differ only when a hidden docked sibling changes the
         // container's run-time size, and then the child must MOVE with the container's far edge, as it does in
@@ -1177,17 +1277,17 @@ public static class FormAssetEmitter
     /// <summary>
     /// The generated dispatch helper: one per project, fixed spelling.
     ///
-    /// <para>G¢öG¢ö The body attribute is read in <b>TWO STEPS</b>. Measured:
+    /// <para>Gï¿½ï¿½Gï¿½ï¿½ The body attribute is read in <b>TWO STEPS</b>. Measured:
     /// <c>Dim s As String = doc.body.getAttribute("data-form")</c> fails with <i>"Cannot assign value
-    /// of type 'Object' to variable of type 'String'"</i> GÇö chained access through a declared
+    /// of type 'Object' to variable of type 'String'"</i> Gï¿½ï¿½ chained access through a declared
     /// Property loses the declared type, even though both <c>Document.body As Element</c> and
     /// <c>Element.getAttribute(GÇª) As String</c> are declared. The two-step form compiles and
     /// runs.</para>
     /// </summary>
     /// <remarks>
-    /// G¢öG¢ö <b>Once per page</b> (owner decision 2026-09-28). The JavaScript backend calls this itself after
+    /// Gï¿½ï¿½Gï¿½ï¿½ <b>Once per page</b> (owner decision 2026-09-28). The JavaScript backend calls this itself after
     /// <c>Main</c> returns when no user code does (<see cref="IsStartupDispatch"/>); a user's own
-    /// <c>VgsForms.VgsDispatchForm()</c> GÇö which BL8018 used to demand GÇö runs where they put it instead. The guard
+    /// <c>VgsForms.VgsDispatchForm()</c> Gï¿½ï¿½ which BL8018 used to demand Gï¿½ï¿½ runs where they put it instead. The guard
     /// keeps a second call (two buttons, a double click, a call from Main and a handler) from constructing a second
     /// form, wiring every handler twice. A page runs its script once, so a <c>Shared</c> flag is exactly "once per
     /// page".
@@ -1213,7 +1313,7 @@ public static class FormAssetEmitter
             // Through the one escape, not `\"{name}\"`: a form name is an identifier today, but this is a
             // BasicLang string literal and every one of those goes through StringLiteral.
             sb.Append($"        {(first ? "If" : "ElseIf")} formName = {FormPropertyDef.StringLiteral(name)} Then\n");
-            // G¢ö Constructing the form is ENOUGH GÇö the scaffolded `Public Sub New()` already calls
+            // Gï¿½ï¿½ Constructing the form is ENOUGH Gï¿½ï¿½ the scaffolded `Public Sub New()` already calls
             // InitializeComponent (FormScaffolder.CodeBehind). Calling it again here ran the whole
             // init body TWICE, so every addEventListener registered its handler twice and one
             // click fired it twice. It is also generated Private, so the second call was reaching
@@ -1236,15 +1336,14 @@ public static class FormAssetEmitter
     // Escaping
     // ==================================================================
 
-    private static string Tracks(string commaSeparated) =>
-        string.Join(" ", commaSeparated.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    private static string Tracks(string commaSeparated) => FormTracks.ToCss(commaSeparated);
 
     /// <summary>
-    /// True/false for a boolean-ish property, or null when it is unset, unparseable GÇö or not a WEB row of this control.
+    /// True/false for a boolean-ish property, or null when it is unset, unparseable Gï¿½ï¿½ or not a WEB row of this control.
     ///
-    /// <para>G¢ö Through the catalog row (slice 3, found by the D2 sweep): a flag read by NAME alone put <c>disabled</c> on a
+    /// <para>Gï¿½ï¿½ Through the catalog row (slice 3, found by the D2 sweep): a flag read by NAME alone put <c>disabled</c> on a
     /// MenuStrip's &lt;nav&gt; for its WinForms-only Enabled, and <c>checked</c> on a menu item's &lt;li&gt; for its
-    /// WinForms-only Checked GÇö rows D2 says never reach a page.</para>
+    /// WinForms-only Checked Gï¿½ï¿½ rows D2 says never reach a page.</para>
     /// </summary>
     private static bool? Flag(FormControl control, string name) =>
         control.Definition?.Property(name) is { } row && row.AppliesTo(FormTarget.Web) &&
@@ -1252,7 +1351,7 @@ public static class FormAssetEmitter
             ? parsed
             : null;
 
-    /// <summary>The web-only CssClass tokens, space-led and single-spaced, or "" GÇö asked of the catalog row.</summary>
+    /// <summary>The web-only CssClass tokens, space-led and single-spaced, or "" Gï¿½ï¿½ asked of the catalog row.</summary>
     private static string ExtraClasses(FormControl control) =>
         control.Definition?.Property("CssClass") is { } row && row.AppliesTo(FormTarget.Web) &&
         control.Properties.TryGetValue(row.Name, out var value) && row.Accepts(value, FormTarget.Web)
@@ -1265,14 +1364,14 @@ public static class FormAssetEmitter
         .Replace(">", "&gt;");
 
     /// <summary>
-    /// Attribute escaping. Escapes <c>"</c> as well as the three <see cref="Text"/> handles GÇö an
+    /// Attribute escaping. Escapes <c>"</c> as well as the three <see cref="Text"/> handles Gï¿½ï¿½ an
     /// unescaped quote closes the attribute early and makes the page unparseable, and control ids
     /// and property values are user text.
     /// </summary>
     private static string Attr(string value) => Text(value).Replace("\"", "&quot;");
 
     /// <summary>
-    /// A number as markup/CSS text. G¢ö Invariant: sv-SE/fi-FI/nb-NO spell a negative with U+2212, which
+    /// A number as markup/CSS text. Gï¿½ï¿½ Invariant: sv-SE/fi-FI/nb-NO spell a negative with U+2212, which
     /// neither HTML nor CSS reads as a minus.
     /// </summary>
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);

@@ -538,7 +538,7 @@ public static class FormClipboard
         }
     }
 
-    private static XElement ToElement(FormControl control)
+    private static XElement ToElement(FormControl control, bool parentIsGridPanel = false)
     {
         var element = new XElement(control.Kind, new XAttribute("Id", control.Id));
 
@@ -554,23 +554,34 @@ public static class FormClipboard
         {
             element.SetAttributeValue("TabIndex", control.TabIndex);
 
-            switch (control.Geometry)
+            if (parentIsGridPanel)
             {
-                case PixelGeometry pixel:
-                    element.SetAttributeValue("X", pixel.X);
-                    element.SetAttributeValue("Y", pixel.Y);
-                    element.SetAttributeValue("Width", pixel.Width);
-                    element.SetAttributeValue("Height", pixel.Height);
-                    element.SetAttributeValue("Anchor", pixel.Anchor);
-                    element.SetAttributeValue("Dock", pixel.Dock);
-                    break;
+                var cell = control.GridCell ?? new GridCell();
+                element.SetAttributeValue("Col", cell.Col);
+                element.SetAttributeValue("Row", cell.Row);
+                if (cell.ColSpan != 1) element.SetAttributeValue("ColSpan", cell.ColSpan);
+                if (cell.RowSpan != 1) element.SetAttributeValue("RowSpan", cell.RowSpan);
+            }
+            else
+            {
+                switch (control.Geometry)
+                {
+                    case PixelGeometry pixel:
+                        element.SetAttributeValue("X", pixel.X);
+                        element.SetAttributeValue("Y", pixel.Y);
+                        element.SetAttributeValue("Width", pixel.Width);
+                        element.SetAttributeValue("Height", pixel.Height);
+                        element.SetAttributeValue("Anchor", pixel.Anchor);
+                        element.SetAttributeValue("Dock", pixel.Dock);
+                        break;
 
-                case GridGeometry grid:
-                    element.SetAttributeValue("Col", grid.Col);
-                    element.SetAttributeValue("Row", grid.Row);
-                    if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
-                    if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
-                    break;
+                    case GridGeometry grid:
+                        element.SetAttributeValue("Col", grid.Col);
+                        element.SetAttributeValue("Row", grid.Row);
+                        if (grid.ColSpan != 1) element.SetAttributeValue("ColSpan", grid.ColSpan);
+                        if (grid.RowSpan != 1) element.SetAttributeValue("RowSpan", grid.RowSpan);
+                        break;
+                }
             }
         }
 
@@ -618,7 +629,7 @@ public static class FormClipboard
         {
             foreach (var child in control.Children)
             {
-                element.Add(ToElement(child));
+                element.Add(ToElement(child, parentIsGridPanel: control.Kind == "GridPanel"));
             }
         }
 
@@ -639,7 +650,8 @@ public static class FormClipboard
     /// The pasted subtree's layout (it equals the destination's — <see cref="Paste"/> refuses otherwise);
     /// with the target, it picks the vocabulary (spec 2026-09-27 §2.1).
     /// </param>
-    private static FormControl? FromElement(XElement element, FormTarget target, FormLayoutKind? layout)
+    private static FormControl? FromElement(
+        XElement element, FormTarget target, FormLayoutKind? layout, bool parentIsGridPanel = false)
     {
         var definition = FormControlCatalog.Find(element.Name.LocalName);
         if (definition == null)
@@ -660,7 +672,20 @@ public static class FormClipboard
             TabIndex = place == FormPlace.Positioned ? IntAttribute(element, "TabIndex") ?? 0 : 0
         };
 
-        control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null;
+        if (place == FormPlace.Positioned && parentIsGridPanel)
+        {
+            control.GridCell = new GridCell
+            {
+                Col = IntAttribute(element, "Col") ?? 0,
+                Row = IntAttribute(element, "Row") ?? 0,
+                ColSpan = IntAttribute(element, "ColSpan") ?? 1,
+                RowSpan = IntAttribute(element, "RowSpan") ?? 1
+            };
+        }
+        else
+        {
+            control.Geometry = place == FormPlace.Positioned ? ReadGeometry(element, target, layout) : null;
+        }
 
         var itemsRow = definition.Properties.FirstOrDefault(FormItems.IsCollection);
         XAttribute? legacyItems = null;
@@ -669,6 +694,11 @@ public static class FormClipboard
         foreach (var attribute in element.Attributes())
         {
             var name = attribute.Name.LocalName;
+
+            if (parentIsGridPanel && name is "Col" or "Row" or "ColSpan" or "RowSpan")
+            {
+                continue;
+            }
 
             // ⛔ Everything but a Positioned control skips Id ALONE. Dock is in StructuralAttributes,
             // so while a strip took the structural branch the catalog's own Dock property was skipped
@@ -719,7 +749,8 @@ public static class FormClipboard
             }
             else if (place != FormPlace.Tray && FormControlCatalog.Find(child.Name.LocalName) != null)
             {
-                var nested = FromElement(child, target, layout);
+                var nested = FromElement(
+                    child, target, layout, parentIsGridPanel: definition.Kind == "GridPanel");
                 if (nested != null)
                 {
                     control.Children.Add(nested);
