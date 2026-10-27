@@ -118,6 +118,53 @@ public static class FormGeometryEdit
         var currentParent = ParentOf(document, control);
         var reparented = !ReferenceEquals(currentParent, newParent);
 
+        // A pixel control dragged into a GridPanel becomes a CELL child. Its pixel geometry has no
+        // meaning inside the panel's own grid, and leaving it would emit a cell at (0,0) plus stale
+        // pixels. The cell under the pointer is the one it lands in; an occupied cell keeps the
+        // drag where it was.
+        if (FormGridPanel.Is(newParent) && newParent is { } gridPanel)
+        {
+            if (control.Definition is { IsContainer: true } && !FormGridPanel.Is(control))
+            {
+                return false;
+            }
+
+            if (gridPanel.Geometry is not PixelGeometry panelPixel ||
+                FormGridPanel.LayoutOf(gridPanel).Kind != FormLayoutKind.Grid)
+            {
+                return false;
+            }
+
+            var local = new Point(formX - origin.X, formY - origin.Y);
+            var cell = FormGridLayout.CellAt(
+                FormGridPanel.LayoutOf(gridPanel),
+                new Size(panelPixel.Width, panelPixel.Height),
+                local);
+            if (cell == null)
+            {
+                return false;
+            }
+
+            var candidate = new GridCell { Col = cell.Value.Col, Row = cell.Value.Row };
+            if (gridPanel.Children.Any(other =>
+                    !ReferenceEquals(other, control) &&
+                    other.GridCell is { } existing &&
+                    FormGridPanel.Overlaps(candidate, existing)))
+            {
+                return false;
+            }
+
+            if (reparented)
+            {
+                (currentParent?.Children ?? document.Controls).Remove(control);
+                (newParent?.Children ?? document.Controls).Add(control);
+            }
+
+            control.GridCell = candidate;
+            control.Geometry = null;
+            return true;
+        }
+
         var (surfaceWidth, surfaceHeight) = SurfaceOf(document, newParent, dock);
         var newX = Clamp((int)(formX - origin.X), pixel.Width, surfaceWidth);
         var newY = Clamp((int)(formY - origin.Y), pixel.Height, surfaceHeight);

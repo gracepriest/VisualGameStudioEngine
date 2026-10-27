@@ -280,6 +280,7 @@ Implemented in this slice:
 - drop into a cell on Canvas and page-Grid layouts, including occupied-cell refusal;
 - dragging a child between cells;
 - collision/range validation (BL8043) through the reader and both build routes;
+- dragging an outside control into a cell (it becomes a cell child);
 - web-only retarget removal with a named loss.
 
 Deliberately not in this slice:
@@ -287,5 +288,4 @@ Deliberately not in this slice:
 - column/row header chrome and drag-resize (phase 2);
 - reordering tracks from the property editor (the text field is the escape hatch);
 - nested `Panel` containers inside a GridPanel (a nested `GridPanel` is allowed);
-- dropping a control from inside another container directly into a GridPanel;
 - Bootstrap or any theme.

@@ -23,6 +23,7 @@ public class FormGridPanelCanvasTests
         public required FormControl Panel { get; init; }
         public required FormControl Button { get; init; }
         public required FormControl Text { get; init; }
+        public required FormControl Outside { get; init; }
     }
 
     private static Rig Open()
@@ -46,12 +47,23 @@ public class FormGridPanelCanvasTests
         panel.Children.Add(text);
         doc.Controls.Add(panel);
 
+        var outside = new FormControl
+        {
+            Kind = "Button", Id = "outside", TabIndex = 3,
+            Geometry = new PixelGeometry { X = 20, Y = 250, Width = 80, Height = 24 }
+        };
+        doc.Controls.Add(outside);
+
         var selection = new FormSelection();
         var canvas = new FormCanvasControl { Document = doc, Selection = selection };
         var window = new Window { Width = 600, Height = 500, Content = canvas };
         window.Show();
         canvas.Focus();
-        return new Rig { Canvas = canvas, Window = window, Doc = doc, Selection = selection, Panel = panel, Button = button, Text = text };
+        return new Rig
+        {
+            Canvas = canvas, Window = window, Doc = doc, Selection = selection,
+            Panel = panel, Button = button, Text = text, Outside = outside
+        };
     }
 
     private static Point Centre(Rig rig, FormControl control)
@@ -94,6 +106,28 @@ public class FormGridPanelCanvasTests
 
         Assert.That(rig.Selection.Primary, Is.SameAs(rig.Panel),
             $"selected: {rig.Selection.Primary?.Id ?? "(none)"}; panel cell: {panelBounds}; clicked: {emptyCell}");
+    }
+
+    [AvaloniaTest]
+    public void DraggingAnOutsideControlIntoACell_MakesItAGridChild()
+    {
+        var rig = Open();
+        var panelBounds = FormCanvasTransform.Layout(rig.Doc)
+            .Single(e => ReferenceEquals(e.Control, rig.Panel)).Bounds;
+        var emptyCell = FormCanvasControl.Fit(rig.Doc, rig.Canvas.Bounds.Size)
+            .ToCanvas(new Rect(panelBounds.X + 40, panelBounds.Y + 170, 20, 20)).Center;
+        var from = Centre(rig, rig.Outside);
+
+        rig.Window.MouseDown(from, MouseButton.Left);
+        rig.Window.MouseMove(emptyCell, RawInputModifiers.LeftMouseButton);
+        rig.Window.MouseUp(emptyCell, MouseButton.Left);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rig.Panel.Children.Select(c => c.Id), Does.Contain("outside"));
+            Assert.That(rig.Outside.Geometry, Is.Null);
+            Assert.That((rig.Outside.GridCell!.Col, rig.Outside.GridCell.Row), Is.EqualTo((0, 1)));
+        });
     }
 
     [AvaloniaTest]
