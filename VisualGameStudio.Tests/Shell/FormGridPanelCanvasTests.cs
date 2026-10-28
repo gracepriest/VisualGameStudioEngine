@@ -109,6 +109,40 @@ public class FormGridPanelCanvasTests
     }
 
     [AvaloniaTest]
+    public void ColumnHeader_SelectsATrack_AndItsPlusAndMinusInsertAndDelete()
+    {
+        var rig = Open();
+        rig.Selection.Set(rig.Panel);
+        var panelBounds = FormCanvasTransform.Layout(rig.Doc)
+            .Single(e => ReferenceEquals(e.Control, rig.Panel)).Bounds;
+        var fit = FormCanvasControl.Fit(rig.Doc, rig.Canvas.Bounds.Size);
+        var cols = FormGridLayout.TrackRects(
+            FormGridPanel.LayoutOf(rig.Panel), panelBounds.Size, columns: true);
+        var label = fit.ToCanvas(new Rect(
+            panelBounds.X + cols[0].X, panelBounds.Y, cols[0].Width, panelBounds.Height)).TopLeft;
+        var labelCentre = new Point(label.X + 2 + 7, label.Y + 2 + 5);
+
+        Click(rig, labelCentre);
+        Assert.That(rig.Panel.Properties.GetValueOrDefault("Columns"), Is.EqualTo("1fr,1fr").Or.Null);
+
+        // + is immediately right of the label badge; − is immediately right of +.
+        Click(rig, new Point(labelCentre.X + 14, labelCentre.Y));
+        var afterInsert = FormTracks.Split(rig.Panel.Properties["Columns"]);
+        Assert.That(afterInsert, Has.Count.EqualTo(3));
+
+        // Select the new (empty) second track, then delete it. Track 0 holds the Button, so removing
+        // it is correctly refused.
+        var cols3 = FormGridLayout.TrackRects(
+            FormGridPanel.LayoutOf(rig.Panel), panelBounds.Size, columns: true);
+        var secondLabel = fit.ToCanvas(new Rect(
+            panelBounds.X + cols3[1].X, panelBounds.Y, cols3[1].Width, panelBounds.Height)).TopLeft;
+        var secondCentre = new Point(secondLabel.X + 9, secondLabel.Y + 7);
+        Click(rig, secondCentre);
+        Click(rig, new Point(secondCentre.X + 30, secondCentre.Y));
+        Assert.That(FormTracks.Split(rig.Panel.Properties["Columns"]), Has.Count.EqualTo(2));
+    }
+
+    [AvaloniaTest]
     public void DraggingAColumnBoundary_ResizesTheTrack()
     {
         var rig = Open();

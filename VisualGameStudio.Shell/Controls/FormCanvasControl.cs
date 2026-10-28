@@ -921,6 +921,12 @@ public class FormCanvasControl : Control
 
         // GridPanel track chrome is an overlay ON TOP of the cells. Test it before the Type Here
         // slot/control hit test so a boundary drag does not select the control underneath it.
+        if (TryGridChromeAction(document, point))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (TryBeginGridTrackResize(document, point, e))
         {
             e.Handled = true;
@@ -1551,6 +1557,11 @@ public class FormCanvasControl : Control
     private bool _gridTrackColumns;
     private int _gridTrackIndex = -1;
 
+    /// <summary>The track whose header is selected, so its insert/delete badges are showing.</summary>
+    private FormControl? _gridSelectedTrackPanel;
+    private bool _gridSelectedTrackColumns;
+    private int _gridSelectedTrackIndex = -1;
+
     /// <summary>
     /// Which edge of the FORM is being dragged, or None. Separate from <see cref="_dragHandle"/>,
     /// which is a control's.
@@ -2056,23 +2067,43 @@ public class FormCanvasControl : Control
         var panelCanvas = _transform.ToCanvas(chrome.Bounds);
         context.DrawRectangle(null, GridChromePen, panelCanvas);
 
+        var selectedColumn = _gridSelectedTrackPanel == chrome.Panel && _gridSelectedTrackColumns;
+        var selectedRow = _gridSelectedTrackPanel == chrome.Panel && !_gridSelectedTrackColumns;
+
+        if (selectedColumn && _gridSelectedTrackIndex >= 0 && _gridSelectedTrackIndex < chrome.Cols.Count)
+        {
+            var track = chrome.Cols[_gridSelectedTrackIndex];
+            context.DrawRectangle(MarqueeBrush, GridChromePen, _transform.ToCanvas(new Rect(
+                chrome.Bounds.X + track.X, chrome.Bounds.Y, track.Width, chrome.Bounds.Height)));
+        }
+
+        if (selectedRow && _gridSelectedTrackIndex >= 0 && _gridSelectedTrackIndex < chrome.Rows.Count)
+        {
+            var track = chrome.Rows[_gridSelectedTrackIndex];
+            context.DrawRectangle(MarqueeBrush, GridChromePen, _transform.ToCanvas(new Rect(
+                chrome.Bounds.X, chrome.Bounds.Y + track.Y, chrome.Bounds.Width, track.Height)));
+        }
+
         for (var i = 0; i < chrome.Cols.Count; i++)
         {
-            var cell = _transform.ToCanvas(new Rect(
-                chrome.Bounds.X + chrome.Cols[i].X, chrome.Bounds.Y, chrome.Cols[i].Width, chrome.Bounds.Height));
-            var badge = new Rect(cell.X + 2, cell.Y + 2, 14, 11);
-            context.DrawRectangle(GridChromeBrush, GridChromePen, badge);
-            context.DrawText(Text(ColumnLabel(i), GridChromeInk, 8), new Point(badge.X + 3, badge.Y - 1));
+            var (label, plus, minus) = ChromeHeaderRects(chrome.Bounds, chrome.Cols[i], columns: true);
+            DrawChromeBadge(context, label, ColumnLabel(i));
+            if (selectedColumn && i == _gridSelectedTrackIndex)
+            {
+                DrawChromeBadge(context, plus, "+");
+                DrawChromeBadge(context, minus, "\u2212");
+            }
         }
 
         for (var i = 0; i < chrome.Rows.Count; i++)
         {
-            var cell = _transform.ToCanvas(new Rect(
-                chrome.Bounds.X, chrome.Bounds.Y + chrome.Rows[i].Y, chrome.Bounds.Width, chrome.Rows[i].Height));
-            var badge = new Rect(cell.X + 2, cell.Y + 15, 14, 11);
-            context.DrawRectangle(GridChromeBrush, GridChromePen, badge);
-            context.DrawText(Text((i + 1).ToString(CultureInfo.InvariantCulture), GridChromeInk, 8),
-                new Point(badge.X + 3, badge.Y - 1));
+            var (label, plus, minus) = ChromeHeaderRects(chrome.Bounds, chrome.Rows[i], columns: false);
+            DrawChromeBadge(context, label, (i + 1).ToString(CultureInfo.InvariantCulture));
+            if (selectedRow && i == _gridSelectedTrackIndex)
+            {
+                DrawChromeBadge(context, plus, "+");
+                DrawChromeBadge(context, minus, "\u2212");
+            }
         }
 
         // Internal boundaries only: the outer edge moves the panel, not a track.
@@ -2095,6 +2126,119 @@ public class FormCanvasControl : Control
             context.DrawRectangle(GridChromeBrush, GridChromePen,
                 new Rect(left.X + 14, left.Y - 2, 16, 4));
         }
+    }
+
+    private (Rect Label, Rect Plus, Rect Minus) ChromeHeaderRects(Rect panelBounds, Rect track, bool columns)
+    {
+        var cell = _transform.ToCanvas(columns
+            ? new Rect(panelBounds.X + track.X, panelBounds.Y, track.Width, panelBounds.Height)
+            : new Rect(panelBounds.X, panelBounds.Y + track.Y, panelBounds.Width, track.Height));
+        var label = columns
+            ? new Rect(cell.X + 2, cell.Y + 2, 14, 11)
+            : new Rect(cell.X + 2, cell.Y + 15, 14, 11);
+        return (label, new Rect(label.Right + 2, label.Y, 14, 11),
+            new Rect(label.Right + 18, label.Y, 14, 11));
+    }
+
+    private static void DrawChromeBadge(DrawingContext context, Rect rect, string text)
+    {
+        context.DrawRectangle(GridChromeBrush, GridChromePen, rect);
+        context.DrawText(Text(text, GridChromeInk, 8), new Point(rect.X + 3, rect.Y - 1));
+    }
+
+    private bool TryGridChromeAction(FormDocument document, Point canvasPoint)
+    {
+        if (GridChromeData(document) is not { } chrome)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < chrome.Cols.Count; i++)
+        {
+            var (label, plus, minus) = ChromeHeaderRects(chrome.Bounds, chrome.Cols[i], columns: true);
+            if (label.Contains(canvasPoint))
+            {
+                _gridSelectedTrackPanel = chrome.Panel;
+                _gridSelectedTrackColumns = true;
+                _gridSelectedTrackIndex = i;
+                InvalidateVisual();
+                return true;
+            }
+
+            var isSelected = _gridSelectedTrackPanel == chrome.Panel &&
+                             _gridSelectedTrackColumns &&
+                             _gridSelectedTrackIndex == i;
+            if (isSelected && plus.Contains(canvasPoint))
+            {
+                if (FormGridPanel.InsertTrack(chrome.Panel, columns: true, i + 1))
+                {
+                    CommitChromeEdit();
+                }
+
+                return true;
+            }
+
+            if (isSelected && minus.Contains(canvasPoint))
+            {
+                if (FormGridPanel.RemoveTrack(chrome.Panel, columns: true, i, out _))
+                {
+                    _gridSelectedTrackIndex = -1;
+                    CommitChromeEdit();
+                }
+
+                return true;
+            }
+        }
+
+        for (var i = 0; i < chrome.Rows.Count; i++)
+        {
+            var (label, plus, minus) = ChromeHeaderRects(chrome.Bounds, chrome.Rows[i], columns: false);
+            if (label.Contains(canvasPoint))
+            {
+                _gridSelectedTrackPanel = chrome.Panel;
+                _gridSelectedTrackColumns = false;
+                _gridSelectedTrackIndex = i;
+                InvalidateVisual();
+                return true;
+            }
+
+            var isSelected = _gridSelectedTrackPanel == chrome.Panel &&
+                             !_gridSelectedTrackColumns &&
+                             _gridSelectedTrackIndex == i;
+            if (isSelected && plus.Contains(canvasPoint))
+            {
+                if (FormGridPanel.InsertTrack(chrome.Panel, columns: false, i + 1))
+                {
+                    CommitChromeEdit();
+                }
+
+                return true;
+            }
+
+            if (isSelected && minus.Contains(canvasPoint))
+            {
+                if (FormGridPanel.RemoveTrack(chrome.Panel, columns: false, i, out _))
+                {
+                    _gridSelectedTrackIndex = -1;
+                    CommitChromeEdit();
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CommitChromeEdit()
+    {
+        var command = CommitGeometryCommand;
+        if (command?.CanExecute(null) == true)
+        {
+            command.Execute(null);
+        }
+
+        InvalidateVisual();
     }
 
     private static string ColumnLabel(int index)
