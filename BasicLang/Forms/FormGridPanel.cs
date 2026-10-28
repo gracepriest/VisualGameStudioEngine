@@ -114,6 +114,137 @@ public static class FormGridPanel
         a.Row < b.Row + b.RowSpan &&
         b.Row < a.Row + a.RowSpan;
 
+    /// <summary>
+    /// Resizes one explicit track to <paramref name="pixels"/> (written as a <c>px</c> track). Other
+    /// tracks keep their own text. Returns false for a missing track or a non-positive size.
+    /// </summary>
+    public static bool ResizeTrack(FormControl panel, bool columns, int index, int pixels)
+    {
+        if (!Is(panel) || pixels < 1)
+        {
+            return false;
+        }
+
+        var name = columns ? "Columns" : "Rows";
+        var tracks = FormTracks.Split(PropertyOr(panel, panel.Definition, name)).ToList();
+        if (index < 0 || index >= tracks.Count)
+        {
+            return false;
+        }
+
+        var next = $"{pixels}px";
+        if (string.Equals(tracks[index], next, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        tracks[index] = next;
+        panel.Properties[name] = string.Join(",", tracks);
+        return true;
+    }
+
+    /// <summary>
+    /// Inserts a default track at <paramref name="index"/> and shifts the cells at or after it. Returns
+    /// false when the panel is not a GridPanel.
+    /// </summary>
+    public static bool InsertTrack(FormControl panel, bool columns, int index)
+    {
+        if (!Is(panel))
+        {
+            return false;
+        }
+
+        var name = columns ? "Columns" : "Rows";
+        var tracks = FormTracks.Split(PropertyOr(panel, panel.Definition, name)).ToList();
+        index = Math.Clamp(index, 0, tracks.Count);
+        tracks.Insert(index, columns ? "1fr" : "auto");
+
+        foreach (var child in panel.Children)
+        {
+            if (child.GridCell is not { } cell)
+            {
+                continue;
+            }
+
+            if (columns && cell.Col >= index)
+            {
+                cell.Col++;
+            }
+            else if (!columns && cell.Row >= index)
+            {
+                cell.Row++;
+            }
+        }
+
+        panel.Properties[name] = string.Join(",", tracks);
+        return true;
+    }
+
+    /// <summary>
+    /// Removes one track, shifts later cells down, and refuses when a child occupies or spans the
+    /// removed track. Returns false with <paramref name="refusal"/> when it cannot be removed.
+    /// </summary>
+    public static bool RemoveTrack(FormControl panel, bool columns, int index, out string? refusal)
+    {
+        refusal = null;
+        if (!Is(panel))
+        {
+            refusal = "This control is not a GridPanel.";
+            return false;
+        }
+
+        var name = columns ? "Columns" : "Rows";
+        var tracks = FormTracks.Split(PropertyOr(panel, panel.Definition, name)).ToList();
+        if (index < 0 || index >= tracks.Count)
+        {
+            refusal = $"There is no {(columns ? "column" : "row")} {index + 1}.";
+            return false;
+        }
+
+        if (tracks.Count <= 1)
+        {
+            refusal = "A grid must keep at least one track.";
+            return false;
+        }
+
+        foreach (var child in panel.Children)
+        {
+            if (child.GridCell is not { } cell)
+            {
+                continue;
+            }
+
+            var start = columns ? cell.Col : cell.Row;
+            var span = columns ? cell.ColSpan : cell.RowSpan;
+            if (index >= start && index < start + span)
+            {
+                refusal = $"'{child.Id}' occupies {Describe(cell)}; remove or move it first.";
+                return false;
+            }
+        }
+
+        tracks.RemoveAt(index);
+        foreach (var child in panel.Children)
+        {
+            if (child.GridCell is not { } cell)
+            {
+                continue;
+            }
+
+            if (columns && cell.Col > index)
+            {
+                cell.Col--;
+            }
+            else if (!columns && cell.Row > index)
+            {
+                cell.Row--;
+            }
+        }
+
+        panel.Properties[name] = string.Join(",", tracks);
+        return true;
+    }
+
     private static string Describe(GridCell cell) =>
         $"Col={cell.Col}, Row={cell.Row}, ColSpan={cell.ColSpan}, RowSpan={cell.RowSpan}";
 

@@ -157,6 +157,21 @@ public class FormGridLayoutTests
     }
 
     [Test]
+    public void TrackRects_ReturnsEachTrackInOrder()
+    {
+        var layout = Grid("1fr,2fr", "1fr,1fr", gap: "0px");
+
+        var cols = FormGridLayout.TrackRects(layout, new Size(300, 100), columns: true);
+        var rows = FormGridLayout.TrackRects(layout, new Size(300, 100), columns: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cols.Select(r => (r.X, r.Width)), Is.EqualTo(new[] { (0d, 100d), (100d, 200d) }));
+            Assert.That(rows.Select(r => (r.Y, r.Height)), Is.EqualTo(new[] { (0d, 50d), (50d, 50d) }));
+        });
+    }
+
+    [Test]
     public void RowsWorkTheSameWayAsColumns()
     {
         var layout = Grid("1fr", "1fr,1fr");

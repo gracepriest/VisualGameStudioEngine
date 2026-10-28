@@ -653,6 +653,20 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     [RelayCommand]
     private void AddGridTrack()
     {
+        if (_control is { } panel && FormGridPanel.Is(panel))
+        {
+            var columns = Name == "Columns";
+            var count = columns ? FormGridPanel.ColumnCount(panel) : FormGridPanel.RowCount(panel);
+            if (FormGridPanel.InsertTrack(panel, columns, count))
+            {
+                Refusal = null;
+                RaiseValueChanged();
+                _onChanged();
+            }
+
+            return;
+        }
+
         var tracks = FormTracks.Split(StringValue).ToList();
         tracks.Add(Name == "Rows" ? "auto" : "1fr");
         Commit(string.Join(",", tracks));
@@ -662,6 +676,24 @@ public partial class FormPropertyRow : ObservableObject, ITypedValueRow, IFormDi
     [RelayCommand]
     private void RemoveGridTrack()
     {
+        if (_control is { } panel && FormGridPanel.Is(panel))
+        {
+            var columns = Name == "Columns";
+            var count = columns ? FormGridPanel.ColumnCount(panel) : FormGridPanel.RowCount(panel);
+            if (FormGridPanel.RemoveTrack(panel, columns, count - 1, out var refusal))
+            {
+                Refusal = null;
+                RaiseValueChanged();
+                _onChanged();
+            }
+            else
+            {
+                Refusal = refusal;
+            }
+
+            return;
+        }
+
         var tracks = FormTracks.Split(StringValue).ToList();
         if (tracks.Count == 0)
         {

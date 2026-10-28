@@ -106,6 +106,21 @@ public static class FormGridLayout
         }
     }
 
+    /// <summary>The rectangle of each explicit track, in order: columns when <paramref name="columns"/> is true.</summary>
+    public static IReadOnlyList<Rect> TrackRects(FormLayout? layout, Size surface, bool columns)
+    {
+        var count = ParseTracks(columns ? layout?.Cols : layout?.Rows).Count;
+        var result = new List<Rect>(count);
+        for (var i = 0; i < count; i++)
+        {
+            result.Add(columns
+                ? CellRect(layout, surface, i, 0, 1, 1)
+                : CellRect(layout, surface, 0, i, 1, 1));
+        }
+
+        return result;
+    }
+
     // ==================================================================
     // Track sizing
     // ==================================================================

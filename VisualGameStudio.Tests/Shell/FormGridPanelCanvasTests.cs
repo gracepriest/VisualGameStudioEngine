@@ -109,6 +109,29 @@ public class FormGridPanelCanvasTests
     }
 
     [AvaloniaTest]
+    public void DraggingAColumnBoundary_ResizesTheTrack()
+    {
+        var rig = Open();
+        rig.Selection.Set(rig.Panel);
+
+        var panelBounds = FormCanvasTransform.Layout(rig.Doc)
+            .Single(e => ReferenceEquals(e.Control, rig.Panel)).Bounds;
+        var cols = FormGridLayout.TrackRects(
+            FormGridPanel.LayoutOf(rig.Panel), panelBounds.Size, columns: true);
+        var boundary = panelBounds.X + ((cols[0].Right + cols[1].X) / 2);
+        var from = FormCanvasControl.Fit(rig.Doc, rig.Canvas.Bounds.Size)
+            .ToCanvas(new Point(boundary, panelBounds.Y + 50));
+        var to = from + new Point(30, 0);
+
+        rig.Window.MouseDown(from, MouseButton.Left);
+        rig.Window.MouseMove(to, RawInputModifiers.LeftMouseButton);
+        rig.Window.MouseUp(to, MouseButton.Left);
+
+        Assert.That(rig.Panel.Properties["Columns"], Does.Contain("px").And.Contain(",1fr"));
+        Assert.That(FormTracks.Split(rig.Panel.Properties["Columns"])[0], Is.Not.EqualTo("1fr"));
+    }
+
+    [AvaloniaTest]
     public void DraggingAnOutsideControlIntoACell_MakesItAGridChild()
     {
         var rig = Open();

@@ -902,6 +902,7 @@ public class FormCanvasControl : Control
         // route rather than the hidden editor's.
         Focus();
         _dragGridPanel = null;
+        _gridTrackPanel = null;
 
         // ⛔ Every press CONSUMES the rename arming — a right press, a Type Here press, a handle or
         // grip press, a background press. Only the ordinary item press below re-arms it, so "the
@@ -914,6 +915,14 @@ public class FormCanvasControl : Control
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             SelectForGesture(_transform.HitTest(document, point, SelectedControl));
+            e.Handled = true;
+            return;
+        }
+
+        // GridPanel track chrome is an overlay ON TOP of the cells. Test it before the Type Here
+        // slot/control hit test so a boundary drag does not select the control underneath it.
+        if (TryBeginGridTrackResize(document, point, e))
+        {
             e.Handled = true;
             return;
         }
@@ -1111,6 +1120,21 @@ public class FormCanvasControl : Control
             return;
         }
 
+        // A GridPanel track drag owns the pointer before the marquee, form-grip and control paths.
+        if (_gridTrackPanel != null)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                _gridTrackPanel = null;
+                _dragOrigin = null;
+                _dragChanged = false;
+                return;
+            }
+
+            UpdateGridTrackDrag(document, e);
+            return;
+        }
+
         // ⚠ BEFORE every other gesture. A rubber band has no selected control and no drag origin,
         // so any guard that checks those first would drop it on its first move.
         if (_marqueeOrigin != null)
@@ -1300,6 +1324,26 @@ public class FormCanvasControl : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+
+        if (_gridTrackPanel != null)
+        {
+            _gridTrackPanel = null;
+            _dragOrigin = null;
+            e.Pointer.Capture(null);
+
+            if (_dragChanged)
+            {
+                _dragChanged = false;
+                var trackCommit = CommitGeometryCommand;
+                if (trackCommit?.CanExecute(null) == true)
+                {
+                    trackCommit.Execute(null);
+                }
+            }
+
+            e.Handled = true;
+            return;
+        }
 
         // A rubber band selects on release rather than live, so a band dragged across the form does
         // not thrash the property grid through every control it passes over.
@@ -1501,6 +1545,11 @@ public class FormCanvasControl : Control
 
     /// <summary>The GridPanel whose cell is being dragged, or null for an ordinary pixel/grid drag.</summary>
     private FormControl? _dragGridPanel;
+
+    /// <summary>The GridPanel whose track boundary is being resized, and which axis/index.</summary>
+    private FormControl? _gridTrackPanel;
+    private bool _gridTrackColumns;
+    private int _gridTrackIndex = -1;
 
     /// <summary>
     /// Which edge of the FORM is being dragged, or None. Separate from <see cref="_dragHandle"/>,
@@ -1742,6 +1791,11 @@ public class FormCanvasControl : Control
             context.DrawRectangle(MarqueeBrush, MarqueePen, band);
         }
 
+        // The GridPanel's track labels and resize grips, over its cells. They exist only for the
+        // selected panel (or the panel that owns the selected child) — the rest of the canvas is
+        // ordinary control interaction.
+        DrawGridChrome(context, document);
+
         // The form's own grips — on every document that has a design size (a .blform or a Canvas page) — last of
         // all. Unlike the title-bar buttons these are REAL: they resize the form, so drawing them is a promise the
         // canvas keeps.
@@ -1950,6 +2004,191 @@ public class FormCanvasControl : Control
     /// its CLIENT area — <c>Width</c>/<c>Height</c> are the client size, exactly as WinForms'
     /// <c>ClientSize</c> is. Drawing it inside would make every control's Y look 18px wrong.</para>
     /// </summary>
+    /// <summary>
+    /// The GridPanel whose chrome should be active: the panel itself, or the panel that owns the
+    /// selected child. Null for every other selection.
+    /// </summary>
+    private static FormControl? GridPanelFor(FormDocument document, FormControl? selected)
+    {
+        if (selected == null)
+        {
+            return null;
+        }
+
+        if (FormGridPanel.Is(selected))
+        {
+            return selected;
+        }
+
+        var parent = document.ParentOf(selected);
+        return FormGridPanel.Is(parent) ? parent : null;
+    }
+
+    private static Rect? GridPanelBounds(FormDocument document, FormControl panel)
+    {
+        var entry = FormCanvasTransform.Layout(document)
+            .FirstOrDefault(e => ReferenceEquals(e.Control, panel));
+        return entry.Control == null ? null : entry.Bounds;
+    }
+
+    private (FormControl Panel, Rect Bounds, IReadOnlyList<Rect> Cols, IReadOnlyList<Rect> Rows)? GridChromeData(
+        FormDocument document)
+    {
+        var panel = GridPanelFor(document, SelectedControl);
+        if (panel == null || GridPanelBounds(document, panel) is not { } bounds)
+        {
+            return null;
+        }
+
+        var layout = FormGridPanel.LayoutOf(panel);
+        return (panel, bounds,
+            FormGridLayout.TrackRects(layout, bounds.Size, columns: true),
+            FormGridLayout.TrackRects(layout, bounds.Size, columns: false));
+    }
+
+    private void DrawGridChrome(DrawingContext context, FormDocument document)
+    {
+        if (GridChromeData(document) is not { } chrome)
+        {
+            return;
+        }
+
+        var panelCanvas = _transform.ToCanvas(chrome.Bounds);
+        context.DrawRectangle(null, GridChromePen, panelCanvas);
+
+        for (var i = 0; i < chrome.Cols.Count; i++)
+        {
+            var cell = _transform.ToCanvas(new Rect(
+                chrome.Bounds.X + chrome.Cols[i].X, chrome.Bounds.Y, chrome.Cols[i].Width, chrome.Bounds.Height));
+            var badge = new Rect(cell.X + 2, cell.Y + 2, 14, 11);
+            context.DrawRectangle(GridChromeBrush, GridChromePen, badge);
+            context.DrawText(Text(ColumnLabel(i), GridChromeInk, 8), new Point(badge.X + 3, badge.Y - 1));
+        }
+
+        for (var i = 0; i < chrome.Rows.Count; i++)
+        {
+            var cell = _transform.ToCanvas(new Rect(
+                chrome.Bounds.X, chrome.Bounds.Y + chrome.Rows[i].Y, chrome.Bounds.Width, chrome.Rows[i].Height));
+            var badge = new Rect(cell.X + 2, cell.Y + 15, 14, 11);
+            context.DrawRectangle(GridChromeBrush, GridChromePen, badge);
+            context.DrawText(Text((i + 1).ToString(CultureInfo.InvariantCulture), GridChromeInk, 8),
+                new Point(badge.X + 3, badge.Y - 1));
+        }
+
+        // Internal boundaries only: the outer edge moves the panel, not a track.
+        for (var i = 0; i + 1 < chrome.Cols.Count; i++)
+        {
+            var formX = chrome.Bounds.X + ((chrome.Cols[i].Right + chrome.Cols[i + 1].X) / 2);
+            var top = _transform.ToCanvas(new Point(formX, chrome.Bounds.Y));
+            var bottom = _transform.ToCanvas(new Point(formX, chrome.Bounds.Bottom));
+            context.DrawLine(GridChromePen, top, bottom);
+            context.DrawRectangle(GridChromeBrush, GridChromePen,
+                new Rect(top.X - 2, top.Y + 14, 4, 16));
+        }
+
+        for (var i = 0; i + 1 < chrome.Rows.Count; i++)
+        {
+            var formY = chrome.Bounds.Y + ((chrome.Rows[i].Bottom + chrome.Rows[i + 1].Y) / 2);
+            var left = _transform.ToCanvas(new Point(chrome.Bounds.X, formY));
+            var right = _transform.ToCanvas(new Point(chrome.Bounds.Right, formY));
+            context.DrawLine(GridChromePen, left, right);
+            context.DrawRectangle(GridChromeBrush, GridChromePen,
+                new Rect(left.X + 14, left.Y - 2, 16, 4));
+        }
+    }
+
+    private static string ColumnLabel(int index)
+    {
+        var text = "";
+        var value = index;
+        do
+        {
+            text = (char)('A' + (value % 26)) + text;
+            value = (value / 26) - 1;
+        }
+        while (value >= 0);
+        return text;
+    }
+
+    private bool TryBeginGridTrackResize(FormDocument document, Point canvasPoint, PointerPressedEventArgs e)
+    {
+        if (GridChromeData(document) is not { } chrome)
+        {
+            return false;
+        }
+
+        var formPoint = _transform.ToForm(canvasPoint);
+        var reach = FormCanvasTransform.HandleReach / Math.Max(0.01, _transform.Zoom);
+
+        for (var i = 0; i + 1 < chrome.Cols.Count; i++)
+        {
+            var boundary = chrome.Bounds.X + ((chrome.Cols[i].Right + chrome.Cols[i + 1].X) / 2);
+            if (Math.Abs(formPoint.X - boundary) <= reach &&
+                formPoint.Y >= chrome.Bounds.Y && formPoint.Y <= chrome.Bounds.Bottom)
+            {
+                _gridTrackPanel = chrome.Panel;
+                _gridTrackColumns = true;
+                _gridTrackIndex = i;
+                _dragOrigin = canvasPoint;
+                _dragChanged = false;
+                e.Pointer.Capture(this);
+                return true;
+            }
+        }
+
+        for (var i = 0; i + 1 < chrome.Rows.Count; i++)
+        {
+            var boundary = chrome.Bounds.Y + ((chrome.Rows[i].Bottom + chrome.Rows[i + 1].Y) / 2);
+            if (Math.Abs(formPoint.Y - boundary) <= reach &&
+                formPoint.X >= chrome.Bounds.X && formPoint.X <= chrome.Bounds.Right)
+            {
+                _gridTrackPanel = chrome.Panel;
+                _gridTrackColumns = false;
+                _gridTrackIndex = i;
+                _dragOrigin = canvasPoint;
+                _dragChanged = false;
+                e.Pointer.Capture(this);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool UpdateGridTrackDrag(FormDocument document, PointerEventArgs e)
+    {
+        if (_gridTrackPanel is not { } panel || _gridTrackIndex < 0 ||
+            GridChromeData(document) is not { } chrome)
+        {
+            return false;
+        }
+
+        var formPoint = _transform.ToForm(e.GetPosition(this));
+        var tracks = _gridTrackColumns ? chrome.Cols : chrome.Rows;
+        if (_gridTrackIndex >= tracks.Count)
+        {
+            return false;
+        }
+
+        var start = _gridTrackColumns
+            ? chrome.Bounds.X + tracks[_gridTrackIndex].X
+            : chrome.Bounds.Y + tracks[_gridTrackIndex].Y;
+        var size = (int)Math.Round(_gridTrackColumns ? formPoint.X - start : formPoint.Y - start);
+        if (size < 8)
+        {
+            size = 8;
+        }
+
+        if (FormGridPanel.ResizeTrack(panel, _gridTrackColumns, _gridTrackIndex, size))
+        {
+            _dragChanged = true;
+            InvalidateVisual();
+        }
+
+        e.Handled = true;
+        return true;
+    }
+
     private void DrawSurface(DrawingContext context, FormDocument document)
     {
         var size = FormCanvasTransform.SurfaceSize(document);
@@ -3353,6 +3592,11 @@ public class FormCanvasControl : Control
 
     /// <summary>The primary's grab handles: white fill, black border (VS), distinct from the dashed secondary outline.</summary>
     private static readonly IBrush PrimaryHandleBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+
+    /// <summary>A GridPanel's track labels and resize grips.</summary>
+    private static readonly IBrush GridChromeBrush = new SolidColorBrush(Color.FromArgb(0xE8, 0xFF, 0xFF, 0xFF));
+    private static readonly IPen GridChromePen = new Pen(new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)));
+    private static readonly IBrush GridChromeInk = new SolidColorBrush(Color.FromRgb(0x30, 0x30, 0x30));
 
     /// <summary>
     /// The outline on a secondary member of a multi-selection: the primary's navy, dashed so the two

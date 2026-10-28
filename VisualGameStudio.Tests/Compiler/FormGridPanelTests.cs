@@ -309,6 +309,27 @@ public class FormGridPanelTests
     }
 
     [Test]
+    public void InsertingAndRemovingATrack_ShiftsCells_AndRefusesAnOccupiedTrack()
+    {
+        var form = CanvasForm();
+        var panel = form.Controls.Single();
+
+        Assert.That(FormGridPanel.InsertTrack(panel, columns: true, index: 0), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormTracks.Split(panel.Properties["Columns"]), Has.Count.EqualTo(3));
+            Assert.That(panel.Children.Single(c => c.Id == "btn").GridCell!.Col, Is.EqualTo(1));
+            Assert.That(panel.Children.Single(c => c.Id == "txt").GridCell!.Col, Is.EqualTo(2));
+        });
+
+        Assert.That(FormGridPanel.RemoveTrack(panel, columns: true, index: 0, out _), Is.True);
+        Assert.That(panel.Children.Single(c => c.Id == "btn").GridCell!.Col, Is.EqualTo(0));
+
+        Assert.That(FormGridPanel.RemoveTrack(panel, columns: true, index: 1, out var refusal), Is.False);
+        Assert.That(refusal, Does.Contain("txt"));
+    }
+
+    [Test]
     public void Retarget_ToWinForms_RemovesTheWholeGridPanel_AndNamesIt()
     {
         var result = FormRetarget.Convert(GridPage(CanvasForm()), FormTarget.WinForms);
