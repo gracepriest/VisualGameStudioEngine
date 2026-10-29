@@ -1,0 +1,15 @@
+<WebForm Name="GridPanelDemo" Version="1" Width="800" Height="450" Text="GridPanel Demo">
+  <Layout Kind="Canvas" MobileBreakpoint="600" />
+  <Controls>
+    <GridPanel Id="grid1" X="40" Y="40" Width="520" Height="260" TabIndex="0"
+               Columns="220px,1fr" Rows="auto,auto,auto" Gap="12px">
+      <Label Id="lblTitle" Col="0" Row="0" ColSpan="2" TabIndex="1" Text="GridPanel demo" />
+      <TextBox Id="txtName" Col="0" Row="1" TabIndex="2" Text="Type here" />
+      <Button Id="btnHello" Col="1" Row="1" TabIndex="3" Text="Say hello" />
+      <Label Id="lblStatus" Col="0" Row="2" ColSpan="2" TabIndex="4"
+             Text="Drag a column boundary, or select a header to add, remove or reorder tracks." />
+    </GridPanel>
+  </Controls>
+  <Components />
+  <Resources />
+</WebForm>

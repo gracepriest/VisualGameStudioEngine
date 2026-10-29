@@ -1,0 +1,13 @@
+<BasicLangProject Version="1.0">
+  <PropertyGroup>
+    <ProjectName>GridPanelDemo</ProjectName>
+    <OutputType>Exe</OutputType>
+    <TargetBackend>JavaScript</TargetBackend>
+    <StartupForm>GridPanelDemo</StartupForm>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Main.bas" />
+    <Compile Include="GridPanelDemo.bas" />
+    <Compile Include="GridPanelDemo.blwebform" />
+  </ItemGroup>
+</BasicLangProject>

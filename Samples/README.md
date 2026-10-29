@@ -26,6 +26,14 @@ Simple platform game with collectibles.
 3. Navigate to the sample folder
 4. Press F5 to run
 
+## Web forms
+
+### GridPanelDemo
+
+A `GridPanel` web form showing fixed/flexible columns, rows, spans, and the designer's
+track headers. Open `GridPanelDemo/GridPanelDemo.blproj` and press F5. See
+`GridPanelDemo/README.md` for the header and resize gestures.
+
 ## Learning Path
 
 1. Start with **Pong** - basic game loop and input handling
