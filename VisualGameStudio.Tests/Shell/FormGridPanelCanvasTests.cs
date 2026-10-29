@@ -143,6 +143,40 @@ public class FormGridPanelCanvasTests
     }
 
     [AvaloniaTest]
+    public void DraggingAColumnHeader_ReordersTheTrackAndItsCells()
+    {
+        var rig = Open();
+        rig.Panel.Properties["Columns"] = "1fr,2fr";
+        rig.Selection.Set(rig.Panel);
+        rig.Canvas.InvalidateVisual();
+
+        var panelBounds = FormCanvasTransform.Layout(rig.Doc)
+            .Single(e => ReferenceEquals(e.Control, rig.Panel)).Bounds;
+        var fit = FormCanvasControl.Fit(rig.Doc, rig.Canvas.Bounds.Size);
+        var cols = FormGridLayout.TrackRects(
+            FormGridPanel.LayoutOf(rig.Panel), panelBounds.Size, columns: true);
+        Point Centre(int i)
+        {
+            var label = fit.ToCanvas(new Rect(
+                panelBounds.X + cols[i].X, panelBounds.Y, cols[i].Width, panelBounds.Height)).TopLeft;
+            return new Point(label.X + 9, label.Y + 7);
+        }
+
+        var from = Centre(0);
+        var to = fit.ToCanvas(new Rect(
+            panelBounds.X + cols[1].X, panelBounds.Y, cols[1].Width, panelBounds.Height)).Center;
+        rig.Window.MouseDown(from, MouseButton.Left);
+        rig.Window.MouseMove(to, RawInputModifiers.LeftMouseButton);
+        rig.Window.MouseUp(to, MouseButton.Left);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FormTracks.Split(rig.Panel.Properties["Columns"]), Is.EqualTo(new[] { "2fr", "1fr" }));
+            Assert.That((rig.Button.GridCell!.Col, rig.Text.GridCell!.Col), Is.EqualTo((1, 0)));
+        });
+    }
+
+    [AvaloniaTest]
     public void DraggingAColumnBoundary_ResizesTheTrack()
     {
         var rig = Open();

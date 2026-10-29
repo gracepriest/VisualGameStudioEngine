@@ -903,6 +903,7 @@ public class FormCanvasControl : Control
         Focus();
         _dragGridPanel = null;
         _gridTrackPanel = null;
+        _gridHeaderDragPanel = null;
 
         // ⛔ Every press CONSUMES the rename arming — a right press, a Type Here press, a handle or
         // grip press, a background press. Only the ordinary item press below re-arms it, so "the
@@ -921,7 +922,7 @@ public class FormCanvasControl : Control
 
         // GridPanel track chrome is an overlay ON TOP of the cells. Test it before the Type Here
         // slot/control hit test so a boundary drag does not select the control underneath it.
-        if (TryGridChromeAction(document, point))
+        if (TryGridChromeAction(document, point, e))
         {
             e.Handled = true;
             return;
@@ -1123,6 +1124,19 @@ public class FormCanvasControl : Control
         var document = Document;
         if (document == null)
         {
+            return;
+        }
+
+        // A GridPanel header drag owns the pointer before the marquee, form-grip and control paths.
+        if (_gridHeaderDragPanel != null)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            {
+                _gridHeaderDragPanel = null;
+                return;
+            }
+
+            UpdateGridHeaderDrag(document, e);
             return;
         }
 
@@ -1330,6 +1344,14 @@ public class FormCanvasControl : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+
+        if (_gridHeaderDragPanel != null)
+        {
+            e.Pointer.Capture(null);
+            FinishGridHeaderDrag();
+            e.Handled = true;
+            return;
+        }
 
         if (_gridTrackPanel != null)
         {
@@ -1561,6 +1583,12 @@ public class FormCanvasControl : Control
     private FormControl? _gridSelectedTrackPanel;
     private bool _gridSelectedTrackColumns;
     private int _gridSelectedTrackIndex = -1;
+
+    /// <summary>A header press that may become a track reorder.</summary>
+    private FormControl? _gridHeaderDragPanel;
+    private bool _gridHeaderDragColumns;
+    private int _gridHeaderDragFrom = -1;
+    private int _gridHeaderDragTo = -1;
 
     /// <summary>
     /// Which edge of the FORM is being dragged, or None. Separate from <see cref="_dragHandle"/>,
@@ -2084,6 +2112,18 @@ public class FormCanvasControl : Control
                 chrome.Bounds.X, chrome.Bounds.Y + track.Y, chrome.Bounds.Width, track.Height)));
         }
 
+        if (_gridHeaderDragPanel == chrome.Panel && _gridHeaderDragFrom != _gridHeaderDragTo)
+        {
+            var tracks = _gridHeaderDragColumns ? chrome.Cols : chrome.Rows;
+            if (_gridHeaderDragTo >= 0 && _gridHeaderDragTo < tracks.Count)
+            {
+                var track = tracks[_gridHeaderDragTo];
+                context.DrawRectangle(GridChromeBrush, GridChromePen, _transform.ToCanvas(_gridHeaderDragColumns
+                    ? new Rect(chrome.Bounds.X + track.X, chrome.Bounds.Y, track.Width, chrome.Bounds.Height)
+                    : new Rect(chrome.Bounds.X, chrome.Bounds.Y + track.Y, chrome.Bounds.Width, track.Height)));
+            }
+        }
+
         for (var i = 0; i < chrome.Cols.Count; i++)
         {
             var (label, plus, minus) = ChromeHeaderRects(chrome.Bounds, chrome.Cols[i], columns: true);
@@ -2146,7 +2186,7 @@ public class FormCanvasControl : Control
         context.DrawText(Text(text, GridChromeInk, 8), new Point(rect.X + 3, rect.Y - 1));
     }
 
-    private bool TryGridChromeAction(FormDocument document, Point canvasPoint)
+    private bool TryGridChromeAction(FormDocument document, Point canvasPoint, PointerPressedEventArgs e)
     {
         if (GridChromeData(document) is not { } chrome)
         {
@@ -2161,6 +2201,7 @@ public class FormCanvasControl : Control
                 _gridSelectedTrackPanel = chrome.Panel;
                 _gridSelectedTrackColumns = true;
                 _gridSelectedTrackIndex = i;
+                BeginGridHeaderDrag(chrome.Panel, columns: true, i, canvasPoint, e);
                 InvalidateVisual();
                 return true;
             }
@@ -2198,6 +2239,7 @@ public class FormCanvasControl : Control
                 _gridSelectedTrackPanel = chrome.Panel;
                 _gridSelectedTrackColumns = false;
                 _gridSelectedTrackIndex = i;
+                BeginGridHeaderDrag(chrome.Panel, columns: false, i, canvasPoint, e);
                 InvalidateVisual();
                 return true;
             }
@@ -2228,6 +2270,71 @@ public class FormCanvasControl : Control
         }
 
         return false;
+    }
+
+    private void BeginGridHeaderDrag(
+        FormControl panel, bool columns, int index, Point canvasPoint, PointerPressedEventArgs e)
+    {
+        _gridHeaderDragPanel = panel;
+        _gridHeaderDragColumns = columns;
+        _gridHeaderDragFrom = index;
+        _gridHeaderDragTo = index;
+        e.Pointer.Capture(this);
+    }
+
+    private bool UpdateGridHeaderDrag(FormDocument document, PointerEventArgs e)
+    {
+        if (_gridHeaderDragPanel is not { } panel || GridChromeData(document) is not { } chrome ||
+            !ReferenceEquals(chrome.Panel, panel))
+        {
+            return false;
+        }
+
+        var formPoint = _transform.ToForm(e.GetPosition(this));
+        var tracks = _gridHeaderDragColumns ? chrome.Cols : chrome.Rows;
+        var position = _gridHeaderDragColumns ? formPoint.X - chrome.Bounds.X : formPoint.Y - chrome.Bounds.Y;
+        var target = 0;
+        var best = double.MaxValue;
+        for (var i = 0; i < tracks.Count; i++)
+        {
+            var centre = _gridHeaderDragColumns
+                ? tracks[i].X + (tracks[i].Width / 2)
+                : tracks[i].Y + (tracks[i].Height / 2);
+            var distance = Math.Abs(position - centre);
+            if (distance < best)
+            {
+                best = distance;
+                target = i;
+            }
+        }
+
+        if (target != _gridHeaderDragTo)
+        {
+            _gridHeaderDragTo = target;
+            InvalidateVisual();
+        }
+
+        e.Handled = true;
+        return true;
+    }
+
+    private void FinishGridHeaderDrag()
+    {
+        var panel = _gridHeaderDragPanel;
+        var columns = _gridHeaderDragColumns;
+        var from = _gridHeaderDragFrom;
+        var to = _gridHeaderDragTo;
+        _gridHeaderDragPanel = null;
+        _gridHeaderDragFrom = -1;
+        _gridHeaderDragTo = -1;
+
+        if (panel != null && from >= 0 && to >= 0 && from != to &&
+            FormGridPanel.MoveTrack(panel, columns, from, to))
+        {
+            _gridSelectedTrackColumns = columns;
+            _gridSelectedTrackIndex = to;
+            CommitChromeEdit();
+        }
     }
 
     private void CommitChromeEdit()

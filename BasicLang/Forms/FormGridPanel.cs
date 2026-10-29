@@ -245,6 +245,91 @@ public static class FormGridPanel
         return true;
     }
 
+    /// <summary>
+    /// Moves one track to a new index, shifting the cells that sat between them. Refuses when the
+    /// resulting cells overlap or leave the grid; the model is restored in that case.
+    /// </summary>
+    public static bool MoveTrack(FormControl panel, bool columns, int from, int to)
+    {
+        if (!Is(panel) || from == to)
+        {
+            return false;
+        }
+
+        var name = columns ? "Columns" : "Rows";
+        var tracks = FormTracks.Split(PropertyOr(panel, panel.Definition, name)).ToList();
+        if (from < 0 || from >= tracks.Count || to < 0 || to >= tracks.Count)
+        {
+            return false;
+        }
+
+        var hadValue = panel.Properties.TryGetValue(name, out var beforeValue);
+        var beforeCells = panel.Children.Select(c => c.GridCell?.Clone()).ToList();
+
+        var moved = tracks[from];
+        tracks.RemoveAt(from);
+        tracks.Insert(to, moved);
+
+        int Map(int index)
+        {
+            if (index == from)
+            {
+                return to;
+            }
+
+            if (from < to && index > from && index <= to)
+            {
+                return index - 1;
+            }
+
+            if (from > to && index >= to && index < from)
+            {
+                return index + 1;
+            }
+
+            return index;
+        }
+
+        for (var i = 0; i < panel.Children.Count; i++)
+        {
+            if (panel.Children[i].GridCell is not { } cell)
+            {
+                continue;
+            }
+
+            if (columns)
+            {
+                cell.Col = Map(cell.Col);
+            }
+            else
+            {
+                cell.Row = Map(cell.Row);
+            }
+        }
+
+        panel.Properties[name] = string.Join(",", tracks);
+        if (Validate(panel).Count == 0)
+        {
+            return true;
+        }
+
+        if (hadValue)
+        {
+            panel.Properties[name] = beforeValue;
+        }
+        else
+        {
+            panel.Properties.Remove(name);
+        }
+
+        for (var i = 0; i < panel.Children.Count; i++)
+        {
+            panel.Children[i].GridCell = beforeCells[i];
+        }
+
+        return false;
+    }
+
     private static string Describe(GridCell cell) =>
         $"Col={cell.Col}, Row={cell.Row}, ColSpan={cell.ColSpan}, RowSpan={cell.RowSpan}";
 

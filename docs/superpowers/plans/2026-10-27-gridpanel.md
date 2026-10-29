@@ -277,7 +277,7 @@ Implemented in this slice:
 - parent-aware reader/writer and clipboard round-trip;
 - CSS Grid emission on Canvas and page-Grid layouts, including child cell rules;
 - property-grid track editing with add/remove;
-- column/row header labels, track selection, direct +/− insert/delete, and drag-resize on the canvas;
+- column/row header labels, track selection, direct +/− insert/delete, drag-resize and drag-to-reorder on the canvas;
 - drop into a cell on Canvas and page-Grid layouts, including occupied-cell refusal;
 - dragging a child between cells;
 - collision/range validation (BL8043) through the reader and both build routes;
@@ -286,6 +286,6 @@ Implemented in this slice:
 
 Deliberately not in this slice:
 
-- reordering tracks from the property editor (the text field is the escape hatch);
 - nested `Panel` containers inside a GridPanel (a nested `GridPanel` is allowed);
+- manual visual click-through on a real display;
 - Bootstrap or any theme.
