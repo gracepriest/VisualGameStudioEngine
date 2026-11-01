@@ -22,6 +22,8 @@ namespace BasicLang.Compiler.ILReader
         private readonly Stack<string> _stack = new();
         // Local variable slots → C++ variable names.
         private readonly Dictionary<int, string> _locals = new();
+        private readonly Dictionary<int, string> _localTypes = new();
+        private readonly HashSet<string> _genericInstantiations = new();
         private int _localCounter;
         // Label counter for branches.
         private int _labelCounter;
@@ -63,6 +65,7 @@ namespace BasicLang.Compiler.ILReader
                         var body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress);
                         _methodBody = body;
                         ilBytes = body.GetILBytes();
+                        ParseLocalTypes(body);
                         break;
                     }
                 }
@@ -81,7 +84,21 @@ namespace BasicLang.Compiler.ILReader
             _sb.Clear();
             _sb.AppendLine("#include <iostream>");
             _sb.AppendLine("#include <string>");
+            _sb.AppendLine("#include <vector>");
             _sb.AppendLine();
+
+            // Emit generic instantiations as typedefs (monomorphization via C++ templates).
+            if (_genericInstantiations.Count > 0)
+            {
+                _sb.AppendLine("// Generic instantiations (monomorphized)");
+                foreach (var gen in _genericInstantiations)
+                {
+                    var cppType = ILTypeMapper.Map(gen);
+                    _sb.AppendLine($"// {gen} -> {cppType}");
+                }
+                _sb.AppendLine();
+            }
+
             _sb.AppendLine("int main()");
             _sb.AppendLine("{");
             _indent = 1;
@@ -765,6 +782,9 @@ namespace BasicLang.Compiler.ILReader
                     var handle = MetadataTokens.TypeSpecificationHandle(rid);
                     var typeSpec = _mr.GetTypeSpecification(handle);
                     var sig = typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                    // Track generic instantiation
+                    if (sig.Contains("<"))
+                        _genericInstantiations.Add(sig);
                     return sig;
                 }
             }
@@ -821,7 +841,10 @@ namespace BasicLang.Compiler.ILReader
                     else if (memberRef.Parent.Kind == HandleKind.TypeSpecification)
                     {
                         var typeSpec = _mr.GetTypeSpecification((TypeSpecificationHandle)memberRef.Parent);
-                        return typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                        var sig = typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                        if (sig.Contains("<"))
+                            _genericInstantiations.Add(sig);
+                        return sig;
                     }
                 }
             }
@@ -857,15 +880,39 @@ namespace BasicLang.Compiler.ILReader
             return "field";
         }
 
+        private void ParseLocalTypes(MethodBodyBlock body)
+        {
+            if (body == null || body.LocalSignature.IsNil) return;
+            try
+            {
+                var sigReader = _mr.GetStandaloneSignature(body.LocalSignature);
+                var provider = new SimpleTypeProvider(_mr);
+                var locals = sigReader.DecodeLocalSignature(provider, null);
+                int idx = 0;
+                foreach (var localType in locals)
+                {
+                    _localTypes[idx] = localType;
+                    if (localType.Contains("<"))
+                        _genericInstantiations.Add(localType);
+                    idx++;
+                }
+            }
+            catch
+            {
+                // Fall back to int for all locals
+            }
+        }
+
         private string GetLocal(int idx)
         {
             if (!_locals.TryGetValue(idx, out var name))
             {
                 name = $"local_{idx}";
                 _locals[idx] = name;
-                // Declare the variable (int by default for spike)
+                // Declare the variable with its IL type (mapped to C++)
+                var cppType = _localTypes.TryGetValue(idx, out var t) ? ILTypeMapper.Map(t) : "int";
                 Indent();
-                _sb.AppendLine($"int {name} = 0;");
+                _sb.AppendLine($"{cppType} {name} = {{}};");
             }
             return name;
         }
