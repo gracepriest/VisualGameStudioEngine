@@ -42,7 +42,7 @@ namespace BasicLang.Compiler.ILReader
                     var fieldDef = _reader.GetFieldDefinition(fieldHandle);
                     var fieldName = _reader.GetString(fieldDef.Name);
                     // Field type resolution via DecodeSignature varies by SDK version; resolve lazily.
-                    var fieldType = "object";
+                    var fieldType = "object"; // TODO: resolve via TypeMapper when field sig parsing is fixed
                     fields.Add(new ILFieldInfo(fieldName, fieldType));
                 }
 
