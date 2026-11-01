@@ -42,7 +42,8 @@ namespace BasicLang.Compiler.ILReader
                     var fieldDef = _reader.GetFieldDefinition(fieldHandle);
                     var fieldName = _reader.GetString(fieldDef.Name);
                     // Field type resolution via DecodeSignature varies by SDK version; resolve lazily.
-                    var fieldType = "object"; // TODO: resolve via TypeMapper when field sig parsing is fixed
+                    // Resolve field type from the signature blob
+                    var fieldType = ResolveFieldType(fieldDef);
                     fields.Add(new ILFieldInfo(fieldName, fieldType));
                 }
 
@@ -67,6 +68,118 @@ namespace BasicLang.Compiler.ILReader
                     baseType == "System.Enum"));
             }
             return result;
+        }
+
+        private string ResolveFieldType(FieldDefinition fieldDef)
+        {
+            try
+            {
+                var sigBlob = fieldDef.Signature;
+                if (sigBlob.IsNil) return "object";
+                var reader = _reader.GetBlobReader(sigBlob);
+                // Field signature: FIELD (0x06) + type
+                if (reader.Length == 0) return "object";
+                byte first = reader.ReadByte();
+                // 0x06 = FIELD signature
+                if (first != 0x06) return "object";
+                // Decode the type using a simple type reader
+                return ReadTypeFromBlob(ref reader);
+            }
+            catch
+            {
+                return "object";
+            }
+        }
+
+        private string ReadTypeFromBlob(ref BlobReader reader)
+        {
+            if (reader.Length == 0) return "object";
+            byte typeCode = reader.ReadByte();
+            switch (typeCode)
+            {
+                case 0x02: return "bool";      // BOOLEAN
+                case 0x03: return "char";       // CHAR
+                case 0x04: return "sbyte";      // I1
+                case 0x05: return "byte";       // U1
+                case 0x06: return "short";      // I2
+                case 0x07: return "ushort";     // U2
+                case 0x08: return "int";        // I4
+                case 0x09: return "uint";       // U4
+                case 0x0A: return "long";       // I8
+                case 0x0B: return "ulong";      // U8
+                case 0x0C: return "float";      // R4
+                case 0x0D: return "double";     // R8
+                case 0x0E: return "string";     // STRING
+                case 0x0F: return "object";     // PTR (simplified)
+                case 0x10:                      // BYREF
+                    return ReadTypeFromBlob(ref reader) + "&";
+                case 0x11:                      // VALUETYPE
+                    {
+                        var token = ReadTypeDefOrRef(ref reader);
+                        return ResolveTypeName(token);
+                    }
+                case 0x12:                      // CLASS
+                    {
+                        var token = ReadTypeDefOrRef(ref reader);
+                        return ResolveTypeName(token);
+                    }
+                case 0x13:                      // VAR (generic type param)
+                    {
+                        int index = ReadCompressedUInt(ref reader);
+                        return $"!{index}";
+                    }
+                case 0x14:                      // ARRAY (SZARRAY)
+                    {
+                        var elemType = ReadTypeFromBlob(ref reader);
+                        return elemType + "[]";
+                    }
+                case 0x15:                      // GENERICINST
+                    {
+                        byte gType = reader.ReadByte(); // should be 0x12 (CLASS) or 0x11 (VALUETYPE)
+                        var genTypeToken = ReadTypeDefOrRef(ref reader);
+                        var genTypeName = ResolveTypeName(genTypeToken);
+                        int argCount = ReadCompressedUInt(ref reader);
+                        var args = new List<string>();
+                        for (int i = 0; i < argCount; i++)
+                            args.Add(ReadTypeFromBlob(ref reader));
+                        return $"{genTypeName}<{string.Join(",", args)}>";
+                    }
+                default:
+                    return "object";
+            }
+        }
+
+        private EntityHandle ReadTypeDefOrRef(ref BlobReader reader)
+        {
+            uint token = (uint)ReadCompressedUInt(ref reader);
+            // The token is encoded as (table << 24) | rid, but compressed
+            // Actually, in signature blobs, TypeDefOrRef is encoded as a compressed token
+            // where the low 2 bits indicate the table (0=TypeDef, 1=TypeRef, 2=TypeSpec)
+            int table = (int)(token & 0x03);
+            int rid = (int)(token >> 2);
+            switch (table)
+            {
+                case 0: return MetadataTokens.TypeDefinitionHandle(rid);
+                case 1: return MetadataTokens.TypeReferenceHandle(rid);
+                case 2: return MetadataTokens.TypeSpecificationHandle(rid);
+                default: return default;
+            }
+        }
+
+        private int ReadCompressedUInt(ref BlobReader reader)
+        {
+            byte first = reader.ReadByte();
+            if ((first & 0x80) == 0) return first;
+            if ((first & 0xC0) == 0x80)
+            {
+                byte second = reader.ReadByte();
+                return ((first & 0x3F) << 8) | second;
+            }
+            // 4-byte form
+            byte b2 = reader.ReadByte();
+            byte b3 = reader.ReadByte();
+            byte b4 = reader.ReadByte();
+            return ((first & 0x1F) << 24) | (b2 << 16) | (b3 << 8) | b4;
         }
 
         public string ResolveTypeName(EntityHandle handle)
