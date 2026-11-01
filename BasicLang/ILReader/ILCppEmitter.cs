@@ -187,16 +187,90 @@ namespace BasicLang.Compiler.ILReader
             var regions = _methodBody != null ? _methodBody.ExceptionRegions : default;
             bool hasExceptions = regions.Length > 0;
 
+            // Build a map of offset → action for try/catch/finally boundaries.
+            // We'll check at each loop iteration.
+            var tryStarts = new System.Collections.Generic.Dictionary<int, int>(); // offset → region index
+            var tryEnds = new System.Collections.Generic.Dictionary<int, int>();
+            var handlerStarts = new System.Collections.Generic.Dictionary<int, ExceptionRegion>();
+            var handlerEnds = new System.Collections.Generic.Dictionary<int, ExceptionRegion>();
+
             if (hasExceptions)
             {
-                Indent();
-                _sb.AppendLine("try {");
-                _indent++;
+                for (int r = 0; r < regions.Length; r++)
+                {
+                    var reg = regions[r];
+                    tryStarts[reg.TryOffset] = r;
+                    tryEnds[reg.TryOffset + reg.TryLength] = r;
+                    handlerStarts[reg.HandlerOffset] = reg;
+                    handlerEnds[reg.HandlerOffset + reg.HandlerLength] = reg;
+                }
             }
 
             int i = 0;
             while (i < _il.Length)
             {
+                // Emit try/catch/finally boundaries.
+                if (hasExceptions)
+                {
+                    // Entering a try block
+                    if (tryStarts.ContainsKey(i))
+                    {
+                        Indent();
+                        _sb.AppendLine("try {");
+                        _indent++;
+                    }
+                    // Entering a catch/finally handler
+                    if (handlerStarts.TryGetValue(i, out var handlerReg))
+                    {
+                        _indent--;
+                        Indent();
+                        if (handlerReg.Kind == ExceptionRegionKind.Finally)
+                        {
+                            _sb.AppendLine("} finally {");
+                        }
+                        else if (handlerReg.Kind == ExceptionRegionKind.Catch)
+                        {
+                            // Resolve catch type
+                            string catchType = "Exception";
+                            if (!handlerReg.CatchType.IsNil)
+                            {
+                                // Try to resolve the type name
+                                try
+                                {
+                                    if (handlerReg.CatchType.Kind == HandleKind.TypeReference)
+                                    {
+                                        var tr = _mr.GetTypeReference((TypeReferenceHandle)handlerReg.CatchType);
+                                        catchType = _mr.GetString(tr.Name);
+                                    }
+                                    else if (handlerReg.CatchType.Kind == HandleKind.TypeDefinition)
+                                    {
+                                        var td = _mr.GetTypeDefinition((TypeDefinitionHandle)handlerReg.CatchType);
+                                        catchType = _mr.GetString(td.Name);
+                                    }
+                                }
+                                catch { }
+                            }
+                            _sb.AppendLine($"}} catch ({catchType} ex) {{");
+                        }
+                        _indent++;
+                    }
+                    // Leaving a try block (entering handler) — handled by handler start above
+                    // Leaving a handler
+                    if (handlerEnds.ContainsKey(i))
+                    {
+                        _indent--;
+                        Indent();
+                        _sb.AppendLine("}");
+                    }
+                    // Leaving a try block without a handler (shouldn't happen in well-formed IL)
+                    if (tryEnds.ContainsKey(i) && !handlerStarts.ContainsKey(i))
+                    {
+                        _indent--;
+                        Indent();
+                        _sb.AppendLine("}");
+                    }
+                }
+
                 // Emit label if this offset is a branch target.
                 if (_branchTargets.Contains(i))
                 {
