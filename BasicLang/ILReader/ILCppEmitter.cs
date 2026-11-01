@@ -100,14 +100,14 @@ namespace BasicLang.Compiler.ILReader
                 switch (op)
                 {
                     case 0x2B: // br.s (short)
-                    case 0x3A: // beq.s
-                    case 0x3B: // bge.s
-                    case 0x3C: // bgt.s
-                    case 0x3D: // ble.s
-                    case 0x3E: // blt.s
-                    case 0x3F: // bne.s
                     case 0x2C: // brfalse.s
                     case 0x2D: // brtrue.s
+                    case 0x2E: // beq.s
+                    case 0x2F: // bge.s
+                    case 0x30: // bgt.s
+                    case 0x31: // ble.s
+                    case 0x32: // blt.s
+                    case 0x33: // bne.s
                         {
                             sbyte offset = (sbyte)_il[i];
                             int target = i + 1 + offset;
@@ -116,8 +116,30 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
                     case 0x38: // br (long)
+                        {
+                            int target = BitConverter.ToInt32(_il, i);
+                            // target is relative to the next instruction
+                            int absTarget = i + 4 + target;
+                            _branchTargets.Add(absTarget);
+                            i += 4;
+                            break;
+                        }
                     case 0x39: // brfalse (long)
-                        break;
+                        {
+                            int target = BitConverter.ToInt32(_il, i);
+                            int absTarget = i + 4 + target;
+                            _branchTargets.Add(absTarget);
+                            i += 4;
+                            break;
+                        }
+                    case 0x3A: // brtrue (long)
+                        {
+                            int target = BitConverter.ToInt32(_il, i);
+                            int absTarget = i + 4 + target;
+                            _branchTargets.Add(absTarget);
+                            i += 4;
+                            break;
+                        }
                     case 0x20: // ldc.i4 (long)
                         i += 4;
                         break;
@@ -327,15 +349,35 @@ namespace BasicLang.Compiler.ILReader
 
                     case 0x28: // call
                         {
-                            i += 4; // skip method token (Phase 1: don't resolve)
-                            // Pop args (unknown count for spike — assume 1 for Console.WriteLine)
-                            // For spike, we'll handle Console.WriteLine specially by checking
-                            // the method token. For now, just pop 1 and emit cout.
-                            if (_stack.Count > 0)
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            string methodName = ResolveMethodName(token);
+                            string arg = _stack.Count > 0 ? _stack.Pop() : "";
+
+                            // Known BCL calls → C++ equivalents
+                            if (methodName.EndsWith("Console.WriteLine", StringComparison.Ordinal)
+                                || methodName.EndsWith("Console.Write", StringComparison.Ordinal))
                             {
-                                string arg = _stack.Pop();
                                 Indent();
                                 _sb.AppendLine($"std::cout << {arg} << std::endl;");
+                            }
+                            else if (methodName == "Console.ReadLine")
+                            {
+                                _stack.Push("std::cin"); // placeholder
+                            }
+                            else
+                            {
+                                // Generic method call: emit as a C++ function call
+                                var cppName = methodName.Replace(".", "::");
+                                if (string.IsNullOrEmpty(arg))
+                                {
+                                    Indent();
+                                    _sb.AppendLine($"{cppName}();");
+                                }
+                                else
+                                {
+                                    _stack.Push($"{cppName}({arg})");
+                                }
                             }
                             break;
                         }
@@ -353,6 +395,15 @@ namespace BasicLang.Compiler.ILReader
                             _sb.AppendLine($"goto label_{target};");
                             break;
                         }
+                    case 0x38: // br (long)
+                        {
+                            int offset = BitConverter.ToInt32(_il, i);
+                            int target = i + 4 + offset;
+                            i += 4;
+                            Indent();
+                            _sb.AppendLine($"goto label_{target};");
+                            break;
+                        }
                     case 0x2C: // brfalse.s
                         {
                             sbyte offset = (sbyte)_il[i];
@@ -363,17 +414,36 @@ namespace BasicLang.Compiler.ILReader
                             _sb.AppendLine($"if (!{val}) goto label_{target};");
                             break;
                         }
+                    case 0x39: // brfalse (long)
+                        {
+                            int offset = BitConverter.ToInt32(_il, i);
+                            int target = i + 4 + offset;
+                            i += 4;
+                            string valf = _stack.Pop();
+                            Indent();
+                            _sb.AppendLine($"if (!{valf}) goto label_{target};");
+                            break;
+                        }
                     case 0x2D: // brtrue.s
                         {
                             sbyte offset = (sbyte)_il[i];
                             int target = i + 1 + offset;
                             i += 1;
-                            string val = _stack.Pop();
+                            string valt = _stack.Pop();
                             Indent();
-                            _sb.AppendLine($"if ({val}) goto label_{target};");
+                            _sb.AppendLine($"if ({valt}) goto label_{target};");
                             break;
                         }
-
+                    case 0x3A: // brtrue (long)
+                        {
+                            int offset = BitConverter.ToInt32(_il, i);
+                            int target = i + 4 + offset;
+                            i += 4;
+                            string valt2 = _stack.Pop();
+                            Indent();
+                            _sb.AppendLine($"if ({valt2}) goto label_{target};");
+                            break;
+                        }
                     case 0x58: // add
                         {
                             string right = _stack.Pop();
@@ -447,6 +517,74 @@ namespace BasicLang.Compiler.ILReader
                         break;
                 }
             }
+        }
+
+        private string ResolveMethodName(uint token)
+        {
+            try
+            {
+                int tokenType = (int)(token >> 24);
+                int rid = (int)(token & 0x00FFFFFF);
+
+                if (tokenType == 0x06) // MethodDef
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(rid);
+                    var methodDef = _mr.GetMethodDefinition(handle);
+                    var name = _mr.GetString(methodDef.Name);
+                    // Get declaring type
+                    // MethodDef doesn't directly give type; need to find the type that owns it
+                    foreach (var typeHandle in _mr.TypeDefinitions)
+                    {
+                        var typeDef = _mr.GetTypeDefinition(typeHandle);
+                        foreach (var mh in typeDef.GetMethods())
+                        {
+                            if (mh == handle)
+                            {
+                                var typeName = _mr.GetString(typeDef.Name);
+                                var ns = _mr.GetString(typeDef.Namespace);
+                                var fullType = string.IsNullOrEmpty(ns) ? typeName : $"{ns}.{typeName}";
+                                return $"{fullType}.{name}";
+                            }
+                        }
+                    }
+                    return name;
+                }
+                else if (tokenType == 0x0A) // MemberRef
+                {
+                    var handle = MetadataTokens.MemberReferenceHandle(rid);
+                    var memberRef = _mr.GetMemberReference(handle);
+                    var name = _mr.GetString(memberRef.Name);
+                    // Resolve the parent type
+                    string parentName = "Unknown";
+                    if (memberRef.Parent.Kind == HandleKind.TypeReference)
+                    {
+                        var typeRef = _mr.GetTypeReference((TypeReferenceHandle)memberRef.Parent);
+                        var tn = _mr.GetString(typeRef.Name);
+                        var tns = _mr.GetString(typeRef.Namespace);
+                        parentName = string.IsNullOrEmpty(tns) ? tn : $"{tns}.{tn}";
+                    }
+                    else if (memberRef.Parent.Kind == HandleKind.TypeDefinition)
+                    {
+                        var typeDef = _mr.GetTypeDefinition((TypeDefinitionHandle)memberRef.Parent);
+                        var tn = _mr.GetString(typeDef.Name);
+                        var tns = _mr.GetString(typeDef.Namespace);
+                        parentName = string.IsNullOrEmpty(tns) ? tn : $"{tns}.{tn}";
+                    }
+                    return $"{parentName}.{name}";
+                }
+                else if (tokenType == 0x2B) // MethodSpec
+                {
+                    var handle = MetadataTokens.MethodSpecificationHandle(rid);
+                    var methodSpec = _mr.GetMethodSpecification(handle);
+                    // Resolve the underlying method
+                    return ResolveMethodName((uint)MetadataTokens.GetToken(methodSpec.Method));
+                }
+            }
+            catch
+            {
+                // Fall through to default
+            }
+            return "UnknownMethod";
         }
 
         private string GetLocal(int idx)
