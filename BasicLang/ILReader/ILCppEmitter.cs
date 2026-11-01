@@ -408,8 +408,12 @@ namespace BasicLang.Compiler.ILReader
 
                     case 0x73: // newobj
                         {
-                            i += 4; // skip method token
-                            _stack.Push("new Object()");
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            // newobj token is a MethodDef/MemberRef (constructor) — resolve declaring type
+                            string typeName = ResolveConstructorType(token);
+                            string cppType = ILTypeMapper.Map(typeName);
+                            _stack.Push($"new {cppType}()");
                             break;
                         }
 
@@ -727,6 +731,100 @@ namespace BasicLang.Compiler.ILReader
                 // Fall through to default
             }
             return "UnknownMethod";
+        }
+
+        private string ResolveTypeName(uint token)
+        {
+            try
+            {
+                int tokenType = (int)(token >> 24);
+                int rid = (int)(token & 0x00FFFFFF);
+
+                if (tokenType == 0x02) // TypeDef
+                {
+                    var handle = MetadataTokens.TypeDefinitionHandle(rid);
+                    var typeDef = _mr.GetTypeDefinition(handle);
+                    var name = _mr.GetString(typeDef.Name);
+                    var ns = _mr.GetString(typeDef.Namespace);
+                    return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                }
+                else if (tokenType == 0x01) // TypeRef
+                {
+                    var handle = MetadataTokens.TypeReferenceHandle(rid);
+                    var typeRef = _mr.GetTypeReference(handle);
+                    var name = _mr.GetString(typeRef.Name);
+                    var ns = _mr.GetString(typeRef.Namespace);
+                    return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                }
+                else if (tokenType == 0x1B) // TypeSpec
+                {
+                    var handle = MetadataTokens.TypeSpecificationHandle(rid);
+                    var typeSpec = _mr.GetTypeSpecification(handle);
+                    var sig = typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                    return sig;
+                }
+            }
+            catch
+            {
+            }
+            return "System.Object";
+        }
+
+        private string ResolveConstructorType(uint token)
+        {
+            try
+            {
+                int tokenType = (int)(token >> 24);
+                int rid = (int)(token & 0x00FFFFFF);
+
+                if (tokenType == 0x06) // MethodDef
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(rid);
+                    var methodDef = _mr.GetMethodDefinition(handle);
+                    // Find declaring type
+                    foreach (var typeHandle in _mr.TypeDefinitions)
+                    {
+                        var typeDef = _mr.GetTypeDefinition(typeHandle);
+                        foreach (var mh in typeDef.GetMethods())
+                        {
+                            if (mh == handle)
+                            {
+                                var name = _mr.GetString(typeDef.Name);
+                                var ns = _mr.GetString(typeDef.Namespace);
+                                return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                            }
+                        }
+                    }
+                }
+                else if (tokenType == 0x0A) // MemberRef
+                {
+                    var handle = MetadataTokens.MemberReferenceHandle(rid);
+                    var memberRef = _mr.GetMemberReference(handle);
+                    if (memberRef.Parent.Kind == HandleKind.TypeReference)
+                    {
+                        var typeRef = _mr.GetTypeReference((TypeReferenceHandle)memberRef.Parent);
+                        var name = _mr.GetString(typeRef.Name);
+                        var ns = _mr.GetString(typeRef.Namespace);
+                        return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                    }
+                    else if (memberRef.Parent.Kind == HandleKind.TypeDefinition)
+                    {
+                        var typeDef = _mr.GetTypeDefinition((TypeDefinitionHandle)memberRef.Parent);
+                        var name = _mr.GetString(typeDef.Name);
+                        var ns = _mr.GetString(typeDef.Namespace);
+                        return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+                    }
+                    else if (memberRef.Parent.Kind == HandleKind.TypeSpecification)
+                    {
+                        var typeSpec = _mr.GetTypeSpecification((TypeSpecificationHandle)memberRef.Parent);
+                        return typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return "System.Object";
         }
 
         private string GetLocal(int idx)

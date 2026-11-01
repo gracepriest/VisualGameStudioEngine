@@ -11,9 +11,29 @@ namespace BasicLang.Compiler.ILReader
     {
         private static readonly Dictionary<string, string> _map = new(StringComparer.OrdinalIgnoreCase)
         {
-            // Primitives
+            // Primitives (full .NET names)
             ["System.Boolean"] = "bool",
             ["System.Byte"] = "uint8_t",
+            // Primitives (IL short names, as emitted by TypeSpec signatures)
+            ["bool"] = "bool",
+            ["char"] = "char",
+            ["int8"] = "int8_t",
+            ["uint8"] = "uint8_t",
+            ["int16"] = "int16_t",
+            ["uint16"] = "uint16_t",
+            ["int"] = "int32_t",
+            ["int32"] = "int32_t",
+            ["uint"] = "uint32_t",
+            ["uint32"] = "uint32_t",
+            ["long"] = "int64_t",
+            ["int64"] = "int64_t",
+            ["ulong"] = "uint64_t",
+            ["uint64"] = "uint64_t",
+            ["float"] = "float",
+            ["float32"] = "float",
+            ["double"] = "double",
+            ["float64"] = "double",
+            ["string"] = "std::string",
             ["System.SByte"] = "int8_t",
             ["System.Char"] = "char",
             ["System.Int16"] = "int16_t",
