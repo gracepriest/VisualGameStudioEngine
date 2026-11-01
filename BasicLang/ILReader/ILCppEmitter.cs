@@ -29,6 +29,7 @@ namespace BasicLang.Compiler.ILReader
         private readonly HashSet<int> _branchTargets = new();
         // The IL bytes of the current method.
         private byte[] _il;
+        private MethodBodyBlock _methodBody;
         // Output builder.
         private readonly StringBuilder _sb = new();
         // Current indentation.
@@ -60,6 +61,7 @@ namespace BasicLang.Compiler.ILReader
                     if (name == "Main" && methodDef.RelativeVirtualAddress != 0)
                     {
                         var body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress);
+                        _methodBody = body;
                         ilBytes = body.GetILBytes();
                         break;
                     }
@@ -164,6 +166,17 @@ namespace BasicLang.Compiler.ILReader
 
         private void EmitMethodBody()
         {
+            // Check for exception regions (try/catch/finally).
+            var regions = _methodBody != null ? _methodBody.ExceptionRegions : default;
+            bool hasExceptions = regions.Length > 0;
+
+            if (hasExceptions)
+            {
+                Indent();
+                _sb.AppendLine("try {");
+                _indent++;
+            }
+
             int i = 0;
             while (i < _il.Length)
             {
@@ -632,6 +645,19 @@ namespace BasicLang.Compiler.ILReader
                         // Unknown opcode — skip (spike limitation)
                         break;
                 }
+            }
+
+            // Close try block if exception regions were present.
+            if (_methodBody != null && _methodBody.ExceptionRegions.Length > 0)
+            {
+                _indent--;
+                Indent();
+                _sb.AppendLine("} catch (...) {");
+                Indent();
+                _sb.AppendLine("    // Exception handling (Phase 1 basic)");
+                _indent--;
+                Indent();
+                _sb.AppendLine("}");
             }
         }
 
