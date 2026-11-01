@@ -1,0 +1,223 @@
+<WebForm Name="Home" Version="1" Width="1200" Height="1720" Text="BibleHub - Home (GridPanel mock)" BackColor="#FFF7F9FB" ForeColor="#FF243B53" Font="Segoe UI, 10pt">
+  <Layout Kind="Canvas" MobileBreakpoint="1200" />
+  <Controls>
+    <GridPanel Id="PageGrid" X="0" Y="0" Width="1200" Height="1720" TabIndex="0"
+               Columns="1fr" Rows="34px,86px,40px,260px,230px,270px,340px,220px,240px" Gap="0"
+               BackColor="#FFF7F9FB">
+      <GridPanel Id="TopBar" Col="0" Row="0" TabIndex="0" BackColor="#FF16324A"
+                 Columns="24px,1fr,110px,110px,116px,24px" Rows="34px" Gap="0"
+                 Style="align-items:center;">
+        <Label Id="TopBarText" Col="1" Row="0" TabIndex="0" Text="BibleHub Plus - study Bibles and commentaries from $4.99/month" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt" Style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" />
+        <LinkLabel Id="TopBarNews" Col="2" Row="0" TabIndex="0" Text="Newsletters" TextAlign="TopRight" ForeColor="#FFD6E2EC" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="TopBarDevotions" Col="3" Row="0" TabIndex="1" Text="Devotionals" TextAlign="TopRight" ForeColor="#FFD6E2EC" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="TopBarSignIn" Col="4" Row="0" TabIndex="2" Text="Sign In" TextAlign="TopRight" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+      </GridPanel>
+
+      <GridPanel Id="Header" Col="0" Row="1" TabIndex="1" BackColor="#FFFFFFFF"
+                 Columns="32px,300px,70px,80px,70px,100px,70px,220px,1fr,32px" Rows="86px" Gap="0"
+                 Style="align-items:center;">
+        <Label Id="Logo" Col="1" Row="0" TabIndex="0" Text="BibleHub" ForeColor="#FF16324A" Font="Georgia, 24pt, style=Bold" />
+        <LinkLabel Id="NavRead" Col="2" Row="0" TabIndex="0" Text="Read" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavStudy" Col="3" Row="0" TabIndex="1" Text="Study" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavNews" Col="4" Row="0" TabIndex="2" Text="News" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavExplore" Col="5" Row="0" TabIndex="3" Text="Explore" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavStore" Col="6" Row="0" TabIndex="4" Text="Store" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavPlus" Col="7" Row="0" TabIndex="5" Text="BibleHub Plus" ForeColor="#FFB07A1E" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="NavLogin" Col="8" Row="0" TabIndex="6" Text="Log In  |  Sign Up" TextAlign="TopRight" ForeColor="#FF243B53" Font="Segoe UI, 10pt, style=Bold" Style="text-decoration:none;cursor:pointer;text-align:right;" />
+      </GridPanel>
+
+      <GridPanel Id="Promo" Col="0" Row="2" TabIndex="2" BackColor="#FFEFE3CB"
+                 Columns="32px,1fr,208px,32px" Rows="40px" Gap="0"
+                 Style="align-items:center;">
+        <Label Id="PromoText" Col="1" Row="0" TabIndex="0" Text="FLASH SALE - BibleHub Plus under $5/month with a yearly plan." ForeColor="#FF5A3A12" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="PromoLink" Col="2" Row="0" TabIndex="1" Text="Learn more &gt;" TextAlign="TopRight" ForeColor="#FF8A5A12" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;text-align:right;" />
+      </GridPanel>
+
+      <GridPanel Id="Hero" Col="0" Row="3" TabIndex="3" BackColor="#FFE9F0F6"
+                 Columns="64px,1fr,150px,130px,64px" Rows="auto,auto,auto,auto,auto,auto" Gap="8px"
+                 Style="padding:20px 0;align-content:start;">
+        <Label Id="HeroTitle" Col="1" Row="0" ColSpan="4" TabIndex="0" Text="Search the Bible" ForeColor="#FF16324A" Font="Georgia, 22pt, style=Bold" />
+        <Label Id="HeroSub" Col="1" Row="1" ColSpan="4" TabIndex="1" Text="Find a passage, keyword, or topic in more than 60 translations." ForeColor="#FF4A5D70" Font="Segoe UI, 10pt" />
+        <TextBox Id="SearchBox" Col="1" Row="2" TabIndex="2" PlaceholderText="John 3:16, Psalm 23, or a topic..." BackColor="#FFFFFFFF" ForeColor="#FF243B53" Font="Segoe UI, 11pt" Style="height:42px;width:100%;border:1px solid #b9c7d4;border-radius:6px;padding-left:12px;box-sizing:border-box;" />
+        <ComboBox Id="VersionBox" Col="2" Row="2" TabIndex="3" Items="NIV,KJV,ESV,NLT,NASB" SelectedIndex="0" BackColor="#FFFFFFFF" ForeColor="#FF243B53" Font="Segoe UI, 10pt" Style="height:42px;width:100%;border:1px solid #b9c7d4;border-radius:6px;padding-left:8px;box-sizing:border-box;" />
+        <Button Id="SearchButton" Col="3" Row="2" TabIndex="4" Text="Search" BackColor="#FF16324A" ForeColor="#FFFFFFFF" Font="Segoe UI, 10pt, style=Bold" Style="height:42px;width:100%;border:0;border-radius:6px;cursor:pointer;">
+          <Bind Event="Click" Handler="SearchButton_Click" />
+        </Button>
+        <LinkLabel Id="AdvancedLink" Col="1" Row="3" TabIndex="5" Text="Advanced Search" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="PlansLink" Col="2" Row="3" TabIndex="6" Text="Reading Plans" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <Label Id="SearchHint" Col="1" Row="4" ColSpan="4" TabIndex="7" Text="Try a passage, a keyword, or a topic." ForeColor="#FF6B7C8F" Font="Segoe UI, 8pt" />
+        <Label Id="SearchStatus" Col="1" Row="5" ColSpan="4" TabIndex="8" Text="" ForeColor="#FF1E6B3A" Font="Segoe UI, 9pt, style=Bold" />
+      </GridPanel>
+
+      <GridPanel Id="Verse" Col="0" Row="4" TabIndex="4" BackColor="#FFFFFFFF"
+                 Columns="1fr,110px,70px,70px,80px" Rows="auto,auto,auto,auto" Gap="6px"
+                 Style="margin:24px 64px;padding:18px 28px;border:1px solid #d9e2ec;border-left:6px solid #b07a1e;border-radius:12px;align-content:start;box-sizing:border-box;">
+        <Label Id="VerseTitle" Col="0" Row="0" TabIndex="0" Text="VERSE OF THE DAY" ForeColor="#FFB07A1E" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="VerseOptions" Col="4" Row="0" TabIndex="7" Text="Options" TextAlign="TopRight" ForeColor="#FF6B7C8F" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;text-align:right;" />
+        <Label Id="VerseRef" Col="0" Row="1" ColSpan="5" TabIndex="1" Text="Galatians 6:2 - King James Version" ForeColor="#FF16324A" Font="Segoe UI, 10pt, style=Bold" />
+        <Label Id="VerseBody" Col="0" Row="2" ColSpan="5" TabIndex="2" Text="Bear ye one another's burdens, and so fulfil the law of Christ." ForeColor="#FF243B53" Font="Georgia, 15pt, style=Italic" />
+        <LinkLabel Id="VerseRead" Col="0" Row="3" TabIndex="3" Text="Read Chapter" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="VerseListen" Col="1" Row="3" TabIndex="4" Text="Listen" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;">
+          <Bind Event="Click" Handler="VerseListen_Click" />
+        </LinkLabel>
+        <LinkLabel Id="VerseShare" Col="2" Row="3" TabIndex="5" Text="Share" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;" />
+      </GridPanel>
+
+      <GridPanel Id="StudySection" Col="0" Row="5" TabIndex="5" BackColor="#FFF7F9FB"
+                 Columns="1fr" Rows="auto,auto" Gap="18px"
+                 Style="padding:24px 64px;align-content:start;box-sizing:border-box;">
+        <Label Id="StudyTitle" Col="0" Row="0" TabIndex="6" Text="Your Bible Study Starts Here" ForeColor="#FF16324A" Font="Georgia, 18pt, style=Bold" />
+        <GridPanel Id="StudyGrid" Col="0" Row="1" TabIndex="0" Columns="1fr,1fr,1fr" Rows="auto" Gap="24px" Style="align-items:stretch;">
+          <GridPanel Id="Card1" Col="0" Row="0" TabIndex="6" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="42px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <Label Id="Card1Kicker" Col="0" Row="0" ColSpan="3" TabIndex="1" Text="FREE ACCOUNT" BackColor="#FF16324A" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt, style=Bold" Style="padding:12px 18px;box-sizing:border-box;" />
+            <Label Id="Card1Title" Col="1" Row="1" TabIndex="2" Text="Mark Up Your Own Digital Bible" ForeColor="#FF16324A" Font="Georgia, 13pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Card1Body" Col="1" Row="2" TabIndex="3" Text="Save verses and insights, highlight Scripture, and keep notes as you read." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Card1Link" Col="1" Row="3" TabIndex="4" Text="Create a free account &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+          <GridPanel Id="Card2" Col="1" Row="0" TabIndex="7" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="42px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <Label Id="Card2Kicker" Col="0" Row="0" ColSpan="3" TabIndex="1" Text="BIBLEHUB PLUS" BackColor="#FFB07A1E" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt, style=Bold" Style="padding:12px 18px;box-sizing:border-box;" />
+            <Label Id="Card2Title" Col="1" Row="1" TabIndex="2" Text="Find Answers as You Read" ForeColor="#FF16324A" Font="Georgia, 13pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Card2Body" Col="1" Row="2" TabIndex="3" Text="Insight from 70+ study Bibles and commentaries, right beside the verse." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Card2Link" Col="1" Row="3" TabIndex="4" Text="Explore Plus &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+          <GridPanel Id="Card3" Col="2" Row="0" TabIndex="8" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="42px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <Label Id="Card3Kicker" Col="0" Row="0" ColSpan="3" TabIndex="1" Text="READING PLANS" BackColor="#FF2E6B5A" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt, style=Bold" Style="padding:12px 18px;box-sizing:border-box;" />
+            <Label Id="Card3Title" Col="1" Row="1" TabIndex="2" Text="Choose a Reading Plan" ForeColor="#FF16324A" Font="Georgia, 13pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Card3Body" Col="1" Row="2" TabIndex="3" Text="Walk through the whole Bible, the New Testament, or the church calendar." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Card3Link" Col="1" Row="3" TabIndex="4" Text="Start reading today &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+        </GridPanel>
+      </GridPanel>
+
+      <GridPanel Id="ArticlesSection" Col="0" Row="6" TabIndex="9" BackColor="#FFFFFFFF"
+                 Columns="1fr,auto" Rows="auto,auto" Gap="18px"
+                 Style="padding:24px 64px;align-content:start;box-sizing:border-box;">
+        <Label Id="ArticlesTitle" Col="0" Row="0" TabIndex="9" Text="Top Articles" ForeColor="#FF16324A" Font="Georgia, 18pt, style=Bold" />
+        <LinkLabel Id="ArticlesAll" Col="1" Row="0" TabIndex="10" Text="View All &gt;" TextAlign="TopRight" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;text-align:right;" />
+        <GridPanel Id="ArticleGrid" Col="0" Row="1" ColSpan="2" TabIndex="0" Columns="1fr,1fr,1fr" Rows="auto" Gap="24px" Style="align-items:stretch;">
+          <GridPanel Id="Art1" Col="0" Row="0" TabIndex="11" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="120px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <GridPanel Id="Art1Image" Col="0" Row="0" ColSpan="3" TabIndex="0" BackColor="#FFDCE7F0" Columns="1fr" Rows="120px" Gap="0">
+              <Label Id="Art1ImageLabel" Col="0" Row="0" TabIndex="0" Text="Bible reading" TextAlign="MiddleCenter" ForeColor="#FF6B7C8F" Font="Segoe UI, 9pt, style=Bold" Style="align-self:center;text-align:center;" />
+            </GridPanel>
+            <Label Id="Art1Title" Col="1" Row="1" TabIndex="1" Text="November Is Global Bible Month" ForeColor="#FF16324A" Font="Georgia, 12pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Art1Body" Col="1" Row="2" TabIndex="2" Text="Thirty days in God's Word, with reading plans and study tips." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Art1Link" Col="1" Row="3" TabIndex="3" Text="Read more &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+          <GridPanel Id="Art2" Col="1" Row="0" TabIndex="12" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="120px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <GridPanel Id="Art2Image" Col="0" Row="0" ColSpan="3" TabIndex="0" BackColor="#FFE7E0D2" Columns="1fr" Rows="120px" Gap="0">
+              <Label Id="Art2ImageLabel" Col="0" Row="0" TabIndex="0" Text="Church community" TextAlign="MiddleCenter" ForeColor="#FF6B7C8F" Font="Segoe UI, 9pt, style=Bold" Style="align-self:center;text-align:center;" />
+            </GridPanel>
+            <Label Id="Art2Title" Col="1" Row="1" TabIndex="1" Text="How to Choose a Church Home" ForeColor="#FF16324A" Font="Georgia, 12pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Art2Body" Col="1" Row="2" TabIndex="2" Text="Finding a community where you can grow, belong, and serve." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Art2Link" Col="1" Row="3" TabIndex="3" Text="Read more &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+          <GridPanel Id="Art3" Col="2" Row="0" TabIndex="13" BackColor="#FFFFFFFF"
+                     Columns="18px,1fr,18px" Rows="120px,auto,auto,auto" Gap="0"
+                     Style="border:1px solid #d9e2ec;border-radius:10px;overflow:hidden;align-content:start;">
+            <GridPanel Id="Art3Image" Col="0" Row="0" ColSpan="3" TabIndex="0" BackColor="#FFD7E8DF" Columns="1fr" Rows="120px" Gap="0">
+              <Label Id="Art3ImageLabel" Col="0" Row="0" TabIndex="0" Text="Bible questions" TextAlign="MiddleCenter" ForeColor="#FF6B7C8F" Font="Segoe UI, 9pt, style=Bold" Style="align-self:center;text-align:center;" />
+            </GridPanel>
+            <Label Id="Art3Title" Col="1" Row="1" TabIndex="1" Text="What Is the Bible?" ForeColor="#FF16324A" Font="Georgia, 12pt, style=Bold" Style="margin-top:12px;" />
+            <Label Id="Art3Body" Col="1" Row="2" TabIndex="2" Text="Concise answers to the most common questions about Scripture." ForeColor="#FF4A5D70" Font="Segoe UI, 9pt" Style="margin-top:6px;" />
+            <LinkLabel Id="Art3Link" Col="1" Row="3" TabIndex="3" Text="Read more &gt;" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" Style="text-decoration:none;cursor:pointer;margin:14px 0 18px;" />
+          </GridPanel>
+        </GridPanel>
+      </GridPanel>
+
+      <GridPanel Id="News" Col="0" Row="7" TabIndex="14" BackColor="#FF16324A"
+                 Columns="340px,140px,18px,1fr" Rows="auto,auto,auto,auto,auto" Gap="10px"
+                 Style="padding:24px 64px;align-content:start;box-sizing:border-box;">
+        <Label Id="NewsTitle" Col="0" Row="0" ColSpan="4" TabIndex="0" Text="Sign Up for BibleHub: News &amp; Knowledge" ForeColor="#FFFFFFFF" Font="Georgia, 17pt, style=Bold" />
+        <Label Id="NewsSub" Col="0" Row="1" ColSpan="4" TabIndex="1" Text="Weekly Bible news, reflections, and deals in your inbox." ForeColor="#FFD6E2EC" Font="Segoe UI, 9pt" />
+        <TextBox Id="EmailBox" Col="0" Row="2" TabIndex="2" PlaceholderText="Email address" BackColor="#FFFFFFFF" ForeColor="#FF243B53" Font="Segoe UI, 10pt" Style="height:40px;width:100%;border:1px solid #b9c7d4;border-radius:6px;padding-left:12px;box-sizing:border-box;" />
+        <Button Id="SubscribeButton" Col="1" Row="2" TabIndex="3" Text="Subscribe" BackColor="#FFB07A1E" ForeColor="#FFFFFFFF" Font="Segoe UI, 9pt, style=Bold" Style="height:40px;width:100%;border:0;border-radius:6px;cursor:pointer;">
+          <Bind Event="Click" Handler="SubscribeButton_Click" />
+        </Button>
+        <CheckBox Id="AgreeCheck" Col="2" Row="3" TabIndex="4" ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt" Style="width:18px;height:18px;align-self:center;" />
+        <Label Id="AgreeLabel" Col="3" Row="3" TabIndex="5" Text="I agree to receive email communications." ForeColor="#FFFFFFFF" Font="Segoe UI, 8pt" Style="align-self:center;" />
+        <Label Id="NewsStatus" Col="0" Row="4" ColSpan="4" TabIndex="6" Text="" ForeColor="#FFFFD9A0" Font="Segoe UI, 9pt, style=Bold" />
+      </GridPanel>
+
+      <GridPanel Id="Footer" Col="0" Row="8" TabIndex="15" BackColor="#FFF3F5F7"
+                 Columns="300px,1fr,1fr,1fr,1fr" Rows="auto,auto,auto,auto,auto,auto,auto,auto" Gap="0"
+                 Style="padding:24px 64px;align-content:start;box-sizing:border-box;">
+        <Label Id="FootBrand" Col="0" Row="0" TabIndex="0" Text="BibleHub" ForeColor="#FF16324A" Font="Georgia, 16pt, style=Bold" />
+        <Label Id="FootTag" Col="0" Row="1" TabIndex="1" Text="A home-page mock built with a GridPanel web form - not affiliated with Bible Gateway or BibleHub." ForeColor="#FF6B7C8F" Font="Segoe UI, 8pt" />
+        <Label Id="FootAbout" Col="1" Row="2" TabIndex="2" Text="About" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="FootAbout1" Col="1" Row="3" TabIndex="3" Text="About" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootAbout2" Col="1" Row="4" TabIndex="4" Text="Learn About the Bible" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootAbout3" Col="1" Row="5" TabIndex="5" Text="Statement of Faith" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootAbout4" Col="1" Row="6" TabIndex="6" Text="Mobile App" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <Label Id="FootHelp" Col="2" Row="2" TabIndex="7" Text="Help" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="FootHelp1" Col="2" Row="3" TabIndex="8" Text="FAQs" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootHelp2" Col="2" Row="4" TabIndex="9" Text="Tutorials" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootHelp3" Col="2" Row="5" TabIndex="10" Text="Contact Us" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootHelp4" Col="2" Row="6" TabIndex="11" Text="Privacy Policy" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <Label Id="FootNetwork" Col="3" Row="2" TabIndex="12" Text="Our Network" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="FootNet1" Col="3" Row="3" TabIndex="13" Text="FaithGateway" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootNet2" Col="3" Row="4" TabIndex="14" Text="StudyGateway" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootNet3" Col="3" Row="5" TabIndex="15" Text="ChurchSource" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootNet4" Col="3" Row="6" TabIndex="16" Text="Zondervan" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <Label Id="FootPrefs" Col="4" Row="2" TabIndex="17" Text="Preferences" ForeColor="#FF16324A" Font="Segoe UI, 9pt, style=Bold" />
+        <LinkLabel Id="FootPref1" Col="4" Row="3" TabIndex="18" Text="Version en espanol" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootPref2" Col="4" Row="4" TabIndex="19" Text="Preferences" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <LinkLabel Id="FootPref3" Col="4" Row="5" TabIndex="20" Text="Classic Bible Gateway" ForeColor="#FF4A5D70" Font="Segoe UI, 8pt" Style="text-decoration:none;cursor:pointer;" />
+        <Label Id="FootLegal" Col="0" Row="7" ColSpan="5" TabIndex="21" Text="(c) 2026 - a UI mock for testing. Not affiliated with Bible Gateway or HarperCollins Christian Publishing." ForeColor="#FF8A99A8" Font="Segoe UI, 8pt" />
+      </GridPanel>
+    </GridPanel>
+  </Controls>
+  <Literal><![CDATA[
+<style>
+  body { margin: 0; background: #f7f9fb; }
+  .vgs-form { max-width: 1200px; margin: 0 auto; background: #f7f9fb; }
+  .vgs-LinkLabel:hover { text-decoration: underline !important; }
+  .vgs-Button:hover { filter: brightness(1.12); }
+  .vgs-Button:active { transform: translateY(1px); }
+  .vgs-TextBox:focus, .vgs-ComboBox:focus { outline: 2px solid #b07a1e; outline-offset: 1px; }
+  #NavLogin, #TopBarNews, #TopBarDevotions, #TopBarSignIn, #PromoLink, #VerseOptions, #ArticlesAll { text-align: right; }
+  #SearchBox, #VersionBox, #SearchButton, #EmailBox, #SubscribeButton { min-width: 0; }
+  #SearchStatus, #NewsStatus { min-height: 1.2em; }
+  #FootTag { line-height: 1.35; }
+
+  @media (max-width: 1200px) {
+    body { background: #ffffff; }
+    .vgs-form { width: 100% !important; max-width: none; height: auto !important; min-width: 0 !important; min-height: 0 !important; }
+    #PageGrid { position: relative !important; left: 0 !important; top: 0 !important; width: 100% !important; height: auto !important; min-width: 0 !important; grid-template-rows: none !important; }
+    #PageGrid > * { grid-column: 1 !important; grid-row: auto !important; }
+    #TopBar { display: none !important; }
+    #Header, #Promo, #Hero, #Verse, #StudySection, #ArticlesSection, #News, #Footer {
+      grid-template-columns: 1fr !important;
+      grid-template-rows: none !important;
+      padding: 16px !important;
+      margin: 12px 0 !important;
+      gap: 10px !important;
+    }
+    #Header > *, #Promo > *, #Hero > *, #Verse > *, #StudySection > *, #ArticlesSection > *, #News > *, #Footer > * { grid-column: 1 !important; grid-row: auto !important; }
+    #Logo { margin-top: 0; }
+    #HeroTitle { font-size: 26px; }
+    #SearchBox, #VersionBox, #SearchButton, #EmailBox, #SubscribeButton { width: 100% !important; height: 42px !important; }
+    #StudyGrid, #ArticleGrid { grid-template-columns: 1fr !important; grid-template-rows: none !important; }
+    #StudyGrid > *, #ArticleGrid > * { grid-column: 1 !important; grid-row: auto !important; }
+    #Card1, #Card2, #Card3, #Art1, #Art2, #Art3 { grid-template-columns: 1fr !important; grid-template-rows: none !important; }
+    #Card1 > *, #Card2 > *, #Card3 > *, #Art1 > *, #Art2 > *, #Art3 > * { grid-column: 1 !important; grid-row: auto !important; }
+    #Card1Kicker, #Card2Kicker, #Card3Kicker { margin: 0; }
+    #Card1Title, #Card2Title, #Card3Title, #Card1Body, #Card2Body, #Card3Body, #Card1Link, #Card2Link, #Card3Link,
+    #Art1Title, #Art2Title, #Art3Title, #Art1Body, #Art2Body, #Art3Body, #Art1Link, #Art2Link, #Art3Link { margin-left: 16px !important; margin-right: 16px !important; }
+    #Art1Image, #Art2Image, #Art3Image { grid-column: 1 / -1 !important; }
+    #FootLegal { margin-top: 12px; }
+  }
+</style>
+]]></Literal>
+  <Components />
+  <Resources />
+</WebForm>

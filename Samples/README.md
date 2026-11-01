@@ -34,6 +34,13 @@ A `GridPanel` web form showing fixed/flexible columns, rows, spans, and the desi
 track headers. Open `GridPanelDemo/GridPanelDemo.blproj` and press F5. See
 `GridPanelDemo/README.md` for the header and resize gestures.
 
+### BibleHub
+
+A full home-page mock rebuilt with nested `GridPanel` containers. The page grid holds
+the header, hero, verse card, study cards, article cards, newsletter, and footer; the
+card and article rows are their own three-column grids. Open
+`BibleHub/BibleHub.blproj` and press F5.
+
 ## Learning Path
 
 1. Start with **Pong** - basic game loop and input handling

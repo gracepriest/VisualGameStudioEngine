@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<BasicLangProject Version="1.0">
+  <PropertyGroup>
+    <ProjectName>BibleHub</ProjectName>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>BibleHub</RootNamespace>
+    <TargetBackend>JavaScript</TargetBackend>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <OutputPath>bin\Debug</OutputPath>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Main.bas" />
+    <Compile Include="Home.blwebform" />
+    <Compile Include="Home.bas" />
+  </ItemGroup>
+</BasicLangProject>
