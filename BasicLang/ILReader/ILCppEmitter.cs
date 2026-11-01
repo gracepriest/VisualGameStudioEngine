@@ -419,23 +419,27 @@ namespace BasicLang.Compiler.ILReader
 
                     case 0x7B: // ldfld
                         {
-                            i += 4; // skip field token
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            string fieldName = ResolveFieldName(token);
                             if (_stack.Count > 0)
                             {
                                 var obj = _stack.Pop();
-                                _stack.Push($"{obj}->field");
+                                _stack.Push($"{obj}->{fieldName}");
                             }
                             break;
                         }
                     case 0x7D: // stfld
                         {
-                            i += 4; // skip field token
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            string fieldName = ResolveFieldName(token);
                             if (_stack.Count >= 2)
                             {
                                 var val = _stack.Pop();
                                 var obj = _stack.Pop();
                                 Indent();
-                                _sb.AppendLine($"{obj}->field = {val};");
+                                _sb.AppendLine($"{obj}->{fieldName} = {val};");
                             }
                             break;
                         }
@@ -825,6 +829,32 @@ namespace BasicLang.Compiler.ILReader
             {
             }
             return "System.Object";
+        }
+
+        private string ResolveFieldName(uint token)
+        {
+            try
+            {
+                int tokenType = (int)(token >> 24);
+                int rid = (int)(token & 0x00FFFFFF);
+
+                if (tokenType == 0x04) // FieldDef
+                {
+                    var handle = MetadataTokens.FieldDefinitionHandle(rid);
+                    var fieldDef = _mr.GetFieldDefinition(handle);
+                    return _mr.GetString(fieldDef.Name);
+                }
+                else if (tokenType == 0x0A) // MemberRef (field)
+                {
+                    var handle = MetadataTokens.MemberReferenceHandle(rid);
+                    var memberRef = _mr.GetMemberReference(handle);
+                    return _mr.GetString(memberRef.Name);
+                }
+            }
+            catch
+            {
+            }
+            return "field";
         }
 
         private string GetLocal(int idx)
