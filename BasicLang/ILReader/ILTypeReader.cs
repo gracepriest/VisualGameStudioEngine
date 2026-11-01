@@ -53,11 +53,11 @@ namespace BasicLang.Compiler.ILReader
                     var methodDef = _reader.GetMethodDefinition(methodHandle);
                     var methodName = _reader.GetString(methodDef.Name);
                     var sig = methodDef.DecodeSignature(new SimpleTypeProvider(_reader), default);
-                    var returnType = sig.ReturnType;
+                    var returnType = ILTypeMapper.Map(sig.ReturnType);
                     var paramTypes = new List<string>();
                     foreach (var p in sig.ParameterTypes)
                     {
-                        paramTypes.Add(p);
+                        paramTypes.Add(ILTypeMapper.Map(p));
                     }
                     methods.Add(new ILMethodInfo(methodName, returnType, paramTypes));
                 }
