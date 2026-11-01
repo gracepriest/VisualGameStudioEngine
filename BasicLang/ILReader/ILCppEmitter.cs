@@ -382,6 +382,122 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
 
+                    case 0x25: // dup
+                        {
+                            if (_stack.Count > 0) _stack.Push(_stack.Peek());
+                            break;
+                        }
+                    case 0x26: // pop
+                        {
+                            if (_stack.Count > 0) _stack.Pop();
+                            break;
+                        }
+
+                    case 0x73: // newobj
+                        {
+                            i += 4; // skip method token
+                            _stack.Push("new Object()");
+                            break;
+                        }
+
+                    case 0x7B: // ldfld
+                        {
+                            i += 4; // skip field token
+                            if (_stack.Count > 0)
+                            {
+                                var obj = _stack.Pop();
+                                _stack.Push($"{obj}->field");
+                            }
+                            break;
+                        }
+                    case 0x7D: // stfld
+                        {
+                            i += 4; // skip field token
+                            if (_stack.Count >= 2)
+                            {
+                                var val = _stack.Pop();
+                                var obj = _stack.Pop();
+                                Indent();
+                                _sb.AppendLine($"{obj}->field = {val};");
+                            }
+                            break;
+                        }
+
+                    case 0x7E: // ldsfld
+                        {
+                            i += 4;
+                            _stack.Push("static_field");
+                            break;
+                        }
+                    case 0x80: // stsfld
+                        {
+                            i += 4;
+                            if (_stack.Count > 0)
+                            {
+                                var val = _stack.Pop();
+                                Indent();
+                                _sb.AppendLine($"static_field = {val};");
+                            }
+                            break;
+                        }
+
+                    case 0x8C: // box
+                        i += 4; // skip type token (value stays on stack)
+                        break;
+                    case 0x79: // unbox
+                        i += 4; // skip type token
+                        break;
+
+                    case 0x8E: // ldlen
+                        {
+                            if (_stack.Count > 0)
+                            {
+                                var arr = _stack.Pop();
+                                _stack.Push($"{arr}->Length()");
+                            }
+                            break;
+                        }
+
+                    case 0x8D: // newarr
+                        {
+                            i += 4; // skip type token
+                            if (_stack.Count > 0)
+                            {
+                                var size = _stack.Pop();
+                                _stack.Push($"new Array({size})");
+                            }
+                            break;
+                        }
+
+                    case 0x67: // conv.i1
+                    case 0x68: // conv.i2
+                    case 0x69: // conv.i4
+                    case 0x6A: // conv.i8
+                    case 0x6B: // conv.r4
+                    case 0x6C: // conv.r8
+                    case 0x6D: // conv.u4
+                    case 0x6E: // conv.u8
+                        // Leave value on stack (C++ handles conversion)
+                        break;
+
+                    case 0x74: // castclass
+                        i += 4;
+                        break;
+                    case 0x75: // isinst
+                        i += 4;
+                        break;
+
+                    case 0x7A: // throw
+                        {
+                            if (_stack.Count > 0)
+                            {
+                                var ex = _stack.Pop();
+                                Indent();
+                                _sb.AppendLine($"throw {ex};");
+                            }
+                            break;
+                        }
+
                     case 0x2A: // ret
                         // End of method — don't emit anything extra
                         break;
