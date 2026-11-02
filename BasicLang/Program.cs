@@ -331,7 +331,7 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine("  --debug-adapter   Start Debug Adapter Protocol mode");
             Console.WriteLine("  --help, -h        Show this help message");
             Console.WriteLine("  --version, -v     Show version information");
-            Console.WriteLine("  --target=X        Target backend (csharp, cpp, javascript, llvm, msil)");
+            Console.WriteLine("  --target=X        Target backend (csharp, cpp, javascript, llvm, msil, il2cpp)");
             Console.WriteLine("  --output=FILE     Output file path");
             Console.WriteLine("  --optimize        Enable aggressive optimizations");
             Console.WriteLine("  --search-path=DIR Add module search path");
@@ -1668,6 +1668,9 @@ namespace BasicLang.Compiler.Driver
                 "cpp" or "c++" => new CppCodeGenerator(),
                 "llvm" => new BasicLang.Compiler.CodeGen.LLVM.LLVMCodeGenerator(),
                 "msil" or "il" => new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator(),
+                "il2cpp" => throw new NotSupportedException(
+                    "IL2CPP target requires the IL pipeline. Use: basiclang file.bas --target=msil, then " +
+                    "run the ILCppEmitter on the resulting assembly. Full CLI integration coming soon."),
                 "javascript" or "js" => new BasicLang.Compiler.CodeGen.JavaScript.JavaScriptCodeGenerator(),
                 "csharp" or "c#" or "cs" => new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator(),
 
@@ -1680,7 +1683,7 @@ namespace BasicLang.Compiler.Driver
                 // different language than the one asked for is the worst kind of quiet
                 // wrongness: the build succeeds.
                 _ => throw new NotSupportedException(
-                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil.")
+                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil, il2cpp.")
             };
 
             return generator.Generate(ir);
@@ -1738,7 +1741,7 @@ namespace BasicLang.Compiler.Driver
                 // Must reject the same set GenerateCode rejects, or the two drift and a
                 // typo'd target produces a file whose extension disagrees with its contents.
                 _ => throw new NotSupportedException(
-                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil.")
+                    $"Unknown --target '{backend}'. Valid targets: csharp, cpp, javascript (js), llvm, msil, il2cpp.")
             };
         }
 
