@@ -152,6 +152,47 @@ inline long DateTimeNow() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
 }
 
+// === TimeSpan helpers ===
+inline long TimeSpanFromDays(double days) { return (long)(days * 86400000.0); }
+inline long TimeSpanFromHours(double hours) { return (long)(hours * 3600000.0); }
+inline long TimeSpanFromMinutes(double minutes) { return (long)(minutes * 60000.0); }
+inline long TimeSpanFromSeconds(double seconds) { return (long)(seconds * 1000.0); }
+inline long TimeSpanFromMilliseconds(double ms) { return (long)ms; }
+inline double TimeSpanToDays(long ts) { return ts / 86400000.0; }
+inline double TimeSpanToHours(long ts) { return ts / 3600000.0; }
+inline double TimeSpanToMinutes(long ts) { return ts / 60000.0; }
+inline double TimeSpanToSeconds(long ts) { return ts / 1000.0; }
+
+// === Guid helpers ===
+inline std::string NewGuid() {
+    // Simple GUID generation (not cryptographically secure)
+    static int counter = 0;
+    char buf[37];
+    snprintf(buf, sizeof(buf), "%08x-%04x-%04x-%04x-%012x",
+        (unsigned)std::chrono::system_clock::now().time_since_epoch().count(),
+        (unsigned)(counter >> 16), (unsigned)(counter & 0xFFFF),
+        (unsigned)((counter * 7) & 0xFFFF), (unsigned)(counter * 13));
+    counter++;
+    return std::string(buf);
+}
+inline bool GuidEquals(const std::string& a, const std::string& b) {
+    return a == b;
+}
+
+// === StringBuilder helpers (already in BclShim namespace as std::string) ===
+// StringBuilder is just std::string in VGS C++ backend
+
+// === StreamReader/Writer helpers ===
+inline std::string ReadAllLines(const std::string& path) {
+    std::ifstream f(path);
+    std::stringstream ss;
+    std::string line;
+    while (std::getline(f, line)) {
+        ss << line << "\n";
+    }
+    return ss.str();
+}
+
 } // namespace BclShim
 
 #endif // BCL_SHIM_H

@@ -641,6 +641,32 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"std::to_string({arg})");
                             }
+                            // Phase 4: BCL shim support — TimeSpan
+                            else if (methodName.Contains("TimeSpan") && methodName.EndsWith("FromDays", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::TimeSpanFromDays({arg})");
+                            }
+                            else if (methodName.Contains("TimeSpan") && methodName.EndsWith("FromHours", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::TimeSpanFromHours({arg})");
+                            }
+                            else if (methodName.Contains("TimeSpan") && methodName.EndsWith("FromMinutes", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::TimeSpanFromMinutes({arg})");
+                            }
+                            else if (methodName.Contains("TimeSpan") && methodName.EndsWith("FromSeconds", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::TimeSpanFromSeconds({arg})");
+                            }
+                            else if (methodName.Contains("TimeSpan") && methodName.EndsWith("FromMilliseconds", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::TimeSpanFromMilliseconds({arg})");
+                            }
+                            // Phase 4: BCL shim support — Guid
+                            else if (methodName.Contains("Guid") && methodName.EndsWith("NewGuid", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::NewGuid()");
+                            }
                             else if (methodName.Contains("DateTime") && methodName.EndsWith("Parse", StringComparison.Ordinal))
                             {
                                 _stack.Push($"/* DateTime.Parse */ {arg}");

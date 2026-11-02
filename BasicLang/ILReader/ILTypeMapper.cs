@@ -47,12 +47,15 @@ namespace BasicLang.Compiler.ILReader
             ["System.Decimal"] = "double",  // approximate; VGS C++ has no native Decimal
             ["System.String"] = "std::string",
             ["System.Object"] = "void*",     // opaque pointer
+            ["object"] = "void*",            // IL short name
             ["System.Void"] = "void",
             ["System.IntPtr"] = "void*",
 
             // Common BCL (mapped to VGS C++ runtime types where possible)
             ["System.DateTime"] = "int64_t",  // ticks
             ["System.TimeSpan"] = "int64_t",
+            ["System.Guid"] = "std::string",  // stringified
+            ["System.TimeSpan"] = "int64_t",  // ticks
             ["System.Guid"] = "std::string",  // stringified
             ["System.Exception"] = "void*",
             ["System.ArgumentException"] = "void*",
