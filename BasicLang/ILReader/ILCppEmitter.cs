@@ -536,6 +536,18 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"static_cast<bool>({arg})");
                             }
+                            // Threading (Phase 3 runtime support)
+                            else if (methodName.Contains("Thread") && methodName.EndsWith("Sleep", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::this_thread::sleep_for(std::chrono::milliseconds({arg}));");
+                            }
+                            else if (methodName.Contains("Thread") && methodName.EndsWith("Start", StringComparison.Ordinal))
+                            {
+                                // Thread.Start() - placeholder
+                                Indent();
+                                _sb.AppendLine($"/* thread->Start() */");
+                            }
                             // String methods
                             else if (methodName.EndsWith("String.Substring", StringComparison.Ordinal))
                             {
