@@ -693,6 +693,99 @@ namespace BasicLang.Compiler.ILReader
                                     _stack.Push($"BclShim::IndexOf({arg}, {search})");
                                 }
                             }
+                            else if (methodName.Contains("String") && methodName.EndsWith("PadLeft", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var width = _stack.Pop();
+                                    _stack.Push($"BclShim::PadLeft({arg}, {width})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("PadRight", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var width = _stack.Pop();
+                                    _stack.Push($"BclShim::PadRight({arg}, {width})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Remove", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var count = _stack.Pop();
+                                    var start = _stack.Pop();
+                                    _stack.Push($"BclShim::Remove({arg}, {start}, {count})");
+                                }
+                                else if (_stack.Count == 1)
+                                {
+                                    var start = _stack.Pop();
+                                    _stack.Push($"BclShim::Remove({arg}, {start})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Insert", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var val = _stack.Pop();
+                                    var start = _stack.Pop();
+                                    _stack.Push($"BclShim::Insert({arg}, {start}, {val})");
+                                }
+                            }
+                            // Math methods (expanded)
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Truncate", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Truncate({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Sign", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Sign({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Log", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Log({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Log10", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Log10({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Exp", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Exp({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Sin", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Sin({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Cos", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Cos({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Tan", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Tan({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Asin", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Asin({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Acos", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Acos({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Atan", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Atan({arg})");
+                            }
+                            else if (methodName.Contains("Math") && methodName.EndsWith("Atan2", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var x = _stack.Pop();
+                                    var y = _stack.Count > 0 ? _stack.Pop() : "0";
+                                    _stack.Push($"BclShim::Atan2({y}, {x})");
+                                }
+                            }
                             else if (methodName.Contains("String") && methodName.EndsWith("Format", StringComparison.Ordinal))
                             {
                                 // String.Format - placeholder (just return the format string)

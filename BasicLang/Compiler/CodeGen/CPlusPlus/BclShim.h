@@ -47,6 +47,21 @@ inline int Min(int a, int b) { return std::min(a, b); }
 inline double Max(double a, double b) { return std::max(a, b); }
 inline int Max(int a, int b) { return std::max(a, b); }
 inline double Round(double x) { return std::round(x); }
+inline double Truncate(double x) { return std::trunc(x); }
+inline int Sign(int x) { return (x > 0) - (x < 0); }
+inline double Sign(double x) { return (x > 0) - (x < 0); }
+inline double Log(double x) { return std::log(x); }
+inline double Log10(double x) { return std::log10(x); }
+inline double Exp(double x) { return std::exp(x); }
+inline double Sin(double x) { return std::sin(x); }
+inline double Cos(double x) { return std::cos(x); }
+inline double Tan(double x) { return std::tan(x); }
+inline double Asin(double x) { return std::asin(x); }
+inline double Acos(double x) { return std::acos(x); }
+inline double Atan(double x) { return std::atan(x); }
+inline double Atan2(double y, double x) { return std::atan2(y, x); }
+inline double PI() { return 3.14159265358979323846; }
+inline double E() { return 2.71828182845904523536; }
 
 // === String helpers ===
 inline size_t StringLength(const std::string& s) { return s.length(); }
@@ -94,6 +109,44 @@ inline bool EndsWith(const std::string& s, const std::string& suffix) {
 inline size_t IndexOf(const std::string& s, const std::string& search) {
     size_t pos = s.find(search);
     return pos == std::string::npos ? -1 : (int)pos;
+}
+inline std::string PadLeft(const std::string& s, size_t totalWidth, char paddingChar = ' ') {
+    if (s.length() >= totalWidth) return s;
+    return std::string(totalWidth - s.length(), paddingChar) + s;
+}
+inline std::string PadRight(const std::string& s, size_t totalWidth, char paddingChar = ' ') {
+    if (s.length() >= totalWidth) return s;
+    return s + std::string(totalWidth - s.length(), paddingChar);
+}
+inline std::string Remove(const std::string& s, size_t startIndex, size_t count) {
+    std::string r = s;
+    r.erase(startIndex, count);
+    return r;
+}
+inline std::string Remove(const std::string& s, size_t startIndex) {
+    std::string r = s;
+    r.erase(startIndex);
+    return r;
+}
+inline std::string Insert(const std::string& s, size_t startIndex, const std::string& value) {
+    std::string r = s;
+    r.insert(startIndex, value);
+    return r;
+}
+inline std::vector<std::string> Split(const std::string& s, char separator) {
+    std::vector<std::string> result;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, separator)) result.push_back(item);
+    return result;
+}
+inline std::string Join(const std::vector<std::string>& parts, const std::string& separator) {
+    std::string result;
+    for (size_t i = 0; i < parts.size(); i++) {
+        if (i > 0) result += separator;
+        result += parts[i];
+    }
+    return result;
 }
 
 // === Convert ===
@@ -207,10 +260,6 @@ inline void StreamWriterWrite(const std::string& path, const std::string& conten
 inline void StreamWriterWriteLine(const std::string& path, const std::string& content) {
     std::ofstream f(path, std::ios::app);
     f << content << "\n";
-}
-inline bool FileExists(const std::string& path) {
-    std::ifstream f(path);
-    return f.good();
 }
 inline std::string ReadAllLines(const std::string& path) {
     std::ifstream f(path);
