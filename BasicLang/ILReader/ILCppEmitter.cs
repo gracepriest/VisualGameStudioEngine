@@ -539,6 +539,67 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"std::to_string({arg})");
                             }
+                            else if (methodName.Contains("DateTime") && methodName.EndsWith("Parse", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* DateTime.Parse */ {arg}");
+                            }
+                            // Environment
+                            else if (methodName.Contains("Environment") && methodName.EndsWith("GetEnvironmentVariable", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var name = _stack.Pop();
+                                    _stack.Push($"std::getenv({name}.c_str())");
+                                }
+                            }
+                            else if (methodName.Contains("Environment") && methodName.EndsWith("NewLine", StringComparison.Ordinal))
+                            {
+                                _stack.Push("\"\\\\n\"");
+                            }
+                            // Array
+                            else if (methodName.Contains("Array") && methodName.EndsWith("Sort", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::sort({arg}.begin(), {arg}.end());");
+                            }
+                            else if (methodName.Contains("Array") && methodName.EndsWith("Reverse", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::reverse({arg}.begin(), {arg}.end());");
+                            }
+                            // StringBuilder
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("Append", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.append({val});");
+                                }
+                            }
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("ToString", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"{arg}");
+                            }
+                            // File I/O
+                            else if (methodName.Contains("File") && methodName.EndsWith("ReadAllText", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* File.ReadAllText */ {arg}");
+                            }
+                            else if (methodName.Contains("File") && methodName.EndsWith("WriteAllText", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var content = _stack.Pop();
+                                    var path = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"/* File.WriteAllText({path}, {content}) */");
+                                }
+                            }
+                            else if (methodName.Contains("File") && methodName.EndsWith("Exists", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* File.Exists */ {arg}");
+                            }
                             else if (methodName.Contains("Convert") && methodName.Contains("ToInt32"))
                             {
                                 _stack.Push($"static_cast<int32_t>({arg})");
