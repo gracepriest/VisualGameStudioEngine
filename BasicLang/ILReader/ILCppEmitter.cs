@@ -773,6 +773,46 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"{arg}");
                             }
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("Clear", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"BclShim::StringBuilderClear({arg});");
+                            }
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("Length", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::StringBuilderLength({arg})");
+                            }
+                            // StreamReader/Writer
+                            else if (methodName.Contains("StreamReader") && methodName.EndsWith("ReadToEnd", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::StreamReaderReadToEnd({arg})");
+                            }
+                            else if (methodName.Contains("StreamReader") && methodName.EndsWith("ReadLine", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::StreamReaderReadLine({arg})");
+                            }
+                            else if (methodName.Contains("StreamWriter") && methodName.EndsWith("Write", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var content = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"BclShim::StreamWriterWrite({arg}, {content});");
+                                }
+                            }
+                            else if (methodName.Contains("StreamWriter") && methodName.EndsWith("WriteLine", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var content = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"BclShim::StreamWriterWriteLine({arg}, {content});");
+                                }
+                            }
+                            else if (methodName.Contains("File") && methodName.EndsWith("Exists", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::FileExists({arg})");
+                            }
                             // File I/O
                             else if (methodName.Contains("File") && methodName.EndsWith("ReadAllText", StringComparison.Ordinal))
                             {

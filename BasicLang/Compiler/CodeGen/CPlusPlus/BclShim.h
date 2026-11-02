@@ -179,10 +179,39 @@ inline bool GuidEquals(const std::string& a, const std::string& b) {
     return a == b;
 }
 
-// === StringBuilder helpers (already in BclShim namespace as std::string) ===
-// StringBuilder is just std::string in VGS C++ backend
+// === StringBuilder helpers (StringBuilder is std::string in VGS C++ backend) ===
+inline void StringBuilderAppend(std::string& sb, const std::string& s) { sb += s; }
+inline void StringBuilderAppend(std::string& sb, int x) { sb += std::to_string(x); }
+inline void StringBuilderAppend(std::string& sb, double x) { sb += std::to_string(x); }
+inline void StringBuilderAppendLine(std::string& sb, const std::string& s) { sb += s + "\n"; }
+inline void StringBuilderClear(std::string& sb) { sb.clear(); }
+inline size_t StringBuilderLength(const std::string& sb) { return sb.length(); }
 
 // === StreamReader/Writer helpers ===
+inline std::string StreamReaderReadToEnd(const std::string& path) {
+    std::ifstream f(path);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+inline std::string StreamReaderReadLine(const std::string& path) {
+    std::ifstream f(path);
+    std::string line;
+    std::getline(f, line);
+    return line;
+}
+inline void StreamWriterWrite(const std::string& path, const std::string& content) {
+    std::ofstream f(path);
+    f << content;
+}
+inline void StreamWriterWriteLine(const std::string& path, const std::string& content) {
+    std::ofstream f(path, std::ios::app);
+    f << content << "\n";
+}
+inline bool FileExists(const std::string& path) {
+    std::ifstream f(path);
+    return f.good();
+}
 inline std::string ReadAllLines(const std::string& path) {
     std::ifstream f(path);
     std::stringstream ss;
