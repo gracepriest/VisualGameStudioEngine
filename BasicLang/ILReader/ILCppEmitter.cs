@@ -27,6 +27,8 @@ namespace BasicLang.Compiler.ILReader
         private readonly StringBuilder _sb = new();
         private int _indent;
         private byte[] _il;
+        private int _localCounter;
+        private bool _isInstanceMethod;
 
         public ILCppEmitter(string assemblyPath)
         {
@@ -98,6 +100,100 @@ namespace BasicLang.Compiler.ILReader
                 _sb.AppendLine();
             }
 
+            // Emit method implementations for all user types.
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var typeName = _mr.GetString(td.Name);
+                if (typeName == "<Module>") continue;
+
+                foreach (var mh in td.GetMethods())
+                {
+                    var md = _mr.GetMethodDefinition(mh);
+                    var methodName = _mr.GetString(md.Name);
+                    System.Diagnostics.Debug.WriteLine($"Processing method: {typeName}.{methodName} RVA={md.RelativeVirtualAddress}");
+                    if (md.RelativeVirtualAddress == 0) continue;
+
+                    // Handle constructors: emit as TypeName__ctor
+                    string emitName = methodName;
+                    if (methodName == ".ctor") emitName = "__ctor";
+
+                    // Read method body
+                    var body = peReader.GetMethodBody(md.RelativeVirtualAddress);
+                    var methodIl = body.GetILBytes();
+                    if (methodIl == null || methodIl.Length == 0) continue;
+
+                    // Instance method if not static
+                    _isInstanceMethod = !md.Attributes.HasFlag(System.Reflection.MethodAttributes.Static);
+
+                    // Save state
+                    var savedIl = _il;
+                    var savedBody = _methodBody;
+                    var savedInstance = _isInstanceMethod;
+                    var savedStack = new Stack<string>(_stack);
+                    var savedLocals = new Dictionary<int, string>(_locals);
+                    var savedLocalTypes = new Dictionary<int, string>(_localTypes);
+                    var savedBranchTargets = new HashSet<int>(_branchTargets);
+
+                    _il = methodIl;
+                    _methodBody = body;
+                    _stack.Clear();
+                    _locals.Clear();
+                    _localTypes.Clear();
+                    _branchTargets.Clear();
+                    ParseLocalTypes(body);
+                    IdentifyBranchTargets();
+
+                    // Determine return type
+                    var sig = md.DecodeSignature(new SimpleTypeProvider(_mr), default);
+                    var returnType = ILTypeMapper.Map(sig.ReturnType);
+
+                    // Build parameter list
+                    var isStatic = md.Attributes.HasFlag(System.Reflection.MethodAttributes.Static);
+                    var paramList = new System.Collections.Generic.List<string>();
+                    if (!isStatic) paramList.Add($"{typeName}* this_");
+                    int pIdx = 0;
+                    foreach (var pType in sig.ParameterTypes)
+                    {
+                        paramList.Add($"{ILTypeMapper.Map(pType)} arg{pIdx + (isStatic ? 0 : 1)}");
+                        pIdx++;
+                    }
+                    var paramsStr = string.Join(", ", paramList);
+
+                    // Emit method as free function
+                    var funcName = (methodName == ".ctor") ? "_ctor" : methodName;
+                    _sb.AppendLine($"{returnType} {typeName}_{funcName}({paramsStr})");
+                    _sb.AppendLine("{");
+                    _indent = 1;
+
+                    // Map 'this' to local_0 (ldarg.0)
+                    // For instance methods, ldarg.0 is 'this'
+                    EmitMethodBody();
+
+                    // Add return if not void
+                    if (returnType != "void")
+                    {
+                        Indent();
+                        _sb.AppendLine($"return {{}};");
+                    }
+                    _sb.AppendLine("}");
+                    _sb.AppendLine();
+
+                    // Restore state
+                    _il = savedIl;
+                    _methodBody = savedBody;
+                    _isInstanceMethod = savedInstance;
+                    _stack.Clear();
+                    foreach (var s in savedStack) _stack.Push(s);
+                    _locals.Clear();
+                    foreach (var kv in savedLocals) _locals[kv.Key] = kv.Value;
+                    _localTypes.Clear();
+                    foreach (var kv in savedLocalTypes) _localTypes[kv.Key] = kv.Value;
+                    _branchTargets.Clear();
+                    foreach (var t in savedBranchTargets) _branchTargets.Add(t);
+                }
+            }
+
             // Emit Main method.
             byte[] ilBytes = null;
             foreach (var th in userTypes)
@@ -122,9 +218,10 @@ namespace BasicLang.Compiler.ILReader
 
             _il = ilBytes;
             ParseLocalTypes(_methodBody);
-
-            // Identify branch targets.
             IdentifyBranchTargets();
+
+            // Map method calls: Box.GetX → Box_GetX
+            // (handled in ResolveMethodName via type name)
 
             _sb.AppendLine("int main()");
             _sb.AppendLine("{");
@@ -284,7 +381,7 @@ namespace BasicLang.Compiler.ILReader
                 switch (op)
                 {
                     case 0x00: break;
-                    case 0x02: _stack.Push("arg0"); break;
+                    case 0x02: _stack.Push(_isInstanceMethod ? "this_" : "arg0"); break;
                     case 0x03: _stack.Push("arg1"); break;
                     case 0x04: _stack.Push("arg2"); break;
                     case 0x05: _stack.Push("arg3"); break;
@@ -411,6 +508,11 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 Indent();
                                 _sb.AppendLine($"std::cout << {arg} << std::endl;");
+                            }
+                            else if (methodName.Contains("Object") && methodName.EndsWith(".ctor", StringComparison.Ordinal))
+                            {
+                                // Base constructor call — skip (no-op in C++ for Object)
+                                if (_stack.Count > 0) _stack.Pop(); // pop 'this'
                             }
                             else if (methodName.EndsWith("Math.Sqrt", StringComparison.Ordinal))
                             {
@@ -666,7 +768,23 @@ namespace BasicLang.Compiler.ILReader
                                 }
                                 else
                                 {
-                                    _stack.Push($"{cppName}({arg})");
+                                    // Instance method call: TypeName_MethodName(receiver)
+                                    if (cppName.Contains("::") && !cppName.Contains("BclShim"))
+                                    {
+                                        var parts = cppName.Split(new[] { "::" }, StringSplitOptions.None);
+                                        if (parts.Length == 2)
+                                        {
+                                            _stack.Push($"{parts[0]}_{parts[1]}({arg})");
+                                        }
+                                        else
+                                        {
+                                            _stack.Push($"{cppName}({arg})");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _stack.Push($"{cppName}({arg})");
+                                    }
                                 }
                             }
                             break;
@@ -688,7 +806,36 @@ namespace BasicLang.Compiler.ILReader
                             i += 4;
                             string typeName = ResolveConstructorType(token);
                             string cppType = ILTypeMapper.Map(typeName);
-                            _stack.Push($"new {cppType}()");
+                            // Resolve constructor arg count
+                            int argCount = 0;
+                            try
+                            {
+                                var sig = ResolveMethodSignature(token);
+                                argCount = sig.Count;
+                            }
+                            catch { }
+                            // Pop args
+                            var args = new System.Collections.Generic.List<string>();
+                            for (int a = 0; a < argCount; a++)
+                            {
+                                if (_stack.Count > 0) args.Insert(0, _stack.Pop());
+                            }
+                            var argStr = string.Join(", ", args);
+                            if (argCount > 0)
+                            {
+                                // Emit: auto __tmp = new Type(); Type__ctor(__tmp, args); __tmp
+                                // For spike, emit as new Type() and store ctor call separately
+                                var tmpVar = $"__new_{_localCounter++}";
+                                Indent();
+                                _sb.AppendLine($"auto {tmpVar} = new {cppType}();");
+                                Indent();
+                                _sb.AppendLine($"{typeName}__ctor({tmpVar}, {argStr});");
+                                _stack.Push(tmpVar);
+                            }
+                            else
+                            {
+                                _stack.Push($"new {cppType}()");
+                            }
                             break;
                         }
 
@@ -815,6 +962,12 @@ namespace BasicLang.Compiler.ILReader
                         }
 
                     case 0x2A: // ret
+                        if (_stack.Count > 0)
+                        {
+                            var retVal = _stack.Pop();
+                            Indent();
+                            _sb.AppendLine($"return {retVal};");
+                        }
                         break;
 
                     case 0x2B: // br.s
@@ -1276,6 +1429,37 @@ namespace BasicLang.Compiler.ILReader
                 return sig;
             }
             return handle.Kind.ToString();
+        }
+
+        private List<string> ResolveMethodSignature(uint token)
+        {
+            var result = new List<string>();
+            try
+            {
+                int tokenType = (int)(token >> 24);
+                int rid = (int)(token & 0x00FFFFFF);
+                MethodDefinition? methodDef = null;
+                if (tokenType == 0x06)
+                {
+                    var handle = MetadataTokens.MethodDefinitionHandle(rid);
+                    methodDef = _mr.GetMethodDefinition(handle);
+                }
+                else if (tokenType == 0x0A)
+                {
+                    var handle = MetadataTokens.MemberReferenceHandle(rid);
+                    var memberRef = _mr.GetMemberReference(handle);
+                    // MemberRef doesn't have direct signature access easily; skip
+                    return result;
+                }
+                if (methodDef.HasValue)
+                {
+                    var sig = methodDef.Value.DecodeSignature(new SimpleTypeProvider(_mr), default);
+                    foreach (var p in sig.ParameterTypes)
+                        result.Add(p);
+                }
+            }
+            catch { }
+            return result;
         }
 
         private string ResolveFieldName(uint token)
