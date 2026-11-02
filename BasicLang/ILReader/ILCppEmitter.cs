@@ -85,6 +85,10 @@ namespace BasicLang.Compiler.ILReader
             _sb.AppendLine("#include <iostream>");
             _sb.AppendLine("#include <string>");
             _sb.AppendLine("#include <vector>");
+            _sb.AppendLine("#include <algorithm>");
+            _sb.AppendLine("#include <cmath>");
+            _sb.AppendLine("#include <chrono>");
+            _sb.AppendLine("#include <thread>");
             _sb.AppendLine();
 
             // Emit generic instantiations as typedefs (monomorphization via C++ templates).
