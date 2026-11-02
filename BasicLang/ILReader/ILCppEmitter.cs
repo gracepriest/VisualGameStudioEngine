@@ -445,6 +445,97 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"{arg}.length()");
                             }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Trim", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::Trim({arg})");
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Replace", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var newStr = _stack.Pop();
+                                    var oldStr = _stack.Pop();
+                                    _stack.Push($"BclShim::Replace({arg}, {oldStr}, {newStr})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("StartsWith", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var prefix = _stack.Pop();
+                                    _stack.Push($"BclShim::StartsWith({arg}, {prefix})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("EndsWith", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var suffix = _stack.Pop();
+                                    _stack.Push($"BclShim::EndsWith({arg}, {suffix})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("IndexOf", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var search = _stack.Pop();
+                                    _stack.Push($"BclShim::IndexOf({arg}, {search})");
+                                }
+                            }
+                            // List methods (expanded)
+                            else if (methodName.Contains("List") && methodName.EndsWith("Remove", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"/* {arg}.erase(remove({arg}.begin(), {arg}.end(), {val}), {arg}.end()) */;");
+                                }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("Contains", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    _stack.Push($"(std::find({arg}.begin(), {arg}.end(), {val}) != {arg}.end())");
+                                }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("Clear", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"{arg}.clear();");
+                            }
+                            // Dictionary methods (expanded)
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("ContainsKey", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var key = _stack.Pop();
+                                    _stack.Push($"({arg}.find({key}) != {arg}.end())");
+                                }
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Remove", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var key = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.erase({key});");
+                                }
+                            }
+                            // DateTime methods
+                            else if (methodName.Contains("DateTime") && methodName.EndsWith("AddDays", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var days = _stack.Pop();
+                                    _stack.Push($"({arg} + static_cast<int64_t>({days} * 86400000))");
+                                }
+                            }
+                            else if (methodName.Contains("DateTime") && methodName.EndsWith("ToString", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::to_string({arg})");
+                            }
                             else if (methodName.Contains("Convert") && methodName.Contains("ToInt32"))
                             {
                                 _stack.Push($"static_cast<int32_t>({arg})");

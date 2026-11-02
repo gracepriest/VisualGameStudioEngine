@@ -69,6 +69,32 @@ inline std::string ToLower(const std::string& s) {
     std::transform(r.begin(), r.end(), r.begin(), ::tolower);
     return r;
 }
+inline std::string Trim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    size_t end = s.find_last_not_of(" \t\n\r");
+    return s.substr(start, end - start + 1);
+}
+inline std::string Replace(const std::string& s, const std::string& oldStr, const std::string& newStr) {
+    std::string r = s;
+    size_t pos = 0;
+    while ((pos = r.find(oldStr, pos)) != std::string::npos) {
+        r.replace(pos, oldStr.length(), newStr);
+        pos += newStr.length();
+    }
+    return r;
+}
+inline bool StartsWith(const std::string& s, const std::string& prefix) {
+    return s.rfind(prefix, 0) == 0;
+}
+inline bool EndsWith(const std::string& s, const std::string& suffix) {
+    if (suffix.size() > s.size()) return false;
+    return s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+inline size_t IndexOf(const std::string& s, const std::string& search) {
+    size_t pos = s.find(search);
+    return pos == std::string::npos ? -1 : (int)pos;
+}
 
 // === Convert ===
 inline int ToInt32(const std::string& s) { return std::stoi(s); }
