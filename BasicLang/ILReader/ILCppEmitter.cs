@@ -23,6 +23,8 @@ namespace BasicLang.Compiler.ILReader
         private readonly Dictionary<int, string> _locals = new();
         private readonly Dictionary<int, string> _localTypes = new();
         private readonly HashSet<int> _branchTargets = new();
+        private readonly Dictionary<string, List<string>> _classVirtualMethods = new();
+        private readonly HashSet<string> _virtualMethodKeys = new();
         private readonly HashSet<string> _genericInstantiations = new();
         private readonly StringBuilder _sb = new();
         private int _indent;
@@ -86,6 +88,65 @@ namespace BasicLang.Compiler.ILReader
                 typeByName[name] = th;
             }
 
+            // Pre-pass: compute virtual method lists per class (base first, then derived new).
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                if (name == "<Module>") { _classVirtualMethods[name] = new List<string>(); continue; }
+
+                var vmethods = new List<string>();
+                // Collect inherited virtual methods from base
+                var visited = new HashSet<string>();
+                var cur = td;
+                var curName = name;
+                // Walk base chain to gather base virtuals first
+                var baseVirtuals = new List<string>();
+                var chain = new List<TypeDefinition>();
+                var c = td;
+                var cn = name;
+                var seen = new HashSet<string>();
+                while (!seen.Contains(cn))
+                {
+                    seen.Add(cn);
+                    chain.Add(c);
+                    if (c.BaseType.IsNil) break;
+                    var bname = ResolveTypeName(c.BaseType);
+                    var bsimple = bname.Contains(".") ? bname.Substring(bname.LastIndexOf('.') + 1) : bname;
+                    if (typeByName.TryGetValue(bsimple, out var bh))
+                    {
+                        c = _mr.GetTypeDefinition(bh);
+                        cn = bsimple;
+                    }
+                    else break;
+                }
+                // chain[0] = this, chain[1] = base, etc. Process from root (last) to this.
+                chain.Reverse();
+                var allV = new List<string>();
+                var seenMethods = new HashSet<string>();
+                foreach (var t in chain)
+                {
+                    var tname = _mr.GetString(t.Name);
+                    foreach (var mh in t.GetMethods())
+                    {
+                        var md = _mr.GetMethodDefinition(mh);
+                        if (md.Attributes.HasFlag(System.Reflection.MethodAttributes.Virtual))
+                        {
+                            var mname = _mr.GetString(md.Name);
+                            if (mname == ".ctor") continue;
+                            if (!seenMethods.Contains(mname))
+                            {
+                                seenMethods.Add(mname);
+                                allV.Add(mname);
+                                _virtualMethodKeys.Add($"{tname}.{mname}");
+                            }
+                        }
+                    }
+                }
+                _classVirtualMethods[name] = allV;
+
+            }
+
             foreach (var th in userTypes)
             {
                 var td = _mr.GetTypeDefinition(th);
@@ -131,11 +192,58 @@ namespace BasicLang.Compiler.ILReader
                 {
                     _sb.AppendLine($"    {cppType} {fieldName} = {{}};");
                 }
+                // VTable field for virtual dispatch
+                if (_classVirtualMethods.TryGetValue(name, out var vm) && vm.Count > 0)
+                {
+                    _sb.AppendLine($"    const void* __vtable = nullptr;");
+                }
                 // Default constructor
                 _sb.AppendLine($"    {name}() = default;");
                 _sb.AppendLine("};");
                 _sb.AppendLine();
+
+                // Emit vtable struct + instance for classes with virtual methods
+                if (vm != null && vm.Count > 0)
+                {
+                    _sb.AppendLine($"struct {name}__VTable {{");
+                    foreach (var mn in vm)
+                    {
+                        _sb.AppendLine($"    void (*{mn})(void*);");
+                    }
+                    _sb.AppendLine("};");
+                    _sb.AppendLine($"extern const {name}__VTable {name}__vtable;");
+                    _sb.AppendLine();
+                }
             }
+
+            // Forward declarations for all user methods (so calls resolve regardless of definition order).
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var typeName = _mr.GetString(td.Name);
+                if (typeName == "<Module>") continue;
+                foreach (var mh in td.GetMethods())
+                {
+                    var md = _mr.GetMethodDefinition(mh);
+                    if (md.RelativeVirtualAddress == 0) continue;
+                    var methodName = _mr.GetString(md.Name);
+                    var sig = md.DecodeSignature(new SimpleTypeProvider(_mr), default);
+                    var returnType = ILTypeMapper.Map(sig.ReturnType);
+                    var isStatic = md.Attributes.HasFlag(System.Reflection.MethodAttributes.Static);
+                    var paramList = new System.Collections.Generic.List<string>();
+                    if (!isStatic) paramList.Add($"{typeName}* this_");
+                    int pIdx = 0;
+                    foreach (var pType in sig.ParameterTypes)
+                    {
+                        paramList.Add($"{ILTypeMapper.Map(pType)} arg{pIdx + (isStatic ? 0 : 1)}");
+                        pIdx++;
+                    }
+                    var paramsStr = string.Join(", ", paramList);
+                    var funcName = (methodName == ".ctor") ? "_ctor" : methodName;
+                    _sb.AppendLine($"{returnType} {typeName}_{funcName}({paramsStr});");
+                }
+            }
+            _sb.AppendLine();
 
             // Emit method implementations for all user types.
             try
@@ -212,7 +320,13 @@ namespace BasicLang.Compiler.ILReader
                     }
                     catch (Exception ex)
                     {
-                        System.IO.File.AppendAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emitter-debug.txt", $"EXCEPTION in {typeName}.{methodName}: {ex.Message}\n");
+                    }
+
+                    // Set vtable in constructor for classes with virtual methods
+                    if (methodName == ".ctor" && _classVirtualMethods.TryGetValue(typeName, out var cvm) && cvm.Count > 0)
+                    {
+                        Indent();
+                        _sb.AppendLine($"this_->__vtable = &{typeName}__vtable;");
                     }
 
                     // Add return if not void
@@ -229,7 +343,7 @@ namespace BasicLang.Compiler.ILReader
                     _methodBody = savedBody;
                     _isInstanceMethod = savedInstance;
                     _stack.Clear();
-                    foreach (var s in savedStack) _stack.Push(s);
+                    foreach (var s in savedStack.Reverse()) _stack.Push(s);
                     _locals.Clear();
                     foreach (var kv in savedLocals) _locals[kv.Key] = kv.Value;
                     _localTypes.Clear();
@@ -243,6 +357,20 @@ namespace BasicLang.Compiler.ILReader
             catch (Exception ex)
             {
                 System.IO.File.WriteAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emit-error.txt", ex.ToString());
+            }
+
+            // Emit vtable instances for classes with virtual methods (after methods are defined).
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                if (name == "<Module>") continue;
+                if (_classVirtualMethods.TryGetValue(name, out var vm) && vm.Count > 0)
+                {
+                    var entries = string.Join(", ", vm.ConvertAll(mn => $"reinterpret_cast<void(*)(void*)>({name}_{mn})"));
+                    _sb.AppendLine($"const {name}__VTable {name}__vtable = {{ {entries} }};");
+                    _sb.AppendLine();
+                }
             }
 
             // Emit Main method.
@@ -335,7 +463,7 @@ namespace BasicLang.Compiler.ILReader
                     case 0x8D: i += 4; break;
                     case 0x74: i += 4; break;
                     case 0x75: i += 4; break;
-                    case 0x11: i += 2; break;
+                    case 0x11: i += 1; break;
                     case 0x13: i += 1; break;
                     case 0x14: i += 1; break;
                     case 0x0E: i += 1; break;
@@ -412,6 +540,7 @@ namespace BasicLang.Compiler.ILReader
                                 catch { }
                             }
                             _sb.AppendLine($"}} catch ({catchType} ex) {{");
+                            _stack.Push("ex");
                         }
                         _indent++;
                     }
@@ -483,8 +612,7 @@ namespace BasicLang.Compiler.ILReader
                         }
                     case 0x11:
                         {
-                            int idx = _il[i] | (_il[i + 1] << 8);
-                            i += 2;
+                            int idx = _il[i++];
                             _stack.Push(GetLocal(idx));
                             break;
                         }
@@ -571,6 +699,20 @@ namespace BasicLang.Compiler.ILReader
                                 || methodName.StartsWith("System.Array.") || methodName.StartsWith("System.String.")
                                 || methodName.Contains("Object") && methodName.EndsWith(".ctor", StringComparison.Ordinal);
 
+                            // Resolve static flag from method definition for user methods
+                            try
+                            {
+                                int tt = (int)(token >> 24);
+                                if (tt == 0x06)
+                                {
+                                    var h = MetadataTokens.MethodDefinitionHandle((int)(token & 0x00FFFFFF));
+                                    var mdef = _mr.GetMethodDefinition(h);
+                                    if (mdef.Attributes.HasFlag(System.Reflection.MethodAttributes.Static))
+                                        isStaticCall = true;
+                                }
+                            }
+                            catch { }
+
                             // Instance/static call handling (heuristic: pop 1 value as arg)
                             string arg = "";
                             string receiver = "";
@@ -651,10 +793,21 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 if (_stack.Count > 0)
                                 {
-                                    var right = _stack.Pop();
-                                    var left = _stack.Count > 0 ? _stack.Pop() : "\"\"";
-                                    _stack.Push($"({left} + {right})");
+                                    var left = _stack.Pop();
+                                    _stack.Push($"({left} + {arg})");
                                 }
+                                else
+                                {
+                                    _stack.Push($"({arg})");
+                                }
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("ToUpper", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::ToUpper({arg})");
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("ToLower", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"BclShim::ToLower({arg})");
                             }
                             else if (methodName.Contains("String") && methodName.EndsWith("Trim", StringComparison.Ordinal))
                             {
@@ -900,6 +1053,15 @@ namespace BasicLang.Compiler.ILReader
                                     _stack.Push($"({arg} + static_cast<int64_t>({days} * 86400000))");
                                 }
                             }
+                            else if (methodName.Contains("Object") && methodName.EndsWith("ToString", StringComparison.Ordinal))
+                            {
+                                // ToString: convert to string if not already a string expression
+                                var tsVal = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                if (tsVal.Contains("std::string") || tsVal.Contains("\""))
+                                    _stack.Push(tsVal);
+                                else
+                                    _stack.Push($"std::to_string({tsVal})");
+                            }
                             else if (methodName.Contains("DateTime") && methodName.EndsWith("ToString", StringComparison.Ordinal))
                             {
                                 _stack.Push($"std::to_string({arg})");
@@ -1091,34 +1253,75 @@ namespace BasicLang.Compiler.ILReader
                                 // Constructor call: TypeName__ctor(receiver, args)
                                 // methodName is like "Animal..ctor" or "System.Object..ctor"
                                 var ctorType = methodName.Substring(0, methodName.LastIndexOf(".ctor")).TrimEnd('.');
-                                if (ctorType.Contains(".")) ctorType = ctorType.Substring(ctorType.LastIndexOf('.') + 1);
+                                // Strip namespace (handle both . and :: separators)
+                                int lastSep = Math.Max(ctorType.LastIndexOf('.'), ctorType.LastIndexOf(':'));
+                                if (lastSep >= 0) ctorType = ctorType.Substring(lastSep + 1).TrimStart(':');
+                                var ctorReceiver = !string.IsNullOrEmpty(receiver) ? receiver : "this_";
                                 if (string.IsNullOrEmpty(arg))
                                 {
                                     Indent();
-                                    _sb.AppendLine($"{ctorType}__ctor(this_);");
+                                    _sb.AppendLine($"{ctorType}__ctor(({ctorType}*){ctorReceiver});");
                                 }
                                 else
                                 {
                                     Indent();
-                                    _sb.AppendLine($"{ctorType}__ctor(this_, {arg});");
+                                    _sb.AppendLine($"{ctorType}__ctor(({ctorType}*){ctorReceiver}, {arg});");
                                 }
+                            }
+                            else if (methodName.Contains("Exception") && (methodName.Contains("get_Message") || methodName.EndsWith("Message", StringComparison.Ordinal)))
+                            {
+                                var msgReceiver = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                var access = msgReceiver.StartsWith("__new_") || msgReceiver.Contains("->") ? "->" : ".";
+                                _stack.Push($"({msgReceiver}){access}Message");
                             }
                             else
                             {
+                                // Virtual dispatch: if method is virtual, dispatch through vtable
+                                var allArgs = new System.Collections.Generic.List<string>();
+                                var tmpStack = new System.Collections.Generic.Stack<string>();
+                                while (_stack.Count > 0) tmpStack.Push(_stack.Pop());
+                                while (tmpStack.Count > 0) allArgs.Add(tmpStack.Pop());
+                                if (!string.IsNullOrEmpty(arg)) allArgs.Add(arg);
+                                var argsStr = string.Join(", ", allArgs);
+                                var callArg = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                if (allArgs.Count == 0 && !string.IsNullOrEmpty(callArg)) allArgs.Add(callArg);
+                                argsStr = string.Join(", ", allArgs);
+
+                                bool isVirtual = _virtualMethodKeys.Contains(methodName);
+                                if (isVirtual && !isStaticCall)
+                                {
+                                    var vtableName = methodName.Substring(0, methodName.LastIndexOf('.'));
+                                    // strip namespace
+                                    if (vtableName.Contains(".")) vtableName = vtableName.Substring(vtableName.LastIndexOf('.') + 1);
+                                    var methodNameOnly = methodName.Substring(methodName.LastIndexOf('.') + 1);
+                                    callArg = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                    // Determine base type for vtable cast (use the declaring type)
+                                    // callArg is the receiver (could be a base-typed variable)
+                                    _stack.Push($"reinterpret_cast<const {vtableName}__VTable*>(const_cast<void*>({callArg}->__vtable))->" + $"{methodNameOnly}(({vtableName}*){callArg}{(string.IsNullOrEmpty(arg) ? "" : ", " + arg)})");
+                                }
+                                else
+                                {
                                 // Generic method call: emit as a C++ function call
                                 var cppName = methodName.Replace(".", "::");
+                                // Route BCL String methods to BclShim
+                                if (cppName.StartsWith("System::String::") || cppName.StartsWith("String::"))
+                                {
+                                    cppName = cppName.Replace("System::String::", "BclShim::").Replace("String::", "BclShim::");
+                                }
                                 // Use receiver if arg is empty (instance method with no extra args)
-                                var callArg = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                callArg = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                if (allArgs.Count == 0 && !string.IsNullOrEmpty(callArg)) allArgs.Add(callArg);
+                                argsStr = string.Join(", ", allArgs);
                                 if (cppName.Contains("::") && !cppName.Contains("BclShim"))
                                 {
                                     var parts = cppName.Split(new[] { "::" }, StringSplitOptions.None);
                                     if (parts.Length == 2)
                                     {
-                                        _stack.Push($"{parts[0]}_{parts[1]}({callArg})");
+                                        _stack.Push($"{parts[0]}_{parts[1]}({argsStr})");
                                     }
                                     else
                                     {
-                                        _stack.Push($"{cppName}({callArg})");
+                                        _stack.Push($"{cppName}({argsStr})");
                                     }
                                 }
                                 else
@@ -1126,8 +1329,9 @@ namespace BasicLang.Compiler.ILReader
                                     _stack.Push($"{cppName}({callArg})");
                                 }
                             }
-                            break;
                         }
+                        break;
+                    }
 
                     case 0x72: // ldstr
                         {
@@ -1160,21 +1364,27 @@ namespace BasicLang.Compiler.ILReader
                                 if (_stack.Count > 0) args.Insert(0, _stack.Pop());
                             }
                             var argStr = string.Join(", ", args);
+                            var tmpVar = $"__new_{_localCounter++}";
+                            Indent();
+                            _sb.AppendLine($"auto {tmpVar} = new {cppType}();");
+                            // Set vtable for classes with virtual methods
+                            if (_classVirtualMethods.TryGetValue(typeName, out var vml) && vml.Count > 0)
+                            {
+                                var vtName = typeName;
+                                int ls = Math.Max(vtName.LastIndexOf('.'), vtName.LastIndexOf(':'));
+                                if (ls >= 0) vtName = vtName.Substring(ls + 1).TrimStart(':');
+                                Indent();
+                                _sb.AppendLine($"{tmpVar}->__vtable = &{vtName}__vtable;");
+                            }
                             if (argCount > 0)
                             {
-                                // Emit: auto __tmp = new Type(); Type__ctor(__tmp, args); __tmp
-                                // For spike, emit as new Type() and store ctor call separately
-                                var tmpVar = $"__new_{_localCounter++}";
+                                var ctorTypeName = typeName;
+                                int lastSep2 = Math.Max(ctorTypeName.LastIndexOf('.'), ctorTypeName.LastIndexOf(':'));
+                                if (lastSep2 >= 0) ctorTypeName = ctorTypeName.Substring(lastSep2 + 1).TrimStart(':');
                                 Indent();
-                                _sb.AppendLine($"auto {tmpVar} = new {cppType}();");
-                                Indent();
-                                _sb.AppendLine($"{typeName}__ctor({tmpVar}, {argStr});");
-                                _stack.Push(tmpVar);
+                                _sb.AppendLine($"{ctorTypeName}__ctor({tmpVar}, {argStr});");
                             }
-                            else
-                            {
-                                _stack.Push($"new {cppType}()");
-                            }
+                            _stack.Push(tmpVar);
                             break;
                         }
 
@@ -1235,18 +1445,107 @@ namespace BasicLang.Compiler.ILReader
                             if (_stack.Count > 0)
                             {
                                 var arr = _stack.Pop();
-                                _stack.Push($"{arr}->Length()");
+                                _stack.Push($"(int){arr}->size()");
                             }
                             break;
                         }
 
                     case 0x8D: // newarr
                         {
+                            uint token = BitConverter.ToUInt32(_il, i);
                             i += 4;
+                            string elemType = "int32_t";
+                            try
+                            {
+                                var handle = MetadataTokens.EntityHandle((int)token);
+                                var typeName = ResolveTypeName(handle);
+                                if (typeName == "System.Int32" || typeName == "int32") elemType = "int32_t";
+                                else if (typeName == "System.Int64" || typeName == "int64") elemType = "int64_t";
+                                else if (typeName == "System.Double" || typeName == "float64") elemType = "double";
+                                else if (typeName == "System.Single" || typeName == "float32") elemType = "float";
+                                else if (typeName == "System.Boolean" || typeName == "bool") elemType = "bool";
+                                else if (typeName == "System.String" || typeName == "string") elemType = "std::string";
+                                else elemType = ILTypeMapper.Map(typeName);
+                            }
+                            catch { }
                             if (_stack.Count > 0)
                             {
                                 var size = _stack.Pop();
-                                _stack.Push($"new Array({size})");
+                                _stack.Push($"new std::vector<{elemType}>({size})");
+                            }
+                            break;
+                        }
+
+                    case 0x8F: // ldelema
+                        {
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            if (_stack.Count >= 2)
+                            {
+                                var idx = _stack.Pop();
+                                var arr = _stack.Pop();
+                                _stack.Push($"&(*{arr})[{idx}]");
+                            }
+                            break;
+                        }
+
+                    case 0x46: // ldind.i1
+                    case 0x48: // ldind.i2
+                    case 0x4A: // ldind.i4
+                    case 0x4C: // ldind.i8
+                    case 0x4E: // ldind.r4
+                    case 0x4F: // ldind.r8
+                    case 0x50: // ldind.ref
+                        {
+                            if (_stack.Count > 0)
+                            {
+                                var ptr = _stack.Pop();
+                                _stack.Push($"*{ptr}");
+                            }
+                            break;
+                        }
+
+                    case 0x52: // stind.i1
+                    case 0x53: // stind.i2
+                    case 0x54: // stind.i4
+                    case 0x55: // stind.i8
+                    case 0x56: // stind.r4
+                    case 0x57: // stind.r8
+                    case 0x51: // stind.ref
+                        {
+                            if (_stack.Count >= 2)
+                            {
+                                var val = _stack.Pop();
+                                var ptr = _stack.Pop();
+                                Indent();
+                                _sb.AppendLine($"*{ptr} = {val};");
+                            }
+                            break;
+                        }
+
+                        {
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            string elemType = "int";
+                            try
+                            {
+                                var handle = MetadataTokens.EntityHandle((int)token);
+                                var typeName = ResolveTypeName(handle);
+                                // Map common element types to C++
+                                if (typeName == "System.Int32" || typeName == "int32") elemType = "int32_t";
+                                else if (typeName == "System.Int64" || typeName == "int64") elemType = "int64_t";
+                                else if (typeName == "System.Double" || typeName == "float64") elemType = "double";
+                                else if (typeName == "System.Single" || typeName == "float32") elemType = "float";
+                                else if (typeName == "System.Boolean" || typeName == "bool") elemType = "bool";
+                                else if (typeName == "System.Char" || typeName == "char") elemType = "char";
+                                else if (typeName == "System.String" || typeName == "string") elemType = "std::string";
+                                else elemType = ILTypeMapper.Map(typeName);
+                            }
+                            catch { }
+                            if (_stack.Count > 0)
+                            {
+                                var size = _stack.Pop();
+                                _stack.Push($"new std::vector<{elemType}>({size})");
                             }
                             break;
                         }
@@ -1259,7 +1558,7 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 var idx = _stack.Pop();
                                 var arr = _stack.Pop();
-                                _stack.Push($"{arr}[{idx}]");
+                                _stack.Push($"(*{arr})[{idx}]");
                             }
                             break;
                         }
@@ -1273,7 +1572,7 @@ namespace BasicLang.Compiler.ILReader
                                 var idx = _stack.Pop();
                                 var arr = _stack.Pop();
                                 Indent();
-                                _sb.AppendLine($"{arr}[{idx}] = {val};");
+                                _sb.AppendLine($"(*{arr})[{idx}] = {val};");
                             }
                             break;
                         }
@@ -1295,8 +1594,20 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 var ex = _stack.Pop();
                                 Indent();
-                                _sb.AppendLine($"throw {ex};");
+                                if (ex.StartsWith("__new_") || ex.StartsWith("local_") || ex.Contains("->"))
+                                    _sb.AppendLine($"throw *{ex};");
+                                else
+                                    _sb.AppendLine($"throw {ex};");
                             }
+                            break;
+                        }
+
+                    case 0xDC: // endfinally
+                        break;
+
+                    case 0xDD: // leave
+                        {
+                            i += 4;
                             break;
                         }
 
@@ -1449,14 +1760,7 @@ namespace BasicLang.Compiler.ILReader
             // Close try block if exception regions were present.
             if (_methodBody != null && _methodBody.ExceptionRegions.Length > 0)
             {
-                _indent--;
-                Indent();
-                _sb.AppendLine("} catch (...) {");
-                Indent();
-                _sb.AppendLine("    // Exception handling (Phase 1 basic)");
-                _indent--;
-                Indent();
-                _sb.AppendLine("}");
+                // Try/catch already closed inline by handler regions.
             }
         }
 
@@ -1787,7 +2091,19 @@ namespace BasicLang.Compiler.ILReader
                 {
                     var handle = MetadataTokens.MemberReferenceHandle(rid);
                     var memberRef = _mr.GetMemberReference(handle);
-                    // MemberRef doesn't have direct signature access easily; skip
+                    try
+                    {
+                        var sigReader = _mr.GetBlobReader(memberRef.Signature);
+                        // Method signature: first byte flags, then param count (compressed), then return type, then params
+                        // Skip flags
+                        sigReader.ReadByte();
+                        int paramCount = (int)ReadCompressedUInt(ref sigReader);
+                        // Skip return type
+                        ReadTypeFromBlob(ref sigReader);
+                        for (int p = 0; p < paramCount; p++)
+                            result.Add(ReadTypeFromBlob(ref sigReader));
+                    }
+                    catch { }
                     return result;
                 }
                 if (methodDef.HasValue)
@@ -1858,14 +2174,24 @@ namespace BasicLang.Compiler.ILReader
                 _locals[idx] = name;
                 var cppType = _localTypes.TryGetValue(idx, out var t) ? ILTypeMapper.Map(t) : "int";
                 if (cppType == "void*") cppType = "int";
+                // By-ref (managed pointer) locals become pointers in C++
+                bool isByRef = cppType.EndsWith("&", StringComparison.Ordinal);
+                if (isByRef)
+                {
+                    cppType = cppType.Substring(0, cppType.Length - 1) + "*";
+                }
                 Indent();
-                _sb.AppendLine($"{cppType} {name} = {{}};");
+                if (isByRef || cppType.EndsWith("*", StringComparison.Ordinal))
+                    _sb.AppendLine($"{cppType} {name} = nullptr;");
+                else
+                    _sb.AppendLine($"{cppType} {name} = {{}};");
             }
             return name;
         }
 
         private void Indent()
         {
+            if (_indent < 0) _indent = 0;
             _sb.Append(new string(' ', _indent * 4));
         }
 

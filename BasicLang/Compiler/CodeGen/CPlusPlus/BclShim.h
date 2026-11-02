@@ -25,6 +25,16 @@
 
 namespace BclShim {
 
+// === Exception support ===
+struct Exception {
+    std::string Message;
+    Exception() : Message("") {}
+    Exception(const std::string& m) : Message(m) {}
+};
+inline void Exception__ctor(Exception* this_, const std::string& m) {
+    if (this_) this_->Message = m;
+}
+
 // === Console ===
 inline void WriteLine(const std::string& s) { std::cout << s << std::endl; }
 inline void Write(const std::string& s) { std::cout << s; }

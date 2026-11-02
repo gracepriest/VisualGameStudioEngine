@@ -57,7 +57,7 @@ namespace BasicLang.Compiler.ILReader
             ["System.Guid"] = "std::string",  // stringified
             ["System.TimeSpan"] = "int64_t",  // ticks
             ["System.Guid"] = "std::string",  // stringified
-            ["System.Exception"] = "void*",
+            ["System.Exception"] = "Exception",
             ["System.ArgumentException"] = "void*",
             ["System.NullReferenceException"] = "void*",
         };
