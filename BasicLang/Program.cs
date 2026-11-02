@@ -745,6 +745,13 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
+            // ---------- IL2CPP projects: route through the IL2CPP pipeline. ----------
+            if (project.Backend?.ToLowerInvariant() == "il2cpp")
+            {
+                Console.WriteLine("  IL2CPP build not yet supported for projects. Use single-file: basiclang file.bas --target=il2cpp");
+                return 1;
+            }
+
             // ---------- Native projects (Language=Cpp, or a BasicLang project on the
             // C++ backend): both route through the single native-project orchestrator. ----------
             if (project.IsNativeProject)
