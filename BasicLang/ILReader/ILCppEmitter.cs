@@ -453,6 +453,7 @@ namespace BasicLang.Compiler.ILReader
                         }
 
                     case 0x28: // call
+                    case 0x6F: // callvirt
                         {
                             uint token = BitConverter.ToUInt32(_il, i);
                             i += 4;
@@ -522,6 +523,86 @@ namespace BasicLang.Compiler.ILReader
                             else if (methodName.Contains("Convert") && methodName.Contains("ToDouble"))
                             {
                                 _stack.Push($"static_cast<double>({arg})");
+                            }
+                            else if (methodName.Contains("Convert") && methodName.Contains("ToInt64"))
+                            {
+                                _stack.Push($"static_cast<int64_t>({arg})");
+                            }
+                            else if (methodName.Contains("Convert") && methodName.Contains("ToSingle"))
+                            {
+                                _stack.Push($"static_cast<float>({arg})");
+                            }
+                            else if (methodName.Contains("Convert") && methodName.Contains("ToBoolean"))
+                            {
+                                _stack.Push($"static_cast<bool>({arg})");
+                            }
+                            // String methods
+                            else if (methodName.EndsWith("String.Substring", StringComparison.Ordinal))
+                            {
+                                // Substring(start, length) or Substring(start)
+                                if (_stack.Count >= 2)
+                                {
+                                    var len = _stack.Pop();
+                                    var start = _stack.Pop();
+                                    _stack.Push($"/* substring */ {arg}.substr({start}, {len})");
+                                }
+                                else
+                                {
+                                    _stack.Push($"/* substring */ {arg}.substr({arg})");
+                                }
+                            }
+                            else if (methodName.EndsWith("String.ToUpper", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* ToUpper */ {arg}");
+                            }
+                            else if (methodName.EndsWith("String.ToLower", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* ToLower */ {arg}");
+                            }
+                            else if (methodName.EndsWith("String.Contains", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var search = _stack.Pop();
+                                    _stack.Push($"({arg}.find({search}) != std::string::npos)");
+                                }
+                            }
+                            else if (methodName.EndsWith("String.Length", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"{arg}.length()");
+                            }
+                            // List methods (BasicLang::List)
+                            else if (methodName.Contains("List") && methodName.EndsWith("Add", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.push_back({val});");
+                                }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("get_Count", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"{arg}.size()");
+                            }
+                            // Dictionary methods
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Add", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var val = _stack.Pop();
+                                    var key = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}[{key}] = {val};");
+                                }
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("get_Item", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var key = _stack.Pop();
+                                    _stack.Push($"{arg}[{key}]");
+                                }
                             }
                             else if (methodName == "Console.ReadLine")
                             {
