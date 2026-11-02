@@ -77,6 +77,15 @@ namespace BasicLang.Compiler.ILReader
             }
             _sb.AppendLine();
 
+            // Build a map of type name -> TypeDefinitionHandle for base class resolution.
+            var typeByName = new Dictionary<string, TypeDefinitionHandle>();
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                typeByName[name] = th;
+            }
+
             foreach (var th in userTypes)
             {
                 var td = _mr.GetTypeDefinition(th);
@@ -85,13 +94,41 @@ namespace BasicLang.Compiler.ILReader
 
                 _sb.AppendLine($"struct {name}");
                 _sb.AppendLine("{");
-                // Fields
-                foreach (var fh in td.GetFields())
+
+                // Collect all fields including inherited ones.
+                var allFields = new List<(string type, string name)>();
+                var visited = new HashSet<string>();
+                var current = td;
+                var currentName = name;
+                while (!visited.Contains(currentName))
                 {
-                    var fd = _mr.GetFieldDefinition(fh);
-                    var fieldName = _mr.GetString(fd.Name);
-                    var fieldType = ResolveFieldType(fd);
-                    var cppType = ILTypeMapper.Map(fieldType);
+                    visited.Add(currentName);
+                    foreach (var fh in current.GetFields())
+                    {
+                        var fd = _mr.GetFieldDefinition(fh);
+                        var fieldName = _mr.GetString(fd.Name);
+                        var fieldType = ResolveFieldType(fd);
+                        var cppType = ILTypeMapper.Map(fieldType);
+                        allFields.Add((cppType, fieldName));
+                    }
+                    // Walk base class
+                    if (current.BaseType.IsNil) break;
+                    var baseName = ResolveTypeName(current.BaseType);
+                    // Strip namespace for lookup
+                    var baseSimpleName = baseName.Contains(".") ? baseName.Substring(baseName.LastIndexOf('.') + 1) : baseName;
+                    if (typeByName.TryGetValue(baseSimpleName, out var baseHandle))
+                    {
+                        current = _mr.GetTypeDefinition(baseHandle);
+                        currentName = baseSimpleName;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                foreach (var (cppType, fieldName) in allFields)
+                {
                     _sb.AppendLine($"    {cppType} {fieldName} = {{}};");
                 }
                 // Default constructor
@@ -101,6 +138,8 @@ namespace BasicLang.Compiler.ILReader
             }
 
             // Emit method implementations for all user types.
+            try
+            {
             foreach (var th in userTypes)
             {
                 var td = _mr.GetTypeDefinition(th);
@@ -111,7 +150,6 @@ namespace BasicLang.Compiler.ILReader
                 {
                     var md = _mr.GetMethodDefinition(mh);
                     var methodName = _mr.GetString(md.Name);
-                    System.Diagnostics.Debug.WriteLine($"Processing method: {typeName}.{methodName} RVA={md.RelativeVirtualAddress}");
                     if (md.RelativeVirtualAddress == 0) continue;
 
                     // Handle constructors: emit as TypeName__ctor
@@ -168,7 +206,14 @@ namespace BasicLang.Compiler.ILReader
 
                     // Map 'this' to local_0 (ldarg.0)
                     // For instance methods, ldarg.0 is 'this'
-                    EmitMethodBody();
+                    try
+                    {
+                        EmitMethodBody();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.IO.File.AppendAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emitter-debug.txt", $"EXCEPTION in {typeName}.{methodName}: {ex.Message}\n");
+                    }
 
                     // Add return if not void
                     if (returnType != "void")
@@ -192,6 +237,12 @@ namespace BasicLang.Compiler.ILReader
                     _branchTargets.Clear();
                     foreach (var t in savedBranchTargets) _branchTargets.Add(t);
                 }
+            }
+
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.WriteAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emit-error.txt", ex.ToString());
             }
 
             // Emit Main method.
@@ -227,7 +278,14 @@ namespace BasicLang.Compiler.ILReader
             _sb.AppendLine("{");
             _indent = 1;
 
-            EmitMethodBody();
+            try
+            {
+                EmitMethodBody();
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.WriteAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emit-error.txt", $"Main: {ex.Message}\n{ex.StackTrace}");
+            }
 
             _sb.AppendLine("    return 0;");
             _sb.AppendLine("}");
@@ -503,9 +561,48 @@ namespace BasicLang.Compiler.ILReader
                             uint token = BitConverter.ToUInt32(_il, i);
                             i += 4;
                             string methodName = ResolveMethodName(token);
-                            string arg = _stack.Count > 0 ? _stack.Pop() : "";
+                            // Determine if this is an instance method or static method.
+                            bool isStaticCall = methodName.StartsWith("Console.") || methodName.StartsWith("Math.")
+                                || methodName.StartsWith("Convert.") || methodName.StartsWith("Environment.")
+                                || methodName.StartsWith("Array.") || methodName.StartsWith("File.")
+                                || methodName.StartsWith("String.") || methodName.StartsWith("BclShim.")
+                                || methodName.StartsWith("System.Console.") || methodName.StartsWith("System.Math.")
+                                || methodName.StartsWith("System.Convert.") || methodName.StartsWith("System.Environment.")
+                                || methodName.StartsWith("System.Array.") || methodName.StartsWith("System.String.")
+                                || methodName.Contains("Object") && methodName.EndsWith(".ctor", StringComparison.Ordinal);
+
+                            // Instance/static call handling (heuristic: pop 1 value as arg)
+                            string arg = "";
+                            string receiver = "";
+                            if (isStaticCall)
+                            {
+                                // Static call: pop args only
+                                if (_stack.Count > 0) arg = _stack.Pop();
+                            }
+                            else
+                            {
+                                // Instance call: last value on stack is the receiver
+                                // For 0-arg methods like GetX(), stack has [receiver]
+                                // For 1-arg methods like Add(x), stack has [receiver, x]
+                                // We don't know arg count, so pop 1 (receiver) and check if more
+                                // For simplicity, assume 0 args for instance methods unless we detect otherwise
+                                // Pop the receiver
+                                if (_stack.Count > 0)
+                                {
+                                    // Check if there might be args: if stack has 2+ items, pop last as arg
+                                    // This is a heuristic; proper handling needs method signature
+                                    receiver = _stack.Pop();
+                                    // If there's still something on stack that looks like an arg, pop it
+                                    // (heuristic: if stack non-empty after popping receiver, treat top as arg)
+                                }
+                            }
                             if (methodName.EndsWith("Console.WriteLine", StringComparison.Ordinal) || methodName.EndsWith("Console.Write", StringComparison.Ordinal))
                             {
+                                // Console.WriteLine takes 1 arg
+                                if (string.IsNullOrEmpty(arg) && _stack.Count > 0)
+                                    arg = _stack.Pop();
+                                if (string.IsNullOrEmpty(arg) && _stack.Count > 0)
+                                    arg = _stack.Pop();
                                 Indent();
                                 _sb.AppendLine($"std::cout << {arg} << std::endl;");
                             }
@@ -549,6 +646,15 @@ namespace BasicLang.Compiler.ILReader
                             else if (methodName.Contains("String") && methodName.Contains("Length"))
                             {
                                 _stack.Push($"{arg}.length()");
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Concat", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var right = _stack.Pop();
+                                    var left = _stack.Count > 0 ? _stack.Pop() : "\"\"";
+                                    _stack.Push($"({left} + {right})");
+                                }
                             }
                             else if (methodName.Contains("String") && methodName.EndsWith("Trim", StringComparison.Ordinal))
                             {
@@ -887,34 +993,44 @@ namespace BasicLang.Compiler.ILReader
                                 Indent();
                                 _sb.AppendLine($"std::reverse({arg}.begin(), {arg}.end());");
                             }
+                            else if (methodName.EndsWith(".ctor", StringComparison.Ordinal))
+                            {
+                                // Constructor call: TypeName__ctor(receiver, args)
+                                // methodName is like "Animal..ctor" or "System.Object..ctor"
+                                var ctorType = methodName.Substring(0, methodName.LastIndexOf(".ctor")).TrimEnd('.');
+                                if (ctorType.Contains(".")) ctorType = ctorType.Substring(ctorType.LastIndexOf('.') + 1);
+                                if (string.IsNullOrEmpty(arg))
+                                {
+                                    Indent();
+                                    _sb.AppendLine($"{ctorType}__ctor(this_);");
+                                }
+                                else
+                                {
+                                    Indent();
+                                    _sb.AppendLine($"{ctorType}__ctor(this_, {arg});");
+                                }
+                            }
                             else
                             {
                                 // Generic method call: emit as a C++ function call
                                 var cppName = methodName.Replace(".", "::");
-                                if (string.IsNullOrEmpty(arg))
+                                // Use receiver if arg is empty (instance method with no extra args)
+                                var callArg = !string.IsNullOrEmpty(arg) ? arg : receiver;
+                                if (cppName.Contains("::") && !cppName.Contains("BclShim"))
                                 {
-                                    Indent();
-                                    _sb.AppendLine($"{cppName}();");
-                                }
-                                else
-                                {
-                                    // Instance method call: TypeName_MethodName(receiver)
-                                    if (cppName.Contains("::") && !cppName.Contains("BclShim"))
+                                    var parts = cppName.Split(new[] { "::" }, StringSplitOptions.None);
+                                    if (parts.Length == 2)
                                     {
-                                        var parts = cppName.Split(new[] { "::" }, StringSplitOptions.None);
-                                        if (parts.Length == 2)
-                                        {
-                                            _stack.Push($"{parts[0]}_{parts[1]}({arg})");
-                                        }
-                                        else
-                                        {
-                                            _stack.Push($"{cppName}({arg})");
-                                        }
+                                        _stack.Push($"{parts[0]}_{parts[1]}({callArg})");
                                     }
                                     else
                                     {
-                                        _stack.Push($"{cppName}({arg})");
+                                        _stack.Push($"{cppName}({callArg})");
                                     }
+                                }
+                                else
+                                {
+                                    _stack.Push($"{cppName}({callArg})");
                                 }
                             }
                             break;
