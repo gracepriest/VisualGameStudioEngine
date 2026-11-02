@@ -9,35 +9,24 @@ using System.Text;
 namespace BasicLang.Compiler.ILReader
 {
     /// <summary>
-    /// IL-to-C++ emitter. Phase 1: handles common opcodes (ldstr, call, ret, arithmetic,
-    /// locals, branches, conditionals). Not yet a full compiler.
+    /// IL-to-C++ emitter. Reads a .NET assembly and emits C++.
+    /// Handles types, methods, fields, opcodes, control flow, exceptions, generics.
     /// </summary>
     public class ILCppEmitter
     {
         private readonly string _assemblyPath;
         private MetadataReader _mr;
         private PEReader _peReader;
+        private MethodBodyBlock _methodBody;
 
-        // Stack of C++ expressions (as strings) for the current method.
         private readonly Stack<string> _stack = new();
-        // Local variable slots → C++ variable names.
         private readonly Dictionary<int, string> _locals = new();
         private readonly Dictionary<int, string> _localTypes = new();
-        private readonly HashSet<string> _genericInstantiations = new();
-        private int _localCounter;
-        // Label counter for branches.
-        private int _labelCounter;
-        // Collected labels that need to be emitted.
         private readonly HashSet<int> _branchTargets = new();
-        // The IL bytes of the current method.
-        private byte[] _il;
-        private MethodBodyBlock _methodBody;
-        // Output builder.
+        private readonly HashSet<string> _genericInstantiations = new();
         private readonly StringBuilder _sb = new();
-        // Current indentation.
         private int _indent;
-        // Whether we're inside Main (entry point).
-        private bool _isMain;
+        private byte[] _il;
 
         public ILCppEmitter(string assemblyPath)
         {
@@ -51,21 +40,74 @@ namespace BasicLang.Compiler.ILReader
             _peReader = peReader;
             _mr = peReader.GetMetadataReader();
 
-            // Find Main method.
-            byte[] ilBytes = null;
-            foreach (var typeDefHandle in _mr.TypeDefinitions)
+            // Collect all user types (non-system, non-<Module>).
+            var userTypes = new List<TypeDefinitionHandle>();
+            foreach (var th in _mr.TypeDefinitions)
             {
-                var typeDef = _mr.GetTypeDefinition(typeDefHandle);
-                foreach (var methodHandle in typeDef.GetMethods())
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                if (name == "<Module>") continue;
+                userTypes.Add(th);
+            }
+
+            _sb.Clear();
+            _sb.AppendLine("#include <iostream>");
+            _sb.AppendLine("#include <string>");
+            _sb.AppendLine("#include <vector>");
+            _sb.AppendLine("#include <algorithm>");
+            _sb.AppendLine("#include <cmath>");
+            _sb.AppendLine("#include <chrono>");
+            _sb.AppendLine("#include <thread>");
+            _sb.AppendLine();
+
+            // Emit struct definitions for user types.
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                var ns = _mr.GetString(td.Namespace);
+                var fullName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
+
+                _sb.AppendLine($"struct {name};");
+            }
+            _sb.AppendLine();
+
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                var name = _mr.GetString(td.Name);
+                if (name == "<Module>") continue;
+
+                _sb.AppendLine($"struct {name}");
+                _sb.AppendLine("{");
+                // Fields
+                foreach (var fh in td.GetFields())
                 {
-                    var methodDef = _mr.GetMethodDefinition(methodHandle);
-                    var name = _mr.GetString(methodDef.Name);
-                    if (name == "Main" && methodDef.RelativeVirtualAddress != 0)
+                    var fd = _mr.GetFieldDefinition(fh);
+                    var fieldName = _mr.GetString(fd.Name);
+                    var fieldType = ResolveFieldType(fd);
+                    var cppType = ILTypeMapper.Map(fieldType);
+                    _sb.AppendLine($"    {cppType} {fieldName} = {{}};");
+                }
+                // Default constructor
+                _sb.AppendLine($"    {name}() = default;");
+                _sb.AppendLine("};");
+                _sb.AppendLine();
+            }
+
+            // Emit Main method.
+            byte[] ilBytes = null;
+            foreach (var th in userTypes)
+            {
+                var td = _mr.GetTypeDefinition(th);
+                foreach (var mh in td.GetMethods())
+                {
+                    var md = _mr.GetMethodDefinition(mh);
+                    var name = _mr.GetString(md.Name);
+                    if (name == "Main" && md.RelativeVirtualAddress != 0)
                     {
-                        var body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress);
-                        _methodBody = body;
-                        ilBytes = body.GetILBytes();
-                        ParseLocalTypes(body);
+                        _methodBody = peReader.GetMethodBody(md.RelativeVirtualAddress);
+                        ilBytes = _methodBody.GetILBytes();
                         break;
                     }
                 }
@@ -76,35 +118,10 @@ namespace BasicLang.Compiler.ILReader
                 throw new InvalidOperationException("Main method not found or has no body.");
 
             _il = ilBytes;
+            ParseLocalTypes(_methodBody);
 
-            // First pass: identify branch targets.
+            // Identify branch targets.
             IdentifyBranchTargets();
-
-            // Second pass: emit C++.
-            _sb.Clear();
-            _sb.AppendLine("#include <iostream>");
-            _sb.AppendLine("#include <string>");
-            _sb.AppendLine("#include <vector>");
-            _sb.AppendLine("#include <algorithm>");
-            _sb.AppendLine("#include <cmath>");
-            _sb.AppendLine("#include <chrono>");
-            _sb.AppendLine("#include <thread>");
-            _sb.AppendLine("#include \"BclShim.h\"");
-            _sb.AppendLine();
-            _sb.AppendLine("using namespace BclShim;");
-            _sb.AppendLine();
-
-            // Emit generic instantiations as typedefs (monomorphization via C++ templates).
-            if (_genericInstantiations.Count > 0)
-            {
-                _sb.AppendLine("// Generic instantiations (monomorphized)");
-                foreach (var gen in _genericInstantiations)
-                {
-                    var cppType = ILTypeMapper.Map(gen);
-                    _sb.AppendLine($"// {gen} -> {cppType}");
-                }
-                _sb.AppendLine();
-            }
 
             _sb.AppendLine("int main()");
             _sb.AppendLine("{");
@@ -125,15 +142,8 @@ namespace BasicLang.Compiler.ILReader
                 byte op = _il[i++];
                 switch (op)
                 {
-                    case 0x2B: // br.s (short)
-                    case 0x2C: // brfalse.s
-                    case 0x2D: // brtrue.s
-                    case 0x2E: // beq.s
-                    case 0x2F: // bge.s
-                    case 0x30: // bgt.s
-                    case 0x31: // ble.s
-                    case 0x32: // blt.s
-                    case 0x33: // bne.s
+                    case 0x2B: case 0x2C: case 0x2D: case 0x2E: case 0x2F:
+                    case 0x30: case 0x31: case 0x32: case 0x33:
                         {
                             sbyte offset = (sbyte)_il[i];
                             int target = i + 1 + offset;
@@ -141,16 +151,7 @@ namespace BasicLang.Compiler.ILReader
                             i += 1;
                             break;
                         }
-                    case 0x38: // br (long)
-                        {
-                            int target = BitConverter.ToInt32(_il, i);
-                            // target is relative to the next instruction
-                            int absTarget = i + 4 + target;
-                            _branchTargets.Add(absTarget);
-                            i += 4;
-                            break;
-                        }
-                    case 0x39: // brfalse (long)
+                    case 0x38: case 0x39: case 0x3A:
                         {
                             int target = BitConverter.ToInt32(_il, i);
                             int absTarget = i + 4 + target;
@@ -158,31 +159,34 @@ namespace BasicLang.Compiler.ILReader
                             i += 4;
                             break;
                         }
-                    case 0x3A: // brtrue (long)
-                        {
-                            int target = BitConverter.ToInt32(_il, i);
-                            int absTarget = i + 4 + target;
-                            _branchTargets.Add(absTarget);
-                            i += 4;
-                            break;
-                        }
-                    case 0x20: // ldc.i4 (long)
-                        i += 4;
-                        break;
-                    case 0x1F: // ldc.i4.s (short)
-                        i += 1;
-                        break;
-                    case 0x72: // ldstr
-                        i += 4;
-                        break;
-                    case 0x28: // call
-                        i += 4;
-                        break;
-                    case 0x11: // ldloc
-                    case 0x12: // ldloc.s? actually 0x12 is stloc
+                    case 0x1F: i += 1; break;
+                    case 0x20: i += 4; break;
+                    case 0x21: i += 8; break;
+                    case 0x22: i += 4; break;
+                    case 0x23: i += 8; break;
+                    case 0x72: i += 4; break;
+                    case 0x28: i += 4; break;
+                    case 0x6F: i += 4; break;
+                    case 0x73: i += 4; break;
+                    case 0x7B: i += 4; break;
+                    case 0x7D: i += 4; break;
+                    case 0x7E: i += 4; break;
+                    case 0x80: i += 4; break;
+                    case 0x8C: i += 4; break;
+                    case 0x79: i += 4; break;
+                    case 0x8D: i += 4; break;
+                    case 0x74: i += 4; break;
+                    case 0x75: i += 4; break;
+                    case 0x11: i += 2; break;
+                    case 0x13: i += 1; break;
+                    case 0x14: i += 1; break;
+                    case 0x0E: i += 1; break;
+                    case 0x0F: i += 1; break;
+                    case 0x10: i += 1; break;
+                    case 0xFE:
+                        i += 1; // skip second byte
                         break;
                     default:
-                        // Most other opcodes are 1 byte; some need special handling.
                         break;
                 }
             }
@@ -190,16 +194,13 @@ namespace BasicLang.Compiler.ILReader
 
         private void EmitMethodBody()
         {
-            // Check for exception regions (try/catch/finally).
             var regions = _methodBody != null ? _methodBody.ExceptionRegions : default;
             bool hasExceptions = regions.Length > 0;
 
-            // Build a map of offset → action for try/catch/finally boundaries.
-            // We'll check at each loop iteration.
-            var tryStarts = new System.Collections.Generic.Dictionary<int, int>(); // offset → region index
-            var tryEnds = new System.Collections.Generic.Dictionary<int, int>();
-            var handlerStarts = new System.Collections.Generic.Dictionary<int, ExceptionRegion>();
-            var handlerEnds = new System.Collections.Generic.Dictionary<int, ExceptionRegion>();
+            var tryStarts = new Dictionary<int, int>();
+            var tryEnds = new Dictionary<int, int>();
+            var handlerStarts = new Dictionary<int, ExceptionRegion>();
+            var handlerEnds = new Dictionary<int, ExceptionRegion>();
 
             if (hasExceptions)
             {
@@ -216,17 +217,14 @@ namespace BasicLang.Compiler.ILReader
             int i = 0;
             while (i < _il.Length)
             {
-                // Emit try/catch/finally boundaries.
                 if (hasExceptions)
                 {
-                    // Entering a try block
                     if (tryStarts.ContainsKey(i))
                     {
                         Indent();
                         _sb.AppendLine("try {");
                         _indent++;
                     }
-                    // Entering a catch/finally handler
                     if (handlerStarts.TryGetValue(i, out var handlerReg))
                     {
                         _indent--;
@@ -235,13 +233,11 @@ namespace BasicLang.Compiler.ILReader
                         {
                             _sb.AppendLine("} finally {");
                         }
-                        else if (handlerReg.Kind == ExceptionRegionKind.Catch)
+                        else
                         {
-                            // Resolve catch type
                             string catchType = "Exception";
                             if (!handlerReg.CatchType.IsNil)
                             {
-                                // Try to resolve the type name
                                 try
                                 {
                                     if (handlerReg.CatchType.Kind == HandleKind.TypeReference)
@@ -261,15 +257,12 @@ namespace BasicLang.Compiler.ILReader
                         }
                         _indent++;
                     }
-                    // Leaving a try block (entering handler) — handled by handler start above
-                    // Leaving a handler
                     if (handlerEnds.ContainsKey(i))
                     {
                         _indent--;
                         Indent();
                         _sb.AppendLine("}");
                     }
-                    // Leaving a try block without a handler (shouldn't happen in well-formed IL)
                     if (tryEnds.ContainsKey(i) && !handlerStarts.ContainsKey(i))
                     {
                         _indent--;
@@ -278,7 +271,6 @@ namespace BasicLang.Compiler.ILReader
                     }
                 }
 
-                // Emit label if this offset is a branch target.
                 if (_branchTargets.Contains(i))
                 {
                     Indent();
@@ -288,93 +280,57 @@ namespace BasicLang.Compiler.ILReader
                 byte op = _il[i++];
                 switch (op)
                 {
-                    case 0x00: // nop
-                        break;
-
-                    case 0x02: // ldarg.0
-                        _stack.Push("arg0");
-                        break;
-                    case 0x03: // ldarg.1
-                        _stack.Push("arg1");
-                        break;
-                    case 0x04: // ldarg.2
-                        _stack.Push("arg2");
-                        break;
-                    case 0x05: // ldarg.3
-                        _stack.Push("arg3");
-                        break;
-                    case 0x0E: // ldarg.s
-                        {
-                            int idx = _il[i++];
-                            _stack.Push($"arg{idx}");
-                            break;
-                        }
-                    case 0x0F: // ldarga.s
-                        i += 1;
-                        break;
-
-                    case 0x06: // ldloc.0
-                        _stack.Push(GetLocal(0));
-                        break;
-                    case 0x07: // ldloc.1
-                        _stack.Push(GetLocal(1));
-                        break;
-                    case 0x08: // ldloc.2
-                        _stack.Push(GetLocal(2));
-                        break;
-                    case 0x09: // ldloc.3
-                        _stack.Push(GetLocal(3));
-                        break;
-                    case 0x11: // ldloc
-                        {
-                            // ldloc takes a 2-byte index (little-endian)
-                            int idx = _il[i] | (_il[i + 1] << 8);
-                            i += 2;
-                            _stack.Push(GetLocal(idx));
-                            break;
-                        }
-                    case 0x12: // stloc? Actually 0x12 is stloc (2-byte)
-                        // Wait, stloc.0-3 are 0x0A-0x0D, stloc.s is 0x13, stloc is 0x15
-                        break;
-
-                    case 0x0A: // stloc.0
+                    case 0x00: break;
+                    case 0x02: _stack.Push("arg0"); break;
+                    case 0x03: _stack.Push("arg1"); break;
+                    case 0x04: _stack.Push("arg2"); break;
+                    case 0x05: _stack.Push("arg3"); break;
+                    case 0x06: _stack.Push(GetLocal(0)); break;
+                    case 0x07: _stack.Push(GetLocal(1)); break;
+                    case 0x08: _stack.Push(GetLocal(2)); break;
+                    case 0x09: _stack.Push(GetLocal(3)); break;
+                    case 0x0A:
                         {
                             string val = _stack.Pop();
-                            if (!_locals.ContainsKey(0))
-                            {
-                                _locals[0] = "local_0";
-                                Indent();
-                                _sb.AppendLine($"auto local_0 = {val};");
-                            }
-                            else
-                            {
-                                Indent();
-                                _sb.AppendLine($"local_0 = {val};");
-                            }
+                            if (!_locals.ContainsKey(0)) { _locals[0] = "local_0"; Indent(); _sb.AppendLine($"auto local_0 = {val};"); }
+                            else { Indent(); _sb.AppendLine($"local_0 = {val};"); }
                             break;
                         }
-                    case 0x0B: // stloc.1
+                    case 0x0B:
                         {
                             string val = _stack.Pop();
                             if (!_locals.ContainsKey(1)) { _locals[1] = "local_1"; Indent(); _sb.AppendLine($"auto local_1 = {val};"); }
                             else { Indent(); _sb.AppendLine($"local_1 = {val};"); }
                             break;
                         }
-                    case 0x0C: // stloc.2
+                    case 0x0C:
                         {
                             string val = _stack.Pop();
                             if (!_locals.ContainsKey(2)) { _locals[2] = "local_2"; Indent(); _sb.AppendLine($"auto local_2 = {val};"); }
                             else { Indent(); _sb.AppendLine($"local_2 = {val};"); }
                             break;
                         }
-                    case 0x0D: // stloc.3
+                    case 0x0D:
                         {
                             string val = _stack.Pop();
                             if (!_locals.ContainsKey(3)) { _locals[3] = "local_3"; Indent(); _sb.AppendLine($"auto local_3 = {val};"); }
                             else { Indent(); _sb.AppendLine($"local_3 = {val};"); }
                             break;
                         }
-                    case 0x13: // stloc.s
+                    case 0x0E:
+                        {
+                            int idx = _il[i++];
+                            _stack.Push($"arg{idx}");
+                            break;
+                        }
+                    case 0x11:
+                        {
+                            int idx = _il[i] | (_il[i + 1] << 8);
+                            i += 2;
+                            _stack.Push(GetLocal(idx));
+                            break;
+                        }
+                    case 0x13:
                         {
                             int idx = _il[i++];
                             string val = _stack.Pop();
@@ -382,87 +338,65 @@ namespace BasicLang.Compiler.ILReader
                             else { Indent(); _sb.AppendLine($"local_{idx} = {val};"); }
                             break;
                         }
-
-                    case 0x14: // ldloc.s
+                    case 0x14:
                         {
                             int idx = _il[i++];
                             _stack.Push(GetLocal(idx));
                             break;
                         }
-
-                    case 0x16: // ldc.i4.0
-                        _stack.Push("0");
-                        break;
-                    case 0x17: // ldc.i4.1
-                        _stack.Push("1");
-                        break;
-                    case 0x18: // ldc.i4.2
-                        _stack.Push("2");
-                        break;
-                    case 0x19: // ldc.i4.3
-                        _stack.Push("3");
-                        break;
-                    case 0x1A: // ldc.i4.4
-                        _stack.Push("4");
-                        break;
-                    case 0x1B: // ldc.i4.5
-                        _stack.Push("5");
-                        break;
-                    case 0x1C: // ldc.i4.6
-                        _stack.Push("6");
-                        break;
-                    case 0x1D: // ldc.i4.7
-                        _stack.Push("7");
-                        break;
-                    case 0x1E: // ldc.i4.8
-                        _stack.Push("8");
-                        break;
-                    case 0x1F: // ldc.i4.s
+                    case 0x16: _stack.Push("0"); break;
+                    case 0x17: _stack.Push("1"); break;
+                    case 0x18: _stack.Push("2"); break;
+                    case 0x19: _stack.Push("3"); break;
+                    case 0x1A: _stack.Push("4"); break;
+                    case 0x1B: _stack.Push("5"); break;
+                    case 0x1C: _stack.Push("6"); break;
+                    case 0x1D: _stack.Push("7"); break;
+                    case 0x1E: _stack.Push("8"); break;
+                    case 0x1F:
                         {
                             sbyte val = (sbyte)_il[i++];
                             _stack.Push(val.ToString());
                             break;
                         }
-                    case 0x20: // ldc.i4
+                    case 0x20:
                         {
                             int val = BitConverter.ToInt32(_il, i);
                             i += 4;
                             _stack.Push(val.ToString());
                             break;
                         }
-                    case 0x21: // ldc.i8
+                    case 0x21:
                         {
                             long val = BitConverter.ToInt64(_il, i);
                             i += 8;
                             _stack.Push(val.ToString() + "LL");
                             break;
                         }
-                    case 0x22: // ldc.r4
+                    case 0x22:
                         {
                             float val = BitConverter.ToSingle(_il, i);
                             i += 4;
                             _stack.Push(val.ToString("G9") + "f");
                             break;
                         }
-                    case 0x23: // ldc.r8
+                    case 0x23:
                         {
                             double val = BitConverter.ToDouble(_il, i);
                             i += 8;
                             _stack.Push(val.ToString("G17"));
                             break;
                         }
-
-                    case 0x72: // ldstr
+                    case 0x25:
                         {
-                            uint token = BitConverter.ToUInt32(_il, i);
-                            i += 4;
-                            var usHandle = MetadataTokens.UserStringHandle((int)token);
-                            var str = _mr.GetUserString(usHandle);
-                            // Runtime support: strings are std::string in VGS C++ backend
-                            _stack.Push($"std::string(\"{Escape(str)}\")");
+                            if (_stack.Count > 0) _stack.Push(_stack.Peek());
                             break;
                         }
-
+                    case 0x26:
+                        {
+                            if (_stack.Count > 0) _stack.Pop();
+                            break;
+                        }
                     case 0x28: // call
                     case 0x6F: // callvirt
                         {
@@ -470,10 +404,7 @@ namespace BasicLang.Compiler.ILReader
                             i += 4;
                             string methodName = ResolveMethodName(token);
                             string arg = _stack.Count > 0 ? _stack.Pop() : "";
-
-                            // Known BCL calls → C++ equivalents (Phase 3/4 runtime support)
-                            if (methodName.EndsWith("Console.WriteLine", StringComparison.Ordinal)
-                                || methodName.EndsWith("Console.Write", StringComparison.Ordinal))
+                            if (methodName.EndsWith("Console.WriteLine", StringComparison.Ordinal) || methodName.EndsWith("Console.Write", StringComparison.Ordinal))
                             {
                                 Indent();
                                 _sb.AppendLine($"std::cout << {arg} << std::endl;");
@@ -496,28 +427,15 @@ namespace BasicLang.Compiler.ILReader
                             }
                             else if (methodName.EndsWith("Math.Pow", StringComparison.Ordinal))
                             {
-                                // Pow takes 2 args
-                                if (_stack.Count > 0)
-                                {
-                                    var arg2 = _stack.Pop();
-                                    _stack.Push($"std::pow({arg2}, {arg})");
-                                }
+                                if (_stack.Count > 0) { var a2 = _stack.Pop(); _stack.Push($"std::pow({a2}, {arg})"); }
                             }
                             else if (methodName.EndsWith("Math.Min", StringComparison.Ordinal))
                             {
-                                if (_stack.Count > 0)
-                                {
-                                    var arg2 = _stack.Pop();
-                                    _stack.Push($"std::min({arg2}, {arg})");
-                                }
+                                if (_stack.Count > 0) { var a2 = _stack.Pop(); _stack.Push($"std::min({a2}, {arg})"); }
                             }
                             else if (methodName.EndsWith("Math.Max", StringComparison.Ordinal))
                             {
-                                if (_stack.Count > 0)
-                                {
-                                    var arg2 = _stack.Pop();
-                                    _stack.Push($"std::max({arg2}, {arg})");
-                                }
+                                if (_stack.Count > 0) { var a2 = _stack.Pop(); _stack.Push($"std::max({a2}, {arg})"); }
                             }
                             else if (methodName.EndsWith("Math.Round", StringComparison.Ordinal))
                             {
@@ -547,36 +465,31 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 _stack.Push($"static_cast<bool>({arg})");
                             }
-                            // Threading (Phase 3 runtime support)
+                            else if (methodName.Contains("List") && methodName.EndsWith("Add", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0) { var val = _stack.Pop(); Indent(); _sb.AppendLine($"{arg}.push_back({val});"); }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("get_Count", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"{arg}.size()");
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Add", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2) { var val = _stack.Pop(); var key = _stack.Pop(); Indent(); _sb.AppendLine($"{arg}[{key}] = {val};"); }
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("get_Item", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0) { var key = _stack.Pop(); _stack.Push($"{arg}[{key}]"); }
+                            }
                             else if (methodName.Contains("Thread") && methodName.EndsWith("Sleep", StringComparison.Ordinal))
                             {
                                 Indent();
                                 _sb.AppendLine($"std::this_thread::sleep_for(std::chrono::milliseconds({arg}));");
                             }
-                            else if (methodName.Contains("Thread") && methodName.EndsWith("Start", StringComparison.Ordinal))
-                            {
-                                Indent();
-                                _sb.AppendLine($"/* thread->Start() */");
-                            }
-                            // Phase 4: BCL shim support — DateTime
-                            else if (methodName.Contains("DateTime") && methodName.EndsWith("Parse", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* DateTime.Parse */ {arg}");
-                            }
-                            else if (methodName.Contains("DateTime") && methodName.EndsWith("ToString", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* DateTime.ToString */ {arg}");
-                            }
-                            // Phase 4: BCL shim support — Environment
-                            else if (methodName.Contains("Environment") && methodName.EndsWith("GetEnvironmentVariable", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"std::getenv({arg}.c_str())");
-                            }
                             else if (methodName.Contains("Environment") && methodName.EndsWith("NewLine", StringComparison.Ordinal))
                             {
-                                _stack.Push("\"\\n\"");
+                                _stack.Push("\"\\\\n\"");
                             }
-                            // Phase 4: BCL shim support — Array
                             else if (methodName.Contains("Array") && methodName.EndsWith("Sort", StringComparison.Ordinal))
                             {
                                 Indent();
@@ -586,111 +499,6 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 Indent();
                                 _sb.AppendLine($"std::reverse({arg}.begin(), {arg}.end());");
-                            }
-                            // Phase 4: BCL shim support — StringBuilder
-                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("Append", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count > 0)
-                                {
-                                    var val = _stack.Pop();
-                                    Indent();
-                                    _sb.AppendLine($"{arg}.append({val});");
-                                }
-                            }
-                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("ToString", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"{arg}");
-                            }
-                            // Phase 4: BCL shim support — File I/O
-                            else if (methodName.Contains("File") && methodName.EndsWith("ReadAllText", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* File.ReadAllText */ {arg}");
-                            }
-                            else if (methodName.Contains("File") && methodName.EndsWith("WriteAllText", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count >= 2)
-                                {
-                                    var content = _stack.Pop();
-                                    var path = _stack.Pop();
-                                    Indent();
-                                    _sb.AppendLine($"/* File.WriteAllText({path}, {content}) */");
-                                }
-                            }
-                            else if (methodName.Contains("File") && methodName.EndsWith("Exists", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* File.Exists */ {arg}");
-                            }
-                            // String methods
-                            else if (methodName.EndsWith("String.Substring", StringComparison.Ordinal))
-                            {
-                                // Substring(start, length) or Substring(start)
-                                if (_stack.Count >= 2)
-                                {
-                                    var len = _stack.Pop();
-                                    var start = _stack.Pop();
-                                    _stack.Push($"/* substring */ {arg}.substr({start}, {len})");
-                                }
-                                else
-                                {
-                                    _stack.Push($"/* substring */ {arg}.substr({arg})");
-                                }
-                            }
-                            else if (methodName.EndsWith("String.ToUpper", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* ToUpper */ {arg}");
-                            }
-                            else if (methodName.EndsWith("String.ToLower", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"/* ToLower */ {arg}");
-                            }
-                            else if (methodName.EndsWith("String.Contains", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count > 0)
-                                {
-                                    var search = _stack.Pop();
-                                    _stack.Push($"({arg}.find({search}) != std::string::npos)");
-                                }
-                            }
-                            else if (methodName.EndsWith("String.Length", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"{arg}.length()");
-                            }
-                            // List methods (BasicLang::List)
-                            else if (methodName.Contains("List") && methodName.EndsWith("Add", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count > 0)
-                                {
-                                    var val = _stack.Pop();
-                                    Indent();
-                                    _sb.AppendLine($"{arg}.push_back({val});");
-                                }
-                            }
-                            else if (methodName.Contains("List") && methodName.EndsWith("get_Count", StringComparison.Ordinal))
-                            {
-                                _stack.Push($"{arg}.size()");
-                            }
-                            // Dictionary methods
-                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Add", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count >= 2)
-                                {
-                                    var val = _stack.Pop();
-                                    var key = _stack.Pop();
-                                    Indent();
-                                    _sb.AppendLine($"{arg}[{key}] = {val};");
-                                }
-                            }
-                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("get_Item", StringComparison.Ordinal))
-                            {
-                                if (_stack.Count > 0)
-                                {
-                                    var key = _stack.Pop();
-                                    _stack.Push($"{arg}[{key}]");
-                                }
-                            }
-                            else if (methodName == "Console.ReadLine")
-                            {
-                                _stack.Push("std::cin"); // placeholder
                             }
                             else
                             {
@@ -709,14 +517,13 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
 
-                    case 0x25: // dup
+                    case 0x72: // ldstr
                         {
-                            if (_stack.Count > 0) _stack.Push(_stack.Peek());
-                            break;
-                        }
-                    case 0x26: // pop
-                        {
-                            if (_stack.Count > 0) _stack.Pop();
+                            uint token = BitConverter.ToUInt32(_il, i);
+                            i += 4;
+                            var usHandle = MetadataTokens.UserStringHandle((int)token);
+                            var str = _mr.GetUserString(usHandle);
+                            _stack.Push($"std::string(\"{Escape(str)}\")");
                             break;
                         }
 
@@ -724,7 +531,6 @@ namespace BasicLang.Compiler.ILReader
                         {
                             uint token = BitConverter.ToUInt32(_il, i);
                             i += 4;
-                            // newobj token is a MethodDef/MemberRef (constructor) — resolve declaring type
                             string typeName = ResolveConstructorType(token);
                             string cppType = ILTypeMapper.Map(typeName);
                             _stack.Push($"new {cppType}()");
@@ -777,10 +583,10 @@ namespace BasicLang.Compiler.ILReader
                         }
 
                     case 0x8C: // box
-                        i += 4; // skip type token (value stays on stack)
+                        i += 4;
                         break;
                     case 0x79: // unbox
-                        i += 4; // skip type token
+                        i += 4;
                         break;
 
                     case 0x8E: // ldlen
@@ -793,18 +599,20 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
 
-                    // Array element access (Phase 3 runtime support)
-                    case 0x90: // ldelem.i1
-                    case 0x91: // ldelem.u1
-                    case 0x92: // ldelem.i2
-                    case 0x93: // ldelem.u2
-                    case 0x94: // ldelem.i4
-                    case 0x95: // ldelem.u4
-                    case 0x96: // ldelem.i8
-                    case 0x98: // ldelem.r4
-                    case 0x99: // ldelem.r8
-                    case 0x9A: // ldelem.ref
-                    case 0xA3: // ldelem (generic)
+                    case 0x8D: // newarr
+                        {
+                            i += 4;
+                            if (_stack.Count > 0)
+                            {
+                                var size = _stack.Pop();
+                                _stack.Push($"new Array({size})");
+                            }
+                            break;
+                        }
+
+                    case 0x90: case 0x91: case 0x92: case 0x93: case 0x94:
+                    case 0x95: case 0x96: case 0x98: case 0x99: case 0x9A:
+                    case 0xA3: // ldelem
                         {
                             if (_stack.Count >= 2)
                             {
@@ -815,14 +623,8 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
 
-                    case 0x9C: // stelem.i1
-                    case 0x9D: // stelem.i2
-                    case 0x9E: // stelem.i4
-                    case 0x9F: // stelem.i8
-                    case 0xA0: // stelem.r4
-                    case 0xA1: // stelem.r8
-                    case 0xA2: // stelem.ref
-                    case 0xA4: // stelem (generic)
+                    case 0x9C: case 0x9D: case 0x9E: case 0x9F:
+                    case 0xA0: case 0xA1: case 0xA2: case 0xA4: // stelem
                         {
                             if (_stack.Count >= 3)
                             {
@@ -835,26 +637,8 @@ namespace BasicLang.Compiler.ILReader
                             break;
                         }
 
-                    case 0x8D: // newarr
-                        {
-                            i += 4; // skip type token
-                            if (_stack.Count > 0)
-                            {
-                                var size = _stack.Pop();
-                                _stack.Push($"new Array({size})");
-                            }
-                            break;
-                        }
-
-                    case 0x67: // conv.i1
-                    case 0x68: // conv.i2
-                    case 0x69: // conv.i4
-                    case 0x6A: // conv.i8
-                    case 0x6B: // conv.r4
-                    case 0x6C: // conv.r8
-                    case 0x6D: // conv.u4
-                    case 0x6E: // conv.u8
-                        // Leave value on stack (C++ handles conversion)
+                    case 0x67: case 0x68: case 0x69: case 0x6A:
+                    case 0x6B: case 0x6C: case 0x6D: case 0x6E:
                         break;
 
                     case 0x74: // castclass
@@ -876,7 +660,6 @@ namespace BasicLang.Compiler.ILReader
                         }
 
                     case 0x2A: // ret
-                        // End of method — don't emit anything extra
                         break;
 
                     case 0x2B: // br.s
@@ -937,6 +720,7 @@ namespace BasicLang.Compiler.ILReader
                             _sb.AppendLine($"if ({valt2}) goto label_{target};");
                             break;
                         }
+
                     case 0x58: // add
                         {
                             string right = _stack.Pop();
@@ -965,14 +749,12 @@ namespace BasicLang.Compiler.ILReader
                             _stack.Push($"({left} / {right})");
                             break;
                         }
-
                     case 0x60: // neg
                         {
                             string val = _stack.Pop();
                             _stack.Push($"(-{val})");
                             break;
                         }
-
                     case 0xFE: // two-byte opcode
                         {
                             byte op2 = _il[i++];
@@ -997,6 +779,12 @@ namespace BasicLang.Compiler.ILReader
                                         string right = _stack.Pop();
                                         string left = _stack.Pop();
                                         _stack.Push($"({left} < {right})");
+                                        break;
+                                    }
+                                case 0x1A: // rethrow
+                                    {
+                                        Indent();
+                                        _sb.AppendLine("throw;");
                                         break;
                                     }
                                 default:
@@ -1037,8 +825,6 @@ namespace BasicLang.Compiler.ILReader
                     var handle = MetadataTokens.MethodDefinitionHandle(rid);
                     var methodDef = _mr.GetMethodDefinition(handle);
                     var name = _mr.GetString(methodDef.Name);
-                    // Get declaring type
-                    // MethodDef doesn't directly give type; need to find the type that owns it
                     foreach (var typeHandle in _mr.TypeDefinitions)
                     {
                         var typeDef = _mr.GetTypeDefinition(typeHandle);
@@ -1060,7 +846,6 @@ namespace BasicLang.Compiler.ILReader
                     var handle = MetadataTokens.MemberReferenceHandle(rid);
                     var memberRef = _mr.GetMemberReference(handle);
                     var name = _mr.GetString(memberRef.Name);
-                    // Resolve the parent type
                     string parentName = "Unknown";
                     if (memberRef.Parent.Kind == HandleKind.TypeReference)
                     {
@@ -1076,61 +861,27 @@ namespace BasicLang.Compiler.ILReader
                         var tns = _mr.GetString(typeDef.Namespace);
                         parentName = string.IsNullOrEmpty(tns) ? tn : $"{tns}.{tn}";
                     }
+                    else if (memberRef.Parent.Kind == HandleKind.TypeSpecification)
+                    {
+                        var typeSpec = _mr.GetTypeSpecification((TypeSpecificationHandle)memberRef.Parent);
+                        var sig = typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                        if (sig.Contains("<"))
+                            _genericInstantiations.Add(sig);
+                        parentName = sig;
+                    }
                     return $"{parentName}.{name}";
                 }
                 else if (tokenType == 0x2B) // MethodSpec
                 {
                     var handle = MetadataTokens.MethodSpecificationHandle(rid);
                     var methodSpec = _mr.GetMethodSpecification(handle);
-                    // Resolve the underlying method
                     return ResolveMethodName((uint)MetadataTokens.GetToken(methodSpec.Method));
                 }
             }
             catch
             {
-                // Fall through to default
             }
             return "UnknownMethod";
-        }
-
-        private string ResolveTypeName(uint token)
-        {
-            try
-            {
-                int tokenType = (int)(token >> 24);
-                int rid = (int)(token & 0x00FFFFFF);
-
-                if (tokenType == 0x02) // TypeDef
-                {
-                    var handle = MetadataTokens.TypeDefinitionHandle(rid);
-                    var typeDef = _mr.GetTypeDefinition(handle);
-                    var name = _mr.GetString(typeDef.Name);
-                    var ns = _mr.GetString(typeDef.Namespace);
-                    return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-                }
-                else if (tokenType == 0x01) // TypeRef
-                {
-                    var handle = MetadataTokens.TypeReferenceHandle(rid);
-                    var typeRef = _mr.GetTypeReference(handle);
-                    var name = _mr.GetString(typeRef.Name);
-                    var ns = _mr.GetString(typeRef.Namespace);
-                    return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
-                }
-                else if (tokenType == 0x1B) // TypeSpec
-                {
-                    var handle = MetadataTokens.TypeSpecificationHandle(rid);
-                    var typeSpec = _mr.GetTypeSpecification(handle);
-                    var sig = typeSpec.DecodeSignature(new SimpleTypeProvider(_mr), null);
-                    // Track generic instantiation
-                    if (sig.Contains("<"))
-                        _genericInstantiations.Add(sig);
-                    return sig;
-                }
-            }
-            catch
-            {
-            }
-            return "System.Object";
         }
 
         private string ResolveConstructorType(uint token)
@@ -1144,7 +895,6 @@ namespace BasicLang.Compiler.ILReader
                 {
                     var handle = MetadataTokens.MethodDefinitionHandle(rid);
                     var methodDef = _mr.GetMethodDefinition(handle);
-                    // Find declaring type
                     foreach (var typeHandle in _mr.TypeDefinitions)
                     {
                         var typeDef = _mr.GetTypeDefinition(typeHandle);
@@ -1191,6 +941,186 @@ namespace BasicLang.Compiler.ILReader
             {
             }
             return "System.Object";
+        }
+
+        private string ResolveFieldType(FieldDefinition fieldDef)
+        {
+            try
+            {
+                var sigBlob = fieldDef.Signature;
+                if (sigBlob.IsNil) return "object";
+                var reader = _mr.GetBlobReader(sigBlob);
+                if (reader.Length == 0) return "object";
+                byte first = reader.ReadByte();
+                if (first != 0x06) return "object";
+                // Read type code
+                if (reader.Length == 0) return "object";
+                byte typeCode = reader.ReadByte();
+                switch (typeCode)
+                {
+                    case 0x08: return "int";
+                    case 0x09: return "uint";
+                    case 0x0A: return "long";
+                    case 0x0C: return "float";
+                    case 0x0D: return "double";
+                    case 0x0E: return "string";
+                    case 0x12: // CLASS
+                        {
+                            uint token = ReadCompressedUInt(ref reader);
+                            int table = (int)(token & 0x03);
+                            int rid = (int)(token >> 2);
+                            EntityHandle handle = table == 0 ? MetadataTokens.TypeDefinitionHandle(rid)
+                                : table == 1 ? MetadataTokens.TypeReferenceHandle(rid)
+                                : MetadataTokens.TypeSpecificationHandle(rid);
+                            return ResolveTypeName(handle);
+                        }
+                    case 0x11: // VALUETYPE
+                        {
+                            uint token = ReadCompressedUInt(ref reader);
+                            int table = (int)(token & 0x03);
+                            int rid = (int)(token >> 2);
+                            EntityHandle handle = table == 0 ? MetadataTokens.TypeDefinitionHandle(rid)
+                                : table == 1 ? MetadataTokens.TypeReferenceHandle(rid)
+                                : MetadataTokens.TypeSpecificationHandle(rid);
+                            return ResolveTypeName(handle);
+                        }
+                    case 0x14: // SZARRAY
+                        {
+                            var elemType = ReadTypeFromBlob(ref reader);
+                            return elemType + "[]";
+                        }
+                    case 0x15: // GENERICINST
+                        {
+                            byte gType = reader.ReadByte();
+                            var genToken = ReadCompressedUInt(ref reader);
+                            int gTable = (int)(genToken & 0x03);
+                            int gRid = (int)(genToken >> 2);
+                            EntityHandle genHandle = gTable == 0 ? MetadataTokens.TypeDefinitionHandle(gRid)
+                                : gTable == 1 ? MetadataTokens.TypeReferenceHandle(gRid)
+                                : MetadataTokens.TypeSpecificationHandle(gRid);
+                            var genTypeName = ResolveTypeName(genHandle);
+                            int argCount = (int)ReadCompressedUInt(ref reader);
+                            var args = new System.Collections.Generic.List<string>();
+                            for (int i = 0; i < argCount; i++)
+                                args.Add(ReadTypeFromBlob(ref reader));
+                            return $"{genTypeName}<{string.Join(",", args)}>";
+                        }
+                    default:
+                        return "object";
+                }
+            }
+            catch
+            {
+                return "object";
+            }
+        }
+
+        private string ReadTypeFromBlob(ref BlobReader reader)
+        {
+            if (reader.Length == 0) return "object";
+            byte typeCode = reader.ReadByte();
+            switch (typeCode)
+            {
+                case 0x02: return "bool";
+                case 0x03: return "char";
+                case 0x04: return "sbyte";
+                case 0x05: return "byte";
+                case 0x06: return "short";
+                case 0x07: return "ushort";
+                case 0x08: return "int";
+                case 0x09: return "uint";
+                case 0x0A: return "long";
+                case 0x0B: return "ulong";
+                case 0x0C: return "float";
+                case 0x0D: return "double";
+                case 0x0E: return "string";
+                case 0x11: // VALUETYPE
+                    {
+                        uint token = ReadCompressedUInt(ref reader);
+                        int table = (int)(token & 0x03);
+                        int rid = (int)(token >> 2);
+                        EntityHandle handle = table == 0 ? MetadataTokens.TypeDefinitionHandle(rid)
+                            : table == 1 ? MetadataTokens.TypeReferenceHandle(rid)
+                            : MetadataTokens.TypeSpecificationHandle(rid);
+                        return ResolveTypeName(handle);
+                    }
+                case 0x12: // CLASS
+                    {
+                        uint token = ReadCompressedUInt(ref reader);
+                        int table = (int)(token & 0x03);
+                        int rid = (int)(token >> 2);
+                        EntityHandle handle = table == 0 ? MetadataTokens.TypeDefinitionHandle(rid)
+                            : table == 1 ? MetadataTokens.TypeReferenceHandle(rid)
+                            : MetadataTokens.TypeSpecificationHandle(rid);
+                        return ResolveTypeName(handle);
+                    }
+                case 0x14: // SZARRAY
+                    {
+                        var elemType = ReadTypeFromBlob(ref reader);
+                        return elemType + "[]";
+                    }
+                case 0x15: // GENERICINST
+                    {
+                        byte gType = reader.ReadByte();
+                        uint genToken = ReadCompressedUInt(ref reader);
+                        int gTable = (int)(genToken & 0x03);
+                        int gRid = (int)(genToken >> 2);
+                        EntityHandle genHandle = gTable == 0 ? MetadataTokens.TypeDefinitionHandle(gRid)
+                            : gTable == 1 ? MetadataTokens.TypeReferenceHandle(gRid)
+                            : MetadataTokens.TypeSpecificationHandle(gRid);
+                        var genTypeName = ResolveTypeName(genHandle);
+                        int argCount = (int)ReadCompressedUInt(ref reader);
+                        var args = new System.Collections.Generic.List<string>();
+                        for (int i = 0; i < argCount; i++)
+                            args.Add(ReadTypeFromBlob(ref reader));
+                        return $"{genTypeName}<{string.Join(",", args)}>";
+                    }
+                default:
+                    return "object";
+            }
+        }
+
+        private uint ReadCompressedUInt(ref BlobReader reader)
+        {
+            byte first = reader.ReadByte();
+            if ((first & 0x80) == 0) return first;
+            if ((first & 0xC0) == 0x80)
+            {
+                byte second = reader.ReadByte();
+                return (uint)(((first & 0x3F) << 8) | second);
+            }
+            byte b2 = reader.ReadByte();
+            byte b3 = reader.ReadByte();
+            byte b4 = reader.ReadByte();
+            return (uint)(((first & 0x1F) << 24) | (b2 << 16) | (b3 << 8) | b4);
+        }
+
+        private string ResolveTypeName(EntityHandle handle)
+        {
+            if (handle.IsNil) return "void";
+            if (handle.Kind == HandleKind.TypeDefinition)
+            {
+                var td = _mr.GetTypeDefinition((TypeDefinitionHandle)handle);
+                var n = _mr.GetString(td.Name);
+                var ns = _mr.GetString(td.Namespace);
+                return string.IsNullOrEmpty(ns) ? n : $"{ns}.{n}";
+            }
+            if (handle.Kind == HandleKind.TypeReference)
+            {
+                var tr = _mr.GetTypeReference((TypeReferenceHandle)handle);
+                var n = _mr.GetString(tr.Name);
+                var ns = _mr.GetString(tr.Namespace);
+                return string.IsNullOrEmpty(ns) ? n : $"{ns}.{n}";
+            }
+            if (handle.Kind == HandleKind.TypeSpecification)
+            {
+                var ts = _mr.GetTypeSpecification((TypeSpecificationHandle)handle);
+                var sig = ts.DecodeSignature(new SimpleTypeProvider(_mr), null);
+                if (sig.Contains("<"))
+                    _genericInstantiations.Add(sig);
+                return sig;
+            }
+            return handle.Kind.ToString();
         }
 
         private string ResolveFieldName(uint token)
@@ -1248,10 +1178,8 @@ namespace BasicLang.Compiler.ILReader
             {
                 name = $"local_{idx}";
                 _locals[idx] = name;
-                // Declare the variable with its IL type (mapped to C++)
                 var cppType = _localTypes.TryGetValue(idx, out var t) ? ILTypeMapper.Map(t) : "int";
-                // If type is void* (object), use auto with default
-                if (cppType == "void*") cppType = "int"; // fallback for spike
+                if (cppType == "void*") cppType = "int";
                 Indent();
                 _sb.AppendLine($"{cppType} {name} = {{}};");
             }
