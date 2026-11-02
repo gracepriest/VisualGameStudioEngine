@@ -1415,6 +1415,14 @@ namespace BasicLang.Compiler.Driver
         /// </summary>
         static int CompileFile(string filePath, string[] args)
         {
+            // IL2CPP target: compile .bas -> MSIL -> read IL -> emit C++ -> compile natively.
+            // This bypasses the normal IR-based pipeline since IL2CPP reads IL, not IR.
+            var targetArg = args.FirstOrDefault(a => a.StartsWith("--target="));
+            if (targetArg != null && targetArg.Substring("--target=".Length).ToLowerInvariant() == "il2cpp")
+            {
+                return CompileFileIL2CPP(filePath, args);
+            }
+
             Console.WriteLine($"Compiling: {filePath}");
             Console.WriteLine();
 
@@ -1748,6 +1756,112 @@ namespace BasicLang.Compiler.Driver
         // ====================================================================
         // Demo 1: Simple Function
         // ====================================================================
+
+        static int CompileFileIL2CPP(string filePath, string[] args)
+        {
+            Console.WriteLine($"Compiling (IL2CPP): {filePath}");
+            Console.WriteLine();
+
+            var outputDir = Path.GetDirectoryName(Path.GetFullPath(filePath)) ?? ".";
+            var baseName = Path.GetFileNameWithoutExtension(filePath);
+            var ilPath = Path.Combine(outputDir, baseName + ".il");
+            var pePath = Path.Combine(outputDir, baseName + ".exe");
+            var cppPath = Path.Combine(outputDir, baseName + "_il2cpp.cpp");
+            var binPath = Path.Combine(outputDir, baseName + "_il2cpp.exe");
+
+            // Step 1: Compile .bas to MSIL
+            Console.WriteLine("  Step 1: Compiling to MSIL...");
+            var options = new BasicLang.Compiler.CompilerOptions();
+            options.TargetBackend = "msil";
+            options.EnableNetResolution();
+            var compiler = new BasicLang.Compiler.BasicCompiler(options);
+            var result = compiler.CompileFile(filePath);
+            if (!result.Success || result.CombinedIR == null)
+            {
+                Console.Error.WriteLine("  MSIL compilation failed.");
+                foreach (var err in result.AllErrors) Console.Error.WriteLine($"    {err.Message}");
+                return 1;
+            }
+            // Generate MSIL code
+            var msilGen = new BasicLang.Compiler.CodeGen.MSIL.MSILCodeGenerator();
+            var msilCode = msilGen.Generate(result.CombinedIR);
+            File.WriteAllText(ilPath, msilCode);
+            Console.WriteLine("  MSIL compilation successful.");
+
+            // Step 2: Assemble MSIL to PE with ilasm
+            Console.WriteLine("  Step 2: Assembling IL with ilasm...");
+            var ilasmPath = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe";
+            if (!File.Exists(ilasmPath))
+            {
+                ilasmPath = "ilasm";
+            }
+            var psi = new System.Diagnostics.ProcessStartInfo(ilasmPath,
+                $"\"{ilPath}\" /exe /output=\"{pePath}\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var proc = System.Diagnostics.Process.Start(psi)!;
+            proc.WaitForExit();
+            if (proc.ExitCode != 0 || !File.Exists(pePath))
+            {
+                Console.Error.WriteLine($"  ilasm failed: {proc.StandardError.ReadToEnd()}");
+                return 1;
+            }
+            Console.WriteLine("  IL assembly successful.");
+
+            // Step 3: Read IL and emit C++
+            Console.WriteLine("  Step 3: Emitting C++ from IL...");
+            var emitter = new BasicLang.Compiler.ILReader.ILCppEmitter(pePath);
+            var cppCode = emitter.Emit();
+            File.WriteAllText(cppPath, cppCode);
+            Console.WriteLine($"  C++ written to: {cppPath}");
+
+            // Step 4: Compile C++ with MSVC
+            Console.WriteLine("  Step 4: Compiling C++ with MSVC...");
+            var vsPath = @"C:\Program Files\Microsoft Visual Studio\2022\Enterprise";
+            var vcvars = Path.Combine(vsPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
+            var shimDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "BasicLang", "Compiler", "CodeGen", "CPlusPlus");
+            // Fallback to source tree
+            if (!Directory.Exists(shimDir))
+                shimDir = @"C:\Users\melvi\source\repos\VisualGameStudioEngine\BasicLang\Compiler\CodeGen\CPlusPlus";
+
+            var compilePsi = new System.Diagnostics.ProcessStartInfo("cmd.exe",
+                $"/c \"\"{vcvars}\" && cl /EHsc /I\"{shimDir}\" /Fe:\"{binPath}\" \"{cppPath}\"\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var compileProc = System.Diagnostics.Process.Start(compilePsi)!;
+            var compileOut = compileProc.StandardOutput.ReadToEnd();
+            var compileErr = compileProc.StandardError.ReadToEnd();
+            compileProc.WaitForExit();
+            if (compileProc.ExitCode != 0)
+            {
+                Console.Error.WriteLine($"  C++ compilation failed:");
+                Console.Error.WriteLine(compileErr);
+                return 1;
+            }
+            Console.WriteLine("  C++ compilation successful.");
+
+            // Step 5: Run
+            Console.WriteLine("  Step 5: Running...");
+            Console.WriteLine();
+            var runPsi = new System.Diagnostics.ProcessStartInfo(binPath)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = false
+            };
+            var runProc = System.Diagnostics.Process.Start(runPsi)!;
+            runProc.WaitForExit();
+            Console.WriteLine();
+            Console.WriteLine($"  Output binary: {binPath}");
+            return runProc.ExitCode;
+        }
 
         static void DemoSimpleFunction()
         {
