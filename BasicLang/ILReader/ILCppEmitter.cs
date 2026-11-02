@@ -587,6 +587,70 @@ namespace BasicLang.Compiler.ILReader
                                     _stack.Push($"BclShim::IndexOf({arg}, {search})");
                                 }
                             }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Format", StringComparison.Ordinal))
+                            {
+                                // String.Format - placeholder (just return the format string)
+                                _stack.Push($"/* String.Format */ {arg}");
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Join", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* String.Join */ {arg}");
+                            }
+                            else if (methodName.Contains("String") && methodName.EndsWith("Split", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* String.Split */ {arg}");
+                            }
+                            // List methods (expanded)
+                            else if (methodName.Contains("List") && methodName.EndsWith("Insert", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var val = _stack.Pop();
+                                    var idx = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.insert({arg}.begin() + {idx}, {val});");
+                                }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("RemoveAt", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var idx = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.erase({arg}.begin() + {idx});");
+                                }
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("Sort", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::sort({arg}.begin(), {arg}.end());");
+                            }
+                            else if (methodName.Contains("List") && methodName.EndsWith("IndexOf", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    _stack.Push($"(int)(std::find({arg}.begin(), {arg}.end(), {val}) - {arg}.begin())");
+                                }
+                            }
+                            // Dictionary methods (expanded)
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("TryGetValue", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var val = _stack.Pop();
+                                    var key = _stack.Pop();
+                                    _stack.Push($"/* TryGetValue */ {arg}[{key}]");
+                                }
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Keys", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* {arg}.keys */");
+                            }
+                            else if (methodName.Contains("Dictionary") && methodName.EndsWith("Values", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* {arg}.values */");
+                            }
                             // List methods (expanded)
                             else if (methodName.Contains("List") && methodName.EndsWith("Remove", StringComparison.Ordinal))
                             {
