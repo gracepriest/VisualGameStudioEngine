@@ -58,6 +58,9 @@ namespace BasicLang.Compiler.ILReader
             _sb.AppendLine("#include <cmath>");
             _sb.AppendLine("#include <chrono>");
             _sb.AppendLine("#include <thread>");
+            _sb.AppendLine("#include \"BclShim.h\"");
+            _sb.AppendLine();
+            _sb.AppendLine("using namespace BclShim;");
             _sb.AppendLine();
 
             // Emit struct definitions for user types.
