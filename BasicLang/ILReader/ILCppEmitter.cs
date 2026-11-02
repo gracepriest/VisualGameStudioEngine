@@ -89,6 +89,9 @@ namespace BasicLang.Compiler.ILReader
             _sb.AppendLine("#include <cmath>");
             _sb.AppendLine("#include <chrono>");
             _sb.AppendLine("#include <thread>");
+            _sb.AppendLine("#include \"BclShim.h\"");
+            _sb.AppendLine();
+            _sb.AppendLine("using namespace BclShim;");
             _sb.AppendLine();
 
             // Emit generic instantiations as typedefs (monomorphization via C++ templates).
@@ -337,42 +340,46 @@ namespace BasicLang.Compiler.ILReader
                     case 0x0A: // stloc.0
                         {
                             string val = _stack.Pop();
-                            string varName = GetLocal(0);
-                            Indent();
-                            _sb.AppendLine($"{varName} = {val};");
+                            if (!_locals.ContainsKey(0))
+                            {
+                                _locals[0] = "local_0";
+                                Indent();
+                                _sb.AppendLine($"auto local_0 = {val};");
+                            }
+                            else
+                            {
+                                Indent();
+                                _sb.AppendLine($"local_0 = {val};");
+                            }
                             break;
                         }
                     case 0x0B: // stloc.1
                         {
                             string val = _stack.Pop();
-                            string varName = GetLocal(1);
-                            Indent();
-                            _sb.AppendLine($"{varName} = {val};");
+                            if (!_locals.ContainsKey(1)) { _locals[1] = "local_1"; Indent(); _sb.AppendLine($"auto local_1 = {val};"); }
+                            else { Indent(); _sb.AppendLine($"local_1 = {val};"); }
                             break;
                         }
                     case 0x0C: // stloc.2
                         {
                             string val = _stack.Pop();
-                            string varName = GetLocal(2);
-                            Indent();
-                            _sb.AppendLine($"{varName} = {val};");
+                            if (!_locals.ContainsKey(2)) { _locals[2] = "local_2"; Indent(); _sb.AppendLine($"auto local_2 = {val};"); }
+                            else { Indent(); _sb.AppendLine($"local_2 = {val};"); }
                             break;
                         }
                     case 0x0D: // stloc.3
                         {
                             string val = _stack.Pop();
-                            string varName = GetLocal(3);
-                            Indent();
-                            _sb.AppendLine($"{varName} = {val};");
+                            if (!_locals.ContainsKey(3)) { _locals[3] = "local_3"; Indent(); _sb.AppendLine($"auto local_3 = {val};"); }
+                            else { Indent(); _sb.AppendLine($"local_3 = {val};"); }
                             break;
                         }
                     case 0x13: // stloc.s
                         {
                             int idx = _il[i++];
                             string val = _stack.Pop();
-                            string varName = GetLocal(idx);
-                            Indent();
-                            _sb.AppendLine($"{varName} = {val};");
+                            if (!_locals.ContainsKey(idx)) { _locals[idx] = $"local_{idx}"; Indent(); _sb.AppendLine($"auto local_{idx} = {val};"); }
+                            else { Indent(); _sb.AppendLine($"local_{idx} = {val};"); }
                             break;
                         }
 
@@ -1243,6 +1250,8 @@ namespace BasicLang.Compiler.ILReader
                 _locals[idx] = name;
                 // Declare the variable with its IL type (mapped to C++)
                 var cppType = _localTypes.TryGetValue(idx, out var t) ? ILTypeMapper.Map(t) : "int";
+                // If type is void* (object), use auto with default
+                if (cppType == "void*") cppType = "int"; // fallback for spike
                 Indent();
                 _sb.AppendLine($"{cppType} {name} = {{}};");
             }
