@@ -219,6 +219,27 @@ public partial class SolutionExplorerView : UserControl
         }
     }
 
+    /// <summary>
+    /// A right-click must select the node under the pointer before the context menu opens.
+    /// Avalonia's TreeView does not change SelectedItem for a secondary click; without this,
+    /// Open in Explorer / Open in Terminal / Copy Path / Rename act on the previous selection
+    /// (or do nothing when nothing was selected).
+    /// </summary>
+    private void OnTreeViewPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not TreeView treeView ||
+            !e.GetCurrentPoint(treeView).Properties.IsRightButtonPressed)
+        {
+            return;
+        }
+
+        var item = (e.Source as Visual)?.FindAncestorOfType<TreeViewItem>(includeSelf: true);
+        if (item?.DataContext is TreeNode node && DataContext is SolutionExplorerViewModel vm)
+        {
+            vm.SelectedNode = node;
+        }
+    }
+
     private void OnItemDoubleTapped(object? sender, TappedEventArgs e)
     {
         // This handler is attached directly to the Grid inside TreeDataTemplate

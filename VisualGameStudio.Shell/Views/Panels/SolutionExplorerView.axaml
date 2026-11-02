@@ -36,6 +36,7 @@
                 SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
                 Background="Transparent"
                 DoubleTapped="OnTreeViewDoubleTapped"
+                PointerPressed="OnTreeViewPointerPressed"
                 AutomationProperties.Name="Solution Explorer Tree">
 
         <TreeView.KeyBindings>
@@ -126,7 +127,8 @@
 
         <TreeView.ItemTemplate>
           <TreeDataTemplate ItemsSource="{Binding Children}">
-            <Grid ColumnDefinitions="Auto,*,Auto" DoubleTapped="OnItemDoubleTapped">
+            <Grid ColumnDefinitions="Auto,*,Auto"
+                  DoubleTapped="OnItemDoubleTapped">
               <!-- Icon based on node type, with file-specific icons for .mod (M) and .cls/.class (C) -->
               <TextBlock Grid.Column="0"
                          Text="{Binding ., Converter={x:Static vm:NodeTypeIconConverter.Instance}}"

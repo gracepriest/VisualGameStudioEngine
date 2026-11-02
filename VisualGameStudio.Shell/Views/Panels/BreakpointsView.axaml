@@ -76,7 +76,7 @@
                 </ContextMenu>
               </Grid.ContextMenu>
               <CheckBox Grid.Column="0"
-                        IsChecked="{Binding IsEnabled}"
+                        IsChecked="{Binding IsEnabled, Mode=OneWay}"
                         Margin="0,0,8,0"
                         Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleFunctionBreakpointCommand}"
                         CommandParameter="{Binding}"/>
@@ -154,15 +154,23 @@
                             CommandParameter="{Binding}"/>
                   <Separator/>
                   <MenuItem Header="Enable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleLineBreakpointCommand}"
+                            CommandParameter="{Binding}"
                             IsVisible="{Binding !IsEnabled}"/>
                   <MenuItem Header="Disable"
+                            Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleLineBreakpointCommand}"
+                            CommandParameter="{Binding}"
                             IsVisible="{Binding IsEnabled}"/>
                   <MenuItem Header="Remove"
                             Command="{ReflectionBinding $parent[ListBox].DataContext.RemoveBreakpointCommand}"
                             CommandParameter="{Binding}"/>
                 </ContextMenu>
               </Grid.ContextMenu>
-              <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" Margin="0,0,8,0"/>
+              <CheckBox Grid.Column="0"
+                        IsChecked="{Binding IsEnabled, Mode=OneWay}"
+                        Margin="0,0,8,0"
+                        Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleLineBreakpointCommand}"
+                        CommandParameter="{Binding}"/>
               <TextBlock Grid.Column="1"
                          Text="{Binding DisplayText}"
                          Foreground="{DynamicResource IdeFg}"
@@ -252,7 +260,7 @@
                 </ContextMenu>
               </Grid.ContextMenu>
               <CheckBox Grid.Column="0"
-                        IsChecked="{Binding IsEnabled}"
+                        IsChecked="{Binding IsEnabled, Mode=OneWay}"
                         Margin="0,0,8,0"
                         Command="{ReflectionBinding $parent[ListBox].DataContext.ToggleDataBreakpointCommand}"
                         CommandParameter="{Binding}"/>

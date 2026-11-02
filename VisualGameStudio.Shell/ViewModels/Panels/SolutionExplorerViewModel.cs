@@ -2053,28 +2053,43 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     // ─── Context Menu Actions ───────────────────────────────────────
 
     [RelayCommand]
-    private void OpenInExplorer()
+    private async Task OpenInExplorer()
     {
         if (SelectedNode == null) return;
 
+        // A project/solution node is a FILE even though TreeNode.IsFile is false. Decide by
+        // what is on disk; the old IsFile test made Open in Explorer a no-op on projects and
+        // solutions because their FullPath is a .blproj/.sln, not a directory.
         var path = SelectedNode.FullPath;
-        if (SelectedNode.IsFile)
+        var isFile = File.Exists(path);
+
+        if (!isFile && !Directory.Exists(path))
         {
-            // Select the file in Explorer
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            await _dialogService.ShowMessageAsync(
+                "Open in Explorer",
+                $"That item no longer exists on disk:\n{path}",
+                DialogButtons.Ok,
+                DialogIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = $"/select,\"{path}\"",
+                Arguments = isFile ? $"/select,\"{path}\"" : $"\"{path}\"",
                 UseShellExecute = true
-            });
+            };
+            System.Diagnostics.Process.Start(startInfo);
         }
-        else if (Directory.Exists(path))
+        catch (Exception ex)
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = path,
-                UseShellExecute = true
-            });
+            await _dialogService.ShowMessageAsync(
+                "Open in Explorer",
+                $"Windows Explorer could not be opened: {ex.Message}",
+                DialogButtons.Ok,
+                DialogIcon.Error);
         }
     }
 
@@ -2083,10 +2098,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         if (SelectedNode == null) return;
 
-        var path = SelectedNode.IsFile
-            ? Path.GetDirectoryName(SelectedNode.FullPath) ?? SelectedNode.FullPath
-            : SelectedNode.FullPath;
-
+        // Same project/solution correction as Open in Explorer: their FullPath is a file.
+        var path = TerminalDirectoryFor(SelectedNode.FullPath);
         OpenInTerminalRequested?.Invoke(this, path);
     }
 
@@ -2095,12 +2108,17 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         if (SelectedNode == null) return;
 
-        var path = SelectedNode.IsFile
-            ? Path.GetDirectoryName(SelectedNode.FullPath) ?? SelectedNode.FullPath
-            : SelectedNode.FullPath;
-
+        var path = TerminalDirectoryFor(SelectedNode.FullPath);
         FindInFolderRequested?.Invoke(this, path);
     }
+
+    /// <summary>
+    /// The directory a file lives in, or the path itself when it is already a directory.
+    /// Works for project and solution nodes, whose FullPath is a file but whose TreeNode.IsFile
+    /// is false.
+    /// </summary>
+    private static string TerminalDirectoryFor(string path) =>
+        File.Exists(path) ? Path.GetDirectoryName(path) ?? path : path;
 
     [RelayCommand]
     private void ShowFileHistory()

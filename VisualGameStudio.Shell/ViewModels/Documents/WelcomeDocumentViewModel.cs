@@ -148,10 +148,13 @@ public partial class WelcomeDocumentViewModel : ViewModelBase
 
     private void InitializeLearnLinks()
     {
+        // These are the actual published documents. The old /wiki links do not exist for this
+        // repository and GitHub redirects them to the repository home, so they looked alive but
+        // took the user nowhere useful.
         LearnLinks = new ObservableCollection<LearnLink>
         {
-            new() { Title = "Documentation", Description = "Browse the BasicLang language reference", Icon = "?", Url = "https://github.com/gracepriest/VisualGameStudioEngine/wiki" },
-            new() { Title = "Tutorials", Description = "Step-by-step guides to get started", Icon = "T", Url = "https://github.com/gracepriest/VisualGameStudioEngine/wiki/Tutorials" },
+            new() { Title = "Documentation", Description = "Browse the BasicLang language reference", Icon = "?", Url = "https://github.com/gracepriest/VisualGameStudioEngine/blob/master/docs/BasicLang-Reference.md" },
+            new() { Title = "Tutorials", Description = "Step-by-step guides to get started", Icon = "T", Url = "https://github.com/gracepriest/VisualGameStudioEngine/blob/master/docs/GETTING_STARTED.md" },
             new() { Title = "Release Notes", Description = "See what's new in this version", Icon = "R", Url = "https://github.com/gracepriest/VisualGameStudioEngine/releases" },
             new() { Title = "Report an Issue", Description = "Found a bug? Let us know", Icon = "!", Url = "https://github.com/gracepriest/VisualGameStudioEngine/issues" },
         };

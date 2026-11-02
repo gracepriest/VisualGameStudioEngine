@@ -291,6 +291,17 @@ public partial class BreakpointsViewModel : Tool
     }
 
     [RelayCommand]
+    private void ToggleLineBreakpoint(BreakpointItem? breakpoint)
+    {
+        if (breakpoint == null) return;
+
+        breakpoint.IsEnabled = !breakpoint.IsEnabled;
+        SyncBreakpointsToDebugger(breakpoint.FilePath);
+        BreakpointsChanged?.Invoke(this, EventArgs.Empty);
+        _ = SaveBreakpointsAsync();
+    }
+
+    [RelayCommand]
     private void EditCondition(BreakpointItem? breakpoint)
     {
         if (breakpoint != null)

@@ -177,6 +177,27 @@ public class SettingsWorkbenchWiringTests
             Is.EqualTo("welcomePage"), "re-checking persists welcomePage");
     }
 
+    // ---- Welcome page Learn links must target documents that exist ----
+
+    [Test]
+    public void WelcomeLearnLinks_PointAtPublishedDocs_NotTheMissingWiki()
+    {
+        var vm = NewWelcomeVm();
+
+        var documentation = vm.LearnLinks.Single(l => l.Title == "Documentation");
+        var tutorials = vm.LearnLinks.Single(l => l.Title == "Tutorials");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(documentation.Url,
+                Is.EqualTo("https://github.com/gracepriest/VisualGameStudioEngine/blob/master/docs/BasicLang-Reference.md"));
+            Assert.That(tutorials.Url,
+                Is.EqualTo("https://github.com/gracepriest/VisualGameStudioEngine/blob/master/docs/GETTING_STARTED.md"));
+            Assert.That(vm.LearnLinks.Any(l => (l.Url ?? "").Contains("/wiki", StringComparison.Ordinal)), Is.False,
+                "the /wiki URLs do not exist for this repository; GitHub redirects them to the home page");
+        });
+    }
+
     // ---- workbench.iconTheme removed from the dialog (D3) ----
 
     [Test]
