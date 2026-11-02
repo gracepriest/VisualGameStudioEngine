@@ -544,9 +544,70 @@ namespace BasicLang.Compiler.ILReader
                             }
                             else if (methodName.Contains("Thread") && methodName.EndsWith("Start", StringComparison.Ordinal))
                             {
-                                // Thread.Start() - placeholder
                                 Indent();
                                 _sb.AppendLine($"/* thread->Start() */");
+                            }
+                            // Phase 4: BCL shim support — DateTime
+                            else if (methodName.Contains("DateTime") && methodName.EndsWith("Parse", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* DateTime.Parse */ {arg}");
+                            }
+                            else if (methodName.Contains("DateTime") && methodName.EndsWith("ToString", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* DateTime.ToString */ {arg}");
+                            }
+                            // Phase 4: BCL shim support — Environment
+                            else if (methodName.Contains("Environment") && methodName.EndsWith("GetEnvironmentVariable", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::getenv({arg}.c_str())");
+                            }
+                            else if (methodName.Contains("Environment") && methodName.EndsWith("NewLine", StringComparison.Ordinal))
+                            {
+                                _stack.Push("\"\\n\"");
+                            }
+                            // Phase 4: BCL shim support — Array
+                            else if (methodName.Contains("Array") && methodName.EndsWith("Sort", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::sort({arg}.begin(), {arg}.end());");
+                            }
+                            else if (methodName.Contains("Array") && methodName.EndsWith("Reverse", StringComparison.Ordinal))
+                            {
+                                Indent();
+                                _sb.AppendLine($"std::reverse({arg}.begin(), {arg}.end());");
+                            }
+                            // Phase 4: BCL shim support — StringBuilder
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("Append", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var val = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"{arg}.append({val});");
+                                }
+                            }
+                            else if (methodName.Contains("StringBuilder") && methodName.EndsWith("ToString", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"{arg}");
+                            }
+                            // Phase 4: BCL shim support — File I/O
+                            else if (methodName.Contains("File") && methodName.EndsWith("ReadAllText", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* File.ReadAllText */ {arg}");
+                            }
+                            else if (methodName.Contains("File") && methodName.EndsWith("WriteAllText", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count >= 2)
+                                {
+                                    var content = _stack.Pop();
+                                    var path = _stack.Pop();
+                                    Indent();
+                                    _sb.AppendLine($"/* File.WriteAllText({path}, {content}) */");
+                                }
+                            }
+                            else if (methodName.Contains("File") && methodName.EndsWith("Exists", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"/* File.Exists */ {arg}");
                             }
                             // String methods
                             else if (methodName.EndsWith("String.Substring", StringComparison.Ordinal))
