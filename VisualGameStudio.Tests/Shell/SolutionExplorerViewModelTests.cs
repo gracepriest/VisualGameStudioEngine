@@ -73,4 +73,31 @@ public class SolutionExplorerViewModelTests
         Assert.That(cppItem.ItemType, Is.EqualTo(ProjectItemType.Compile),
             "a .cpp file added via Add Existing File must still be classified as Compile");
     }
+
+    /// <summary>
+    /// Project/solution nodes have a FILE FullPath but TreeNode.IsFile is false. The old
+    /// OpenInExplorer only checked IsFile and then Directory.Exists, so it silently did
+    /// nothing on projects and solutions. A missing target must now at least explain itself.
+    /// </summary>
+    [Test]
+    public async Task OpenInExplorer_OnAProjectNode_ReportsAMissingTarget()
+    {
+        var missingProject = Path.Combine(_dir, "Missing.blproj");
+        _vm.SelectedNode = new TreeNode
+        {
+            Name = "Missing",
+            NodeType = TreeNodeType.Project,
+            FullPath = missingProject
+        };
+
+        await _vm.OpenInExplorerCommand.ExecuteAsync(null);
+
+        _dialogService.Verify(
+            d => d.ShowMessageAsync(
+                "Open in Explorer",
+                It.Is<string>(m => m.Contains("no longer exists")),
+                DialogButtons.Ok,
+                DialogIcon.Warning),
+            Times.Once);
+    }
 }
