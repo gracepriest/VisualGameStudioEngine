@@ -1,7 +1,18 @@
 using System;
 using System.IO;
 using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Moq;
 using NUnit.Framework;
+using VisualGameStudio.Core.Abstractions.Services;
+using VisualGameStudio.Shell.ViewModels.Panels;
+using VisualGameStudio.Shell.Views.Panels;
 
 namespace VisualGameStudio.Tests.Shell;
 
@@ -33,6 +44,43 @@ public class SolutionExplorerContextMenuTests
             Assert.That(File.ReadAllText(viewModel), Does.Contain("File.Exists(path)"),
                 "project/solution nodes are files even though TreeNode.IsFile is false");
         });
+    }
+
+    /// <summary>
+    /// The real view, driven by a real secondary click. This is the behavior the context-menu
+    /// commands depend on; TreeNode.SelectedNode is not automatically updated by Avalonia.
+    /// </summary>
+    [AvaloniaTest]
+    public void RightClickingAnItem_SelectsIt()
+    {
+        var vm = new SolutionExplorerViewModel(
+            new Mock<IProjectService>().Object,
+            new Mock<IFileService>().Object,
+            new Mock<IDialogService>().Object,
+            new Mock<ISolutionService>().Object);
+
+        var node = new TreeNode
+        {
+            Name = "Main.bas",
+            NodeType = TreeNodeType.SourceFile,
+            FullPath = Path.Combine(Path.GetTempPath(), "Main.bas")
+        };
+        vm.Nodes.Add(node);
+
+        var view = new SolutionExplorerView { DataContext = vm };
+        var window = new Window { Content = view, Width = 400, Height = 300 };
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var item = view.GetVisualDescendants().OfType<TreeViewItem>().First();
+        var at = item.TranslatePoint(new Point(item.Bounds.Width / 2, item.Bounds.Height / 2), window)!.Value;
+        window.MouseDown(at, MouseButton.Right);
+        window.MouseUp(at, MouseButton.Right);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(vm.SelectedNode, Is.SameAs(node), "the context menu commands must see the clicked node");
+        window.Close();
     }
 
     private static string? FindRepoFile(params string[] relativeParts)

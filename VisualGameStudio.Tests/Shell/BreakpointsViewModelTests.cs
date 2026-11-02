@@ -2,10 +2,19 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Headless.NUnit;
+using Avalonia.Input;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Moq;
 using NUnit.Framework;
 using VisualGameStudio.Core.Abstractions.Services;
 using VisualGameStudio.Shell.ViewModels.Panels;
+using VisualGameStudio.Shell.Views.Panels;
 
 namespace VisualGameStudio.Tests.Shell;
 
@@ -59,6 +68,38 @@ public class BreakpointsViewModelTests
         var bindings = Regex.Matches(text, "ToggleLineBreakpointCommand").Count;
         Assert.That(bindings, Is.GreaterThanOrEqualTo(3),
             "Enable, Disable, and the row checkbox must all invoke the command");
+    }
+
+    /// <summary>
+    /// The row checkbox now carries Mode=OneWay plus the Toggle command. A two-way binding
+    /// would set IsEnabled back before the command flips it (or flip it twice), leaving the
+    /// checkbox visually changed while the model stayed put.
+    /// </summary>
+    [AvaloniaTest]
+    public void ClickingTheLineBreakpointCheckbox_FlipsTheModelOnce()
+    {
+        var vm = new BreakpointsViewModel(Mock.Of<IDebugService>());
+        vm.AddBreakpoint(Path.Combine(Path.GetTempPath(), "click.bas"), 7);
+
+        var view = new BreakpointsView { DataContext = vm };
+        var window = new Window { Content = view, Width = 500, Height = 400 };
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var list = view.GetVisualDescendants().OfType<ListBox>()
+            .Single(l => l.GetValue(AutomationProperties.NameProperty) as string == "Line Breakpoints List");
+        var checkbox = list.GetVisualDescendants().OfType<CheckBox>().First();
+        var at = checkbox.TranslatePoint(
+            new Point(checkbox.Bounds.Width / 2, checkbox.Bounds.Height / 2), window)!.Value;
+
+        window.MouseDown(at, MouseButton.Left);
+        window.MouseUp(at, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.That(vm.Breakpoints.Single().IsEnabled, Is.False,
+            "one click must disable the breakpoint exactly once");
+        window.Close();
     }
 
     private static string? FindRepoFile(params string[] relativeParts)
