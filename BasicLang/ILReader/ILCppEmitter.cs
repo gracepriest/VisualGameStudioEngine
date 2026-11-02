@@ -447,7 +447,8 @@ namespace BasicLang.Compiler.ILReader
                             i += 4;
                             var usHandle = MetadataTokens.UserStringHandle((int)token);
                             var str = _mr.GetUserString(usHandle);
-                            _stack.Push($"\"{Escape(str)}\"");
+                            // Runtime support: strings are std::string in VGS C++ backend
+                            _stack.Push($"std::string(\"{Escape(str)}\")");
                             break;
                         }
 
@@ -458,12 +459,69 @@ namespace BasicLang.Compiler.ILReader
                             string methodName = ResolveMethodName(token);
                             string arg = _stack.Count > 0 ? _stack.Pop() : "";
 
-                            // Known BCL calls → C++ equivalents
+                            // Known BCL calls → C++ equivalents (Phase 3/4 runtime support)
                             if (methodName.EndsWith("Console.WriteLine", StringComparison.Ordinal)
                                 || methodName.EndsWith("Console.Write", StringComparison.Ordinal))
                             {
                                 Indent();
                                 _sb.AppendLine($"std::cout << {arg} << std::endl;");
+                            }
+                            else if (methodName.EndsWith("Math.Sqrt", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::sqrt({arg})");
+                            }
+                            else if (methodName.EndsWith("Math.Abs", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::abs({arg})");
+                            }
+                            else if (methodName.EndsWith("Math.Floor", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::floor({arg})");
+                            }
+                            else if (methodName.EndsWith("Math.Ceiling", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::ceil({arg})");
+                            }
+                            else if (methodName.EndsWith("Math.Pow", StringComparison.Ordinal))
+                            {
+                                // Pow takes 2 args
+                                if (_stack.Count > 0)
+                                {
+                                    var arg2 = _stack.Pop();
+                                    _stack.Push($"std::pow({arg2}, {arg})");
+                                }
+                            }
+                            else if (methodName.EndsWith("Math.Min", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var arg2 = _stack.Pop();
+                                    _stack.Push($"std::min({arg2}, {arg})");
+                                }
+                            }
+                            else if (methodName.EndsWith("Math.Max", StringComparison.Ordinal))
+                            {
+                                if (_stack.Count > 0)
+                                {
+                                    var arg2 = _stack.Pop();
+                                    _stack.Push($"std::max({arg2}, {arg})");
+                                }
+                            }
+                            else if (methodName.EndsWith("Math.Round", StringComparison.Ordinal))
+                            {
+                                _stack.Push($"std::round({arg})");
+                            }
+                            else if (methodName.Contains("String") && methodName.Contains("Length"))
+                            {
+                                _stack.Push($"{arg}.length()");
+                            }
+                            else if (methodName.Contains("Convert") && methodName.Contains("ToInt32"))
+                            {
+                                _stack.Push($"static_cast<int32_t>({arg})");
+                            }
+                            else if (methodName.Contains("Convert") && methodName.Contains("ToDouble"))
+                            {
+                                _stack.Push($"static_cast<double>({arg})");
                             }
                             else if (methodName == "Console.ReadLine")
                             {
@@ -566,6 +624,48 @@ namespace BasicLang.Compiler.ILReader
                             {
                                 var arr = _stack.Pop();
                                 _stack.Push($"{arr}->Length()");
+                            }
+                            break;
+                        }
+
+                    // Array element access (Phase 3 runtime support)
+                    case 0x90: // ldelem.i1
+                    case 0x91: // ldelem.u1
+                    case 0x92: // ldelem.i2
+                    case 0x93: // ldelem.u2
+                    case 0x94: // ldelem.i4
+                    case 0x95: // ldelem.u4
+                    case 0x96: // ldelem.i8
+                    case 0x98: // ldelem.r4
+                    case 0x99: // ldelem.r8
+                    case 0x9A: // ldelem.ref
+                    case 0xA3: // ldelem (generic)
+                        {
+                            if (_stack.Count >= 2)
+                            {
+                                var idx = _stack.Pop();
+                                var arr = _stack.Pop();
+                                _stack.Push($"{arr}[{idx}]");
+                            }
+                            break;
+                        }
+
+                    case 0x9C: // stelem.i1
+                    case 0x9D: // stelem.i2
+                    case 0x9E: // stelem.i4
+                    case 0x9F: // stelem.i8
+                    case 0xA0: // stelem.r4
+                    case 0xA1: // stelem.r8
+                    case 0xA2: // stelem.ref
+                    case 0xA4: // stelem (generic)
+                        {
+                            if (_stack.Count >= 3)
+                            {
+                                var val = _stack.Pop();
+                                var idx = _stack.Pop();
+                                var arr = _stack.Pop();
+                                Indent();
+                                _sb.AppendLine($"{arr}[{idx}] = {val};");
                             }
                             break;
                         }
