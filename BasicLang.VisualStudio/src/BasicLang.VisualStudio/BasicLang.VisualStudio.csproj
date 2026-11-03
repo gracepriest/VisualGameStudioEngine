@@ -152,6 +152,7 @@
     <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\ClassLibrary\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\ClassLibrary.zip' -Force&quot;" />
     <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\WinFormsApp\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\WinFormsApp.zip' -Force&quot;" />
     <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\WpfApp\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\WpfApp.zip' -Force&quot;" />
+    <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Projects\NewComComponent\*' -DestinationPath '$(OutputPath)ProjectTemplates\BasicLang\NewComComponent.zip' -Force&quot;" />
 
     <!-- Create Item Template zips -->
     <Exec Command="powershell -NoProfile -Command &quot;Compress-Archive -Path '$(MSBuildProjectDirectory)\Templates\Items\Class\*' -DestinationPath '$(OutputPath)ItemTemplates\BasicLang\Class.zip' -Force&quot;" />
