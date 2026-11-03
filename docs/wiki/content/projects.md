@@ -13,8 +13,9 @@ A *solution type* fixes the backend and the shape of the build. The canonical li
 | `native` | BasicLang (Native) | Native code via C++ transpilation; no runtime required |
 | `javascript` | JavaScript (Web) | A static web site — `index.html`, the script, its source map; `F5` previews it |
 | `cpp` | C++ | User-authored C++ built directly with clang++/g++/MSVC — no BasicLang involved |
-| `msil` | MSIL | <span class="pill mute">Unmaintained</span> |
+| `msil` | MSIL | <span class="pill ok">Maintained</span> |
 | `llvm` | LLVM | <span class="pill mute">Unmaintained</span> |
+| `il2cpp` | IL2CPP | <span class="pill ok">Maintained</span> | Native executable from IL (no .NET runtime) |
 
 All of them use `.blproj` for projects and `.blsln` for solutions. Source extension is
 `.bas` except for the pure-C++ type, which is `.cpp`.

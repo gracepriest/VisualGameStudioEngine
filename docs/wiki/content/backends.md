@@ -5,12 +5,14 @@ lede: Five targets, two of them maintained — and the differences between them 
 |---|---|---|---|
 | C# | `--target=csharp` | <span class="pill ok">Maintained</span> | .NET assembly, full BCL interop |
 | C++ | `--target=cpp` | <span class="pill ok">Maintained</span> | Native executable via clang / gcc / MSVC, `-std=c++20` |
+| IL2CPP | `--target=il2cpp` | <span class="pill ok">Maintained</span> | Native executable from IL (MSIL → C++ → native, no .NET runtime) |
 | JavaScript | `--target=javascript` (or `js`) | <span class="pill warn">Active</span> | ES modules plus an HTML page |
 | LLVM | `--target=llvm` | <span class="pill mute">Unmaintained</span> | LLVM IR |
-| MSIL | `--target=msil` | <span class="pill mute">Unmaintained</span> | MSIL |
+| MSIL | `--target=msil` | <span class="pill ok">Maintained</span> | MSIL (promoted to in-scope) |
 
-> [note] LLVM and MSIL are explicitly **out of scope**: do not test them, fix them, or
-> file bugs against them. They still build, which is the only promise made.
+> [note] LLVM is explicitly **out of scope**: do not test it, fix it, or
+> file bugs against it. It still builds, which is the only promise made. MSIL
+> and IL2CPP are in scope and maintained.
 
 ## What each backend does differently
 
@@ -49,7 +51,18 @@ Key semantic decisions, all deliberate:
 See [C++ backend and interop](#/cpp-interop) for `#CppInclude`, `::`-qualified foreign
 types, and the toolchain controls.
 
-### JavaScript
+### IL2CPP
+
+A new backend that compiles .NET IL assemblies (including VGS-generated MSIL) to
+self-contained native C++, following Unity's IL2CPP model. No .NET runtime dependency,
+no JIT. The generated C++ is the program, linked against a small support runtime.
+
+Pipeline: `.bas` → MSIL → ilasm → PE → IL reader → C++ emitter → MSVC → native binary.
+
+Supports classes, inheritance, virtual dispatch (vtables), arrays, strings, exceptions,
+and multi-file projects. BCL methods are provided via `BclShim.h` (~75 methods).
+
+See `docs/superpowers/specs/2026-11-01-il2cpp-design.md` for the full design.
 
 Emits ES modules with source maps, targeting the browser. `JsCapabilityChecker.cs`
 rejects what cannot be lowered rather than emitting approximations — see

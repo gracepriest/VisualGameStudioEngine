@@ -30,7 +30,9 @@ lede: Terms, file names and acronyms that appear throughout this repository.
 | **Pipeline** | preprocess → lex → parse → semantic → IR → optimize → backend |
 | **IR** | The intermediate representation every backend consumes; built by `IRBuilder`, nodes in `IRNodes` |
 | **CFG** | Control-flow graph, per routine; backends reconstruct source-level control flow from it |
-| **Backend** | A code generator for one target: C#, C++, JavaScript, LLVM, MSIL |
+| **Backend** | A code generator for one target: C#, C++, JavaScript, LLVM, MSIL, IL2CPP |
+| **IL2CPP** | IL-to-C++ compiler: compiles .NET IL assemblies to self-contained native C++ (no .NET runtime) |
+| **NewCOM** | Cross-platform component model (COM without Windows): vtable-based interfaces, ref counting, C ABI factories |
 | **Capability checker** | A per-backend gate that rejects constructs it cannot lower — `BL6xxx` for C++, `BL7xxx` for JS |
 | **StdLib shim** | Per-backend mapping of BasicLang's built-in surface onto the target's |
 | **`BLxxxx`** | A structured diagnostic code; the first digit is the phase — see [Diagnostics](#/diagnostics) |

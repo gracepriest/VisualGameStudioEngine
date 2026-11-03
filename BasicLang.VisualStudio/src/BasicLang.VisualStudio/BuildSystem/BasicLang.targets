@@ -28,6 +28,12 @@
     <BasicLangBackend Condition="'$(BasicLangBackend)' == ''">CSharp</BasicLangBackend>
     <Language>BasicLang</Language>
 
+    <!-- NewCOM properties -->
+    <NewComEnabled Condition="'$(NewComEnabled)' == ''">false</NewComEnabled>
+    <NewComHeader Condition="'$(NewComHeader)' == ''">$(MSBuildProjectDirectory)\component.h</NewComHeader>
+    <NewComOutputDir Condition="'$(NewComOutputDir)' == ''">$(IntermediateOutputPath)newcom\</NewComOutputDir>
+    <NewComGeneratorPath Condition="'$(NewComGeneratorPath)' == ''">$(MSBuildThisFileDirectory)..\tools\newcom_gen.py</NewComGeneratorPath>
+
     <!-- Marker checked by .blproj files to detect that these targets were found -->
     <BasicLangTargetsImported>true</BasicLangTargetsImported>
 
@@ -97,6 +103,26 @@
          verify the generated file exists in case output went elsewhere. -->
     <Error Condition="!Exists('$(IntermediateOutputPath)%(BasicLangCompile.Filename).g.cs')"
            Text="BasicLang compilation of '%(BasicLangCompile.Identity)' produced no output (see compiler errors above)." />
+  </Target>
+
+  <!-- NewCOM: Generate component wrappers from annotated C++ headers.
+       Runs before compilation when NewComEnabled=true. -->
+  <Target Name="NewComGenerate"
+          BeforeTargets="CoreCompile"
+          Condition="'$(NewComEnabled)' == 'true' And Exists('$(NewComHeader)')">
+    <MakeDir Directories="$(NewComOutputDir)" />
+    <Message Text="Generating NewCOM wrappers from: $(NewComHeader)" Importance="high" />
+    <Exec Command="python3 &quot;$(NewComGeneratorPath)&quot; &quot;$(NewComHeader)&quot; -o &quot;$(NewComOutputDir)&quot;"
+          ContinueOnError="false"
+          StandardOutputImportance="high"
+          StandardErrorImportance="high" />
+    <!-- Include generated BasicLang bindings in compilation -->
+    <ItemGroup>
+      <BasicLangCompile Include="$(NewComOutputDir)*.bas" />
+      <FileWrites Include="$(NewComOutputDir)*.bas" />
+      <FileWrites Include="$(NewComOutputDir)*_newcom.h" />
+      <FileWrites Include="$(NewComOutputDir)*_newcom.cpp" />
+    </ItemGroup>
   </Target>
 
   <!-- Always runs (even when BasicLangCompile is skipped as up to date) so the
