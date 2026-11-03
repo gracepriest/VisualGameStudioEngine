@@ -312,9 +312,7 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("View", "Bookmarks", null, () => vm.ShowBookmarksCommand.Execute(null));
         AddCommand("View", "Toggle Full Screen", "F11", () => vm.ToggleFullScreenCommand.Execute(null));
         AddCommand("View", "Toggle Menu Bar", null, () => vm.ToggleMenuBarCommand.Execute(null));
-        AddCommand("View", "Toggle Side Bar", "Ctrl+B", () => vm.ToggleSideBarCommand.Execute(null));
         AddCommand("View", "Toggle Status Bar", null, () => vm.ToggleStatusBarCommand.Execute(null));
-        AddCommand("View", "Toggle Panel", null, () => vm.TogglePanelCommand.Execute(null));
         AddCommand("View", "Toggle Minimap", null, () => vm.ToggleMinimapCommand.Execute(null));
         AddCommand("View", "Toggle Breadcrumbs", null, () => vm.ToggleBreadcrumbsCommand.Execute(null));
         AddCommand("View", "Toggle Sticky Scroll", null, () => vm.ToggleStickyScrollCommand.Execute(null));
@@ -325,11 +323,6 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("View", "Zoom In", "Ctrl++", () => vm.ZoomInCommand.Execute(null));
         AddCommand("View", "Zoom Out", "Ctrl+-", () => vm.ZoomOutCommand.Execute(null));
         AddCommand("View", "Reset Zoom", "Ctrl+0", () => vm.ZoomResetCommand.Execute(null));
-        AddCommand("View", "Split Editor Right", null, () => vm.SplitEditorRightCommand.Execute(null));
-        AddCommand("View", "Split Editor Down", null, () => vm.SplitEditorDownCommand.Execute(null));
-        AddCommand("View", "Single Editor Layout", null, () => vm.SingleEditorLayoutCommand.Execute(null));
-        AddCommand("View", "Two Columns Layout", null, () => vm.TwoColumnsLayoutCommand.Execute(null));
-        AddCommand("View", "Grid Layout", null, () => vm.GridLayoutCommand.Execute(null));
 
         // --- Focus commands ---
         AddCommand("View", "Focus Solution Explorer", null, () => vm.FocusSolutionExplorerCommand.Execute(null));
@@ -342,8 +335,6 @@ public partial class CommandPaletteViewModel : ViewModelBase
         AddCommand("View", "Focus Previous Panel", null, () => vm.FocusPreviousPanelCommand.Execute(null));
 
         // --- Navigate commands ---
-        AddCommand("Navigate", "Go Back", "Alt+Left", () => vm.NavigateBackCommand.Execute(null));
-        AddCommand("Navigate", "Go Forward", "Alt+Right", () => vm.NavigateForwardCommand.Execute(null));
         AddCommand("Navigate", "Go to Next Error", "F8", () => vm.GoToNextErrorCommand.Execute(null));
         AddCommand("Navigate", "Go to Previous Error", "Shift+F8", () => vm.GoToPreviousErrorCommand.Execute(null));
 

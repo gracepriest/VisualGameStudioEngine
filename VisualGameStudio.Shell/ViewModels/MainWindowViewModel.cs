@@ -261,6 +261,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isFullScreen;
 
+    /// <summary>Menu bar visibility, including Zen mode's forced hide.</summary>
+    public bool IsMenuBarVisible => ShowMenuBar && !IsZenMode;
+
+    /// <summary>Status bar visibility, including Zen mode's forced hide.</summary>
+    public bool IsStatusBarVisible => ShowStatusBar && !IsZenMode;
+
+    partial void OnShowMenuBarChanged(bool value) => OnPropertyChanged(nameof(IsMenuBarVisible));
+    partial void OnShowStatusBarChanged(bool value) => OnPropertyChanged(nameof(IsStatusBarVisible));
+    partial void OnIsZenModeChanged(bool value)
+    {
+        OnPropertyChanged(nameof(IsMenuBarVisible));
+        OnPropertyChanged(nameof(IsStatusBarVisible));
+    }
+
     // ── Activity Bar Badge Counts ──
 
     /// <summary>
@@ -8130,14 +8144,26 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task ConfigureDefaultShellAsync()
     {
-        var shells = new List<string> { "PowerShell", "Command Prompt", "Git Bash", "WSL" };
-        var selected = await _dialogService.ShowListSelectionAsync(
-            "Configure Default Shell", "Select default terminal shell:", shells);
-
-        if (selected >= 0 && selected < shells.Count)
+        // Use the profiles the terminal actually detected, not a hardcoded list. The old
+        // implementation only announced a shell name; it never changed the terminal's profile
+        // or saved the setting, so every choice was a dead menu option.
+        var profiles = Terminal.AvailableProfiles.ToList();
+        if (profiles.Count == 0)
         {
-            StatusText = $"Default shell: {shells[selected]}";
-            ShowNotification($"Default terminal shell set to {shells[selected]}", "info");
+            ShowNotification("No terminal shell profiles were detected on this machine.", "warning");
+            return;
+        }
+
+        var labels = profiles.Select(p => p.Name).ToList();
+        var selected = await _dialogService.ShowListSelectionAsync(
+            "Configure Default Shell", "Select default terminal shell:", labels);
+
+        if (selected >= 0 && selected < profiles.Count)
+        {
+            var profile = profiles[selected];
+            Terminal.SetDefaultProfileCommand.Execute(profile);
+            StatusText = $"Default shell: {profile.Name}";
+            ShowNotification($"Default terminal shell set to {profile.Name}", "info");
         }
     }
 
@@ -8148,57 +8174,66 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private void ShowWelcome()
     {
-        ShowNotification("Welcome to Visual Game Studio IDE!", "info");
+        _dockFactory.ShowWelcomeDocument();
         StatusText = "Welcome to Visual Game Studio";
     }
 
     [RelayCommand]
     private void ShowDocumentation()
     {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "https://github.com/gracepriest/VisualGameStudioEngine",
-                UseShellExecute = true
-            });
-        }
-        catch { StatusText = "Could not open documentation"; }
+        OpenExternalUrl(
+            "https://github.com/gracepriest/VisualGameStudioEngine/blob/master/docs/BasicLang-Reference.md",
+            "Could not open documentation");
     }
 
     [RelayCommand]
     private void ShowReleaseNotes()
     {
-        ShowNotification("Visual Game Studio IDE v1.0 — 60+ features, 1725 tests passing", "info");
-        StatusText = "Release Notes";
+        OpenExternalUrl(
+            "https://github.com/gracepriest/VisualGameStudioEngine/releases",
+            "Could not open release notes");
     }
 
     [RelayCommand]
     private void ReportIssue()
     {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "https://github.com/gracepriest/VisualGameStudioEngine/issues/new",
-                UseShellExecute = true
-            });
-        }
-        catch { StatusText = "Could not open issue tracker"; }
+        OpenExternalUrl(
+            "https://github.com/gracepriest/VisualGameStudioEngine/issues/new",
+            "Could not open issue tracker");
     }
 
     [RelayCommand]
     private void ViewLicense()
     {
-        ShowNotification("Visual Game Studio IDE is proprietary software.", "info");
-        StatusText = "License information";
+        OpenExternalUrl(
+            "https://github.com/gracepriest/VisualGameStudioEngine/blob/master/LICENSE.txt",
+            "Could not open the license");
+    }
+
+    private void OpenExternalUrl(string url, string failureStatus)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            StatusText = failureStatus;
+        }
     }
 
     [RelayCommand]
     private void CheckForUpdates()
     {
-        ShowNotification("You are running the latest version.", "info");
-        StatusText = "No updates available";
+        // There is no updater service yet. Opening the releases page is honest and useful;
+        // claiming "you are running the latest version" was not.
+        OpenExternalUrl(
+            "https://github.com/gracepriest/VisualGameStudioEngine/releases",
+            "Could not open the releases page");
     }
 
     [RelayCommand]

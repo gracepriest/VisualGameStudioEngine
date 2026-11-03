@@ -138,7 +138,7 @@
     </Border>
 
     <!-- Menu Bar -->
-    <Menu DockPanel.Dock="Top" IsVisible="{Binding !IsZenMode}"
+    <Menu DockPanel.Dock="Top" IsVisible="{Binding IsMenuBarVisible}"
           AutomationProperties.Name="Main Menu">
       <MenuItem Header="_File">
         <MenuItem Header="_New Project..." Command="{Binding NewProjectCommand}" InputGesture="Ctrl+Shift+N"/>
@@ -454,7 +454,7 @@
          value beats every style setter (including the HC override), which is exactly
          the bug this class-based approach replaced. The statusBar/statusBarDebug
          classes own the background. -->
-    <Border x:Name="MainStatusBar" DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding !IsZenMode}"
+    <Border x:Name="MainStatusBar" DockPanel.Dock="Bottom" Classes="statusBar" IsVisible="{Binding IsStatusBarVisible}"
             AutomationProperties.Name="Status Bar">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
         <!-- Status message -->

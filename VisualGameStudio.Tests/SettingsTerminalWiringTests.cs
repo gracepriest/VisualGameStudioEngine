@@ -144,6 +144,29 @@ public class SettingsTerminalWiringTests
         Assert.That(TerminalViewModel.ResolveSavedShellName(null), Is.EqualTo(""));
     }
 
+    [Test]
+    public void SetDefaultProfileCommand_PersistsTheChosenShell()
+    {
+        var vm = new TerminalViewModel(_service);
+        // Pick a profile other than the constructor's default: choosing the already-selected
+        // profile is correctly a no-op, so it cannot prove that a choice is persisted.
+        var profile = vm.AvailableProfiles.Skip(1).FirstOrDefault();
+        if (profile == null)
+        {
+            Assert.Ignore("Fewer than two shell profiles were detected on this machine.");
+            return;
+        }
+
+        vm.SetDefaultProfileCommand.Execute(profile);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_service.Get(PlatformProfileKey, ""), Is.EqualTo(profile.Name),
+                "the platform-specific key is what ResolveSavedShellName reads first");
+            Assert.That(_service.Get("terminal.integrated.defaultProfile", ""), Is.EqualTo(profile.Name));
+        });
+    }
+
     // ---- D3 dialog removal (key stays in schema) ----
 
     [Test]
