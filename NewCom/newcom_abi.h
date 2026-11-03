@@ -16,6 +16,13 @@
 #include <cstddef>
 #include <cstring>
 
+// ─── Export macro ────────────────────────────────────────────────────────────
+#ifdef _WIN32
+#define NEWCOM_EXPORT __declspec(dllexport)
+#else
+#define NEWCOM_EXPORT __attribute__((visibility("default")))
+#endif
+
 // ─── GUID ────────────────────────────────────────────────────────────────────
 struct NewComGUID {
     uint32_t data1;

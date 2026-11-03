@@ -11,6 +11,8 @@
 
     <!-- NewCOM Component settings -->
     <BasicLangBackend>Cpp</BasicLangBackend>
+    <NewComEnabled>true</NewComEnabled>
+    <NewComHeader>$(MSBuildProjectDirectory)\component.h</NewComHeader>
     <RootNamespace>$safeprojectname$</RootNamespace>
     <AssemblyName>$safeprojectname$</AssemblyName>
   </PropertyGroup>
@@ -26,5 +28,11 @@
     <None Include="component.cpp" />
     <None Include="component.bas" />
   </ItemGroup>
+
+  <!-- NewCOM configuration -->
+  <PropertyGroup>
+    <NewComEnabled>true</NewComEnabled>
+    <NewComHeader>$(MSBuildProjectDirectory)\component.h</NewComHeader>
+  </PropertyGroup>
 
 </Project>

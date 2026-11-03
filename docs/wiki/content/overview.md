@@ -64,8 +64,10 @@ That convergence is the reason the repo is a monorepo. The engine's C ABI is the
 |---|---|
 | C# backend | <span class="pill ok">Maintained</span> Primary managed target, full .NET interop |
 | C++ backend | <span class="pill ok">Maintained</span> Native executables, `-std=c++20`, links the engine |
+| IL2CPP backend | <span class="pill ok">Maintained</span> Native executables from IL (no .NET runtime) |
 | JavaScript backend | <span class="pill warn">Active</span> Emits an ES-module web site; typed DOM is hand-curated |
-| LLVM / MSIL backends | <span class="pill mute">Unmaintained</span> Build, but out of scope — don't file issues |
+| LLVM backend | <span class="pill mute">Unmaintained</span> Build, but out of scope — don't file issues |
+| MSIL backend | <span class="pill ok">Maintained</span> MSIL output (promoted to in-scope) |
 | IDE shell | <span class="pill ok">Maintained</span> The build and run target |
 | VS 2022 extension | <span class="pill warn">v2.4.0</span> CPS + LSP; no debug launch provider |
 | VS Code extension | <span class="pill warn">Partial</span> Grammar and LSP client; not in the `.sln` |

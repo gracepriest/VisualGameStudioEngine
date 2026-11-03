@@ -362,6 +362,66 @@ namespace BasicLang.Compiler.LSP
                     break;
             }
 
+            // NewCOM IntelliSense: scan for .bas binding files in component directories
+            var newComDirs = new[] {
+                Path.Combine(dir, "components"),
+                Path.Combine(dir, "newcom"),
+                Path.Combine(dir, "generated"),
+                Path.Combine(dir, "bindings")
+            };
+            foreach (var newComDir in newComDirs)
+            {
+                if (!Directory.Exists(newComDir)) continue;
+                foreach (var ext in ProjectFile.BasicLangSourceExtensions)
+                {
+                    try
+                    {
+                        foreach (var f in Directory.GetFiles(newComDir, "*" + ext, SearchOption.AllDirectories))
+                        {
+                            var full = Path.GetFullPath(f);
+                            if (!siblings.Contains(full, StringComparer.OrdinalIgnoreCase))
+                                siblings.Add(full);
+                            if (siblings.Count >= MaxSiblingFiles) break;
+                        }
+                    }
+                    catch { }
+                    if (siblings.Count >= MaxSiblingFiles) break;
+                }
+                if (siblings.Count >= MaxSiblingFiles) break;
+            }
+            // Scan for newcomer.json manifests
+            try
+            {
+                foreach (var manifest in Directory.GetFiles(dir, "newcom.json", SearchOption.AllDirectories))
+                {
+                    var manifestDir = Path.GetDirectoryName(manifest);
+                    foreach (var ext in ProjectFile.BasicLangSourceExtensions)
+                    {
+                        foreach (var f in Directory.GetFiles(manifestDir, "*" + ext, SearchOption.TopDirectoryOnly))
+                        {
+                            var full = Path.GetFullPath(f);
+                            if (!siblings.Contains(full, StringComparer.OrdinalIgnoreCase))
+                                siblings.Add(full);
+                        }
+                    }
+                    foreach (var subDir in new[] { "generated", "bindings", "newcom" })
+                    {
+                        var genDir = Path.Combine(manifestDir, subDir);
+                        if (!Directory.Exists(genDir)) continue;
+                        foreach (var ext in ProjectFile.BasicLangSourceExtensions)
+                        {
+                            foreach (var f in Directory.GetFiles(genDir, "*" + ext, SearchOption.AllDirectories))
+                            {
+                                var full = Path.GetFullPath(f);
+                                if (!siblings.Contains(full, StringComparer.OrdinalIgnoreCase))
+                                    siblings.Add(full);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
             projectKey = dir.ToLowerInvariant();
             return siblings;
         }
