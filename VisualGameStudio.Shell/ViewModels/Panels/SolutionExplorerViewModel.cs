@@ -86,6 +86,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     public event EventHandler<string>? OpenInTerminalRequested;
     public event EventHandler<string>? FindInFolderRequested;
     public event EventHandler<string>? ShowFileHistoryRequested;
+    /// <summary>Raised with the selected project's .blproj path when Build Project is chosen.</summary>
+    public event EventHandler<string>? BuildProjectRequested;
     /// <summary>Raised to request clipboard set from the View (needs TopLevel access).</summary>
     public event EventHandler<string>? ClipboardCopyRequested;
 
@@ -132,8 +134,14 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         AddProjectReferenceCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SelectedIsProject));
+        OnPropertyChanged(nameof(SelectedIsFile));
+        OnPropertyChanged(nameof(SelectedCanRenameOrDelete));
+        OnPropertyChanged(nameof(SelectedIsSolutionProject));
         OnPropertyChanged(nameof(SelectedIsFormDocument));
     }
+
+    partial void OnCurrentSolutionChanged(BasicLangSolution? value) =>
+        OnPropertyChanged(nameof(SelectedIsSolutionProject));
 
     /// <summary>
     /// Whether the currently selected node is a project — gates the project-only section of
@@ -141,6 +149,23 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// Build Project, Remove from Solution).
     /// </summary>
     public bool SelectedIsProject => SelectedNode?.IsProject == true;
+
+    /// <summary>Whether a real file is selected — gates the context menu's Open entry.</summary>
+    public bool SelectedIsFile => SelectedNode?.IsFile == true;
+
+    /// <summary>
+    /// Project and solution nodes are structural; Rename/Delete on them are no-ops by design.
+    /// Hide those entries instead of offering dead actions.
+    /// </summary>
+    public bool SelectedCanRenameOrDelete =>
+        SelectedNode is { IsProject: false, IsSolution: false };
+
+    /// <summary>
+    /// Solution-only project actions (references, startup project, remove from solution) are
+    /// meaningless for a standalone .blproj; hide them unless a solution owns the node.
+    /// </summary>
+    public bool SelectedIsSolutionProject =>
+        SelectedNode?.IsProject == true && CurrentSolution != null;
 
     /// <summary>
     /// Whether the selected node is a form DOCUMENT (<c>.blform</c> / <c>.blwebform</c>) — gates
@@ -585,21 +610,21 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         if (SelectedNode == null || !SelectedNode.IsProject) return;
 
-        var solProject = SelectedNode.Tag as SolutionProject;
-        if (solProject == null || CurrentSolution == null) return;
+        var projectPath = SelectedNode.Tag is SolutionProject solProject && CurrentSolution != null
+            ? solProject.GetFullPath(CurrentSolution.SolutionDirectory)
+            : SelectedNode.FullPath;
 
-        var projectPath = solProject.GetFullPath(CurrentSolution.SolutionDirectory);
-        if (File.Exists(projectPath))
+        if (!File.Exists(projectPath))
         {
-            try
-            {
-                await _projectService.OpenProjectAsync(projectPath);
-            }
-            catch (Exception ex)
-            {
-                await _dialogService.ShowMessageAsync("Build Error", $"Failed to build project: {ex.Message}");
-            }
+            await _dialogService.ShowMessageAsync(
+                "Build Project",
+                $"The project file no longer exists:\n{projectPath}");
+            return;
         }
+
+        // The actual build lives in MainWindowViewModel (the same command the Build menu uses).
+        // Raise the path instead of only re-opening the project, which the old implementation did.
+        BuildProjectRequested?.Invoke(this, projectPath);
     }
 
     /// <summary>

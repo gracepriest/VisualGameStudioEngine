@@ -608,6 +608,7 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Handle file open requests from solution explorer
         SolutionExplorer.FileOpenRequested += OnFileOpenRequested;
+        SolutionExplorer.BuildProjectRequested += OnBuildProjectRequested;
 
         // Handle error list navigation
         ErrorList.DiagnosticDoubleClicked += OnDiagnosticDoubleClicked;
@@ -1943,6 +1944,25 @@ public partial class MainWindowViewModel : ViewModelBase
 
         // Reset error cycling index when diagnostics change
         _currentDiagnosticIndex = -1;
+    }
+
+    private async void OnBuildProjectRequested(object? sender, string projectPath)
+    {
+        try
+        {
+            if (!string.Equals(_projectService.CurrentProject?.FilePath, projectPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await _projectService.OpenProjectAsync(projectPath);
+            }
+
+            await BuildAsync();
+        }
+        catch (Exception ex)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Build Project", $"Failed to build '{Path.GetFileName(projectPath)}': {ex.Message}");
+        }
     }
 
     private async void OnFileOpenRequested(object? sender, string filePath)

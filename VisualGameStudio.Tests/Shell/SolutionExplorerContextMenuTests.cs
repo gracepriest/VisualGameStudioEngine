@@ -43,6 +43,12 @@ public class SolutionExplorerContextMenuTests
                 "and the handler must exist");
             Assert.That(File.ReadAllText(viewModel), Does.Contain("File.Exists(path)"),
                 "project/solution nodes are files even though TreeNode.IsFile is false");
+            Assert.That(File.ReadAllText(axaml), Does.Contain("SelectedIsFile"),
+                "Open must be hidden on a project/folder node");
+            Assert.That(File.ReadAllText(axaml), Does.Contain("SelectedCanRenameOrDelete"),
+                "Rename/Delete must be hidden on structural nodes");
+            Assert.That(File.ReadAllText(axaml), Does.Contain("SelectedIsSolutionProject"),
+                "solution-only actions must be hidden on a standalone project");
         });
     }
 
