@@ -6017,8 +6017,11 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (constant.Value is bool b)
                 return b ? "true" : "false";
 
-            if (constant.Value is float or double)
-                return CSharpFloatingLiteral(constant.Value);
+            if (constant.Value is float f)
+                return CSharpFloatLiteral(f);
+
+            if (constant.Value is double d)
+                return CSharpDoubleLiteral(d);
 
             // System.Decimal constant (spec 6.1: a literal converted from its
             // source text in a Decimal context) — the m suffix keeps the C#
@@ -6054,6 +6057,23 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         /// its <c>f</c> suffix. <c>-0.0</c> is unary minus on the constant <c>0.0</c>, which C#
         /// folds to −0.0.</para>
         /// </summary>
+        internal static string CSharpFloatLiteral(float value)
+        {
+            if (float.IsNaN(value)) return "float.NaN";
+            if (float.IsPositiveInfinity(value)) return "float.PositiveInfinity";
+            if (float.IsNegativeInfinity(value)) return "float.NegativeInfinity";
+            return value.ToString("R", System.Globalization.CultureInfo.InvariantCulture) + "f";
+        }
+
+        internal static string CSharpDoubleLiteral(double value)
+        {
+            if (double.IsNaN(value)) return "double.NaN";
+            if (double.IsPositiveInfinity(value)) return "double.PositiveInfinity";
+            if (double.IsNegativeInfinity(value)) return "double.NegativeInfinity";
+            var roundTrip = value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            return roundTrip.IndexOfAny(new[] { '.', 'E', 'e' }) >= 0 ? roundTrip : roundTrip + ".0";
+        }
+
         internal static string CSharpFloatingLiteral(object value)
         {
             if (value is float f)
@@ -6614,3 +6634,4 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private void Unindent() => _indentLevel = Math.Max(0, _indentLevel - 1);
     }
 }
+
