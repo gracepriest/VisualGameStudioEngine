@@ -99,7 +99,7 @@
             <MenuItem Header="Retarget Form..."
                       Command="{Binding #SolutionTreeView.DataContext.RetargetFormCommand}"
                       IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFormDocument}"/>
-            <Separator/>
+            <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFile}"/>
             <MenuItem Header="Rename"
                       Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}"
                       IsVisible="{Binding #SolutionTreeView.DataContext.SelectedCanRenameOrDelete}"
@@ -112,7 +112,7 @@
                 <TextBlock Text="🗑" FontSize="12"/>
               </MenuItem.Icon>
             </MenuItem>
-            <Separator/>
+            <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedCanRenameOrDelete}"/>
             <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
             <MenuItem Header="Open in Terminal" Command="{Binding #SolutionTreeView.DataContext.OpenInTerminalCommand}"/>
             <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
