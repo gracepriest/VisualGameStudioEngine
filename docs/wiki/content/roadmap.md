@@ -77,8 +77,8 @@ and from contention artifacts.
 
 | Decision | Meaning |
 |---|---|
-| **MSIL and LLVM backends** | Do not test, fix, or file bugs on them. They build; that is the whole promise. |
-| **COM interop** | Ruled out. Do not add it. |
+| **LLVM backend** | Do not test, fix, or file bugs on it. It builds; that is the whole promise. |
+| **COM interop (Windows)** | Ruled out. Do not add it. NewCOM is the cross-platform replacement. |
 | **The legacy VB.NET IDE** (`VisualGameStudio`) | Removed. Do not resurrect from old docs. |
 | **`VS.BasicLang` VSIX** | Removed. The current VS extension is `BasicLang.VisualStudio`. |
 

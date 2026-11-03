@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- BasicLang Project Type -->
+    <ProjectTypeGuids>{95a8f3e1-1234-4567-8903-abcdef123456}</ProjectTypeGuids>
+    <IsBasicLangProject>true</IsBasicLangProject>
+
+    <!-- Output settings -->
+    <OutputType>Library</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+
+    <!-- NewCOM Component settings -->
+    <BasicLangBackend>Cpp</BasicLangBackend>
+    <NewComEnabled>true</NewComEnabled>
+    <NewComHeader>$(MSBuildProjectDirectory)\component.h</NewComHeader>
+    <RootNamespace>$safeprojectname$</RootNamespace>
+    <AssemblyName>$safeprojectname$</AssemblyName>
+  </PropertyGroup>
+
+  <!-- BasicLang project capability -->
+  <ItemGroup>
+    <ProjectCapability Include="BasicLang" />
+  </ItemGroup>
+
+  <!-- NewCOM source files -->
+  <ItemGroup>
+    <None Include="component.h" />
+    <None Include="component.cpp" />
+    <None Include="component.bas" />
+  </ItemGroup>
+
+  <!-- NewCOM configuration -->
+  <PropertyGroup>
+    <NewComEnabled>true</NewComEnabled>
+    <NewComHeader>$(MSBuildProjectDirectory)\component.h</NewComHeader>
+  </PropertyGroup>
+
+</Project>

@@ -32,7 +32,7 @@ IDE/BasicLang.exe program.bas --target=csharp
 
 | Option | Meaning |
 |---|---|
-| `--target=X` | Backend: `csharp`, `cpp`, `javascript` (or `js`), `llvm`, `msil` |
+| `--target=X` | Backend: `csharp`, `cpp`, `javascript` (or `js`), `llvm`, `msil`, `il2cpp` |
 | `--output=FILE` | Output file path |
 | `--optimize` | Enable aggressive optimizations |
 | `--search-path=DIR` | Add a module search path |

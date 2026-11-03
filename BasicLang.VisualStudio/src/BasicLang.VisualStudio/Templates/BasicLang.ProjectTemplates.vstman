@@ -75,4 +75,26 @@
       </TemplateData>
     </VSTemplateHeader>
   </VSTemplateContainer>
+
+  <VSTemplateContainer TemplateType="Project">
+    <RelativePathOnDisk>BasicLang\NewComComponent</RelativePathOnDisk>
+    <TemplateFileName>NewComComponent.vstemplate</TemplateFileName>
+    <VSTemplateHeader>
+      <TemplateData xmlns="http://schemas.microsoft.com/developer/vstemplate/2005">
+        <Name>NewCOM Component</Name>
+        <Description>A NewCOM component project that can be used from both BasicLang and C++.</Description>
+        <ProjectType>VisualBasic</ProjectType>
+        <LanguageTag>visualbasic</LanguageTag>
+        <PlatformTag>Windows</PlatformTag>
+        <PlatformTag>Linux</PlatformTag>
+        <PlatformTag>macOS</PlatformTag>
+        <ProjectTypeTag>Library</ProjectTypeTag>
+        <SortOrder>1100</SortOrder>
+        <TemplateID>BasicLang.NewComComponent</TemplateID>
+        <CreateNewFolder>true</CreateNewFolder>
+        <DefaultName>NewComComponent</DefaultName>
+        <ProvideDefaultName>true</ProvideDefaultName>
+      </TemplateData>
+    </VSTemplateHeader>
+  </VSTemplateContainer>
 </VSTemplateManifest>
