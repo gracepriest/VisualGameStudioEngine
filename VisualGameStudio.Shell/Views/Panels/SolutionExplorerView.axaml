@@ -71,6 +71,12 @@
                   <TextBlock Text="F" FontSize="12" FontWeight="Bold" Foreground="#CE93D8"/>
                 </MenuItem.Icon>
               </MenuItem>
+              <MenuItem Header="NewCOM Component..."
+                        Command="{Binding #SolutionTreeView.DataContext.AddNewComComponentCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="N" FontSize="12" FontWeight="Bold" Foreground="#FFB86C"/>
+                </MenuItem.Icon>
+              </MenuItem>
               <Separator/>
               <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
                 <MenuItem.Icon>
