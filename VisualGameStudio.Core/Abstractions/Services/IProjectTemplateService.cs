@@ -537,6 +537,21 @@ public static class ProjectTemplates
         IsBuiltIn = true
     };
 
+    public static readonly ProjectTemplate NewComComponent = new()
+    {
+        Id = "newcom-component",
+        Name = "NewCOM Component",
+        ShortDescription = "A cross-platform component usable from BasicLang and C++",
+        Description = "A NewCOM component project. NewCOM is a cross-platform component model (like COM without Windows) that allows sharing components between BasicLang and C++ projects.",
+        Icon = "component",
+        Category = "Library",
+        Tags = new List<string> { "newcom", "component", "library", "cross-platform", "native" },
+        SupportedSolutionTypes = new List<string> { "dotnet", "msil", "native", "cpp" },
+        Order = 13,
+        IsBuiltIn = true,
+        CreateSolution = false
+    };
+
     #endregion
 
     /// <summary>
@@ -555,7 +570,8 @@ public static class ProjectTemplates
         CppConsoleApp,
         CppLibrary,
         CppGameApp,
-        WebSite
+        WebSite,
+        NewComComponent
     };
 }
 

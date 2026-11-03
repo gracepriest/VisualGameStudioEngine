@@ -12,6 +12,9 @@ public class BasicLangProject
 
     /// <summary>True when this project builds to a native binary (C++ language OR C++ backend) — routed through CppProjectBuilder.</summary>
     public bool IsNativeBuild => Language == ProjectLanguage.Cpp || TargetBackend == TargetBackend.Cpp;
+    // A NewCOM component project is built by the IL2CPP pipeline (shared lib + vtable + factory),
+    // not by the .NET SDK / CppProjectBuilder. Routed to BuildComponentProject.
+    public bool IsComponentBuild => OutputType == OutputType.Component;
 
     /// <summary>C++-only settings; null for BasicLang projects. Modeled so IDE saves round-trip them.</summary>
     public CppProjectSettings? CppSettings { get; set; }
@@ -98,7 +101,11 @@ public enum OutputType
 {
     Exe,
     Library,
-    WinExe
+    WinExe,
+    // Appended (not inserted) so ordinal-pinned tests and serialized files stay stable.
+    // A component is a shared library with a NewCOM vtable + factory; the IL2CPP
+    // backend emits it when --target=il2cpp. Not yet fully wired (Phase 0 foundation).
+    Component
 }
 
 public enum TargetBackend

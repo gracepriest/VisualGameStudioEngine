@@ -409,6 +409,12 @@ namespace BasicLang.Compiler.ProjectSystem
             // directory exactly as it found it (no bin/<config>, no obj/gen, no restore).
             Checkpoint(cancellationToken, CppBuildPhase.ResolveReferences);
 
+            // Phase 0 guard: NewCOM component output is not wired yet.
+            if (string.Equals(project.OutputType, "Component", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException(
+                    "NewCOM component output (OutputType=Component) is not yet wired. " +
+                    "Phase 1 (IL2CPP component emission) is pending; use the manual C++ annotation path meanwhile.");
+
             var outcome = new CppEmitOutcome();
             var projectDir = Path.GetDirectoryName(project.FilePath) ?? ".";
             var outputName = project.AssemblyName ?? project.ProjectName ?? "Program";

@@ -14,7 +14,8 @@ namespace BasicLang.Compiler.ProjectSystem
     {
         public string FilePath { get; set; }
         public string ProjectName { get; set; }
-        public string OutputType { get; set; } = "Exe"; // Exe, Library
+        public string OutputType { get; set; } = "Exe"; // Exe, Library, Component
+        public string? NewComKind { get; set; } // "component" (default) or "control"
         public string TargetFramework { get; set; } = "net8.0";
         public string RootNamespace { get; set; }
         public string AssemblyName { get; set; }
@@ -200,6 +201,7 @@ namespace BasicLang.Compiler.ProjectSystem
             {
                 project.ProjectName = propertyGroup.Element("ProjectName")?.Value;
                 project.OutputType = propertyGroup.Element("OutputType")?.Value ?? "Exe";
+                project.NewComKind = propertyGroup.Element("NewComKind")?.Value;
                 project.TargetFramework = propertyGroup.Element("TargetFramework")?.Value ?? "net8.0";
                 project.RootNamespace = propertyGroup.Element("RootNamespace")?.Value;
                 project.AssemblyName = propertyGroup.Element("AssemblyName")?.Value;

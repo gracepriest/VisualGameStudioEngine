@@ -2927,11 +2927,19 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 return;
             }
 
+            // Continue For: a branch to a loop's increment block must not inline that block
+            // into the branch site (which would steal the increment from the normal path).
+            // Jump to the increment block's label instead; GenerateLoop emits it after the body.
+            if (target.Name != null && target.Name.Contains(".inc"))
+            {
+                WriteLine($"goto {LoopIncrementLabel(target)};");
+                return;
+            }
+
             // ADR-0014 A1: a wrapped counted For's step comes after the body's finally, which
             // GenerateLoop writes; the body's end simply falls to the end of the try.
             if (_perIter.IsDeferredStep(target))
                 return;
-
             // ⛔ FIRST, and before the _processedBlocks / ".end" tests below: an `Exit For` out of
             // a For Each targets a block those two tests both discard, which is exactly how
             // `Exit For` became a silent no-op on this backend (measured: a loop over 1,2,3,4
@@ -3746,6 +3754,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             "__exit_" + new string((endBlock.Name ?? "loop")
                 .Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
 
+        private static string LoopIncrementLabel(BasicBlock incBlock) =>
+            "__inc_" + new string((incBlock.Name ?? "loop")
+                .Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
         /// <summary>
         /// Emit the jump that LEAVES the loop <paramref name="endBlock"/> ends.
         ///

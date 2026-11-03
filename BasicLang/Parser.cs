@@ -3245,6 +3245,8 @@ namespace BasicLang.Compiler
                 return ParseReturnStatement();
             if (Check(TokenType.Exit))
                 return ParseExitStatement();
+            if (Check(TokenType.Continue))
+                return ParseContinueStatement();
             if (Check(TokenType.Dim))
                 return ParseVariableDeclaration();
             if (Check(TokenType.Auto))
@@ -4114,6 +4116,35 @@ namespace BasicLang.Compiler
             else
             {
                 throw new ParseException("Expected 'For', 'Do', 'While', 'Sub', 'Function', or 'Property' after 'Exit'", Peek());
+            }
+
+            return node;
+        }
+
+        private ContinueStatementNode ParseContinueStatement()
+        {
+            var token = Consume(TokenType.Continue, "Expected 'Continue'");
+            var node = new ContinueStatementNode(token.Line, token.Column);
+
+            // Expect the kind of continue: For, Do, or While
+            if (Check(TokenType.For))
+            {
+                Advance();
+                node.Kind = ContinueKind.For;
+            }
+            else if (Check(TokenType.Do))
+            {
+                Advance();
+                node.Kind = ContinueKind.Do;
+            }
+            else if (Check(TokenType.While))
+            {
+                Advance();
+                node.Kind = ContinueKind.While;
+            }
+            else
+            {
+                throw new ParseException("Expected 'For', 'Do', or 'While' after 'Continue'", Peek());
             }
 
             return node;
@@ -5877,6 +5908,7 @@ namespace BasicLang.Compiler
                     case TokenType.With:
                     case TokenType.Return:
                     case TokenType.Exit:
+                    case TokenType.Continue:
                     case TokenType.Throw:
 
                     // End tokens (block terminators)

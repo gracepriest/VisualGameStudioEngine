@@ -172,6 +172,7 @@ public partial class FormToolboxViewModel : ObservableObject
         FormSchematic.Separator => "ΓÇö",
         FormSchematic.ToolButton => "[Γû╕",
         FormSchematic.StatusLabel => "_A",
+        FormSchematic.NewComControl => "[~]",
 
         // Γ¢ö Reached only by a schematic added without a mark, which FormToolboxGlyphTests fails on.
         // Left as a visible "?" rather than something plausible precisely so it cannot pass for a

@@ -531,6 +531,11 @@ namespace BasicLang.Compiler
             WriteLine($"Exit {node.Kind}");
         }
 
+        public void Visit(ContinueStatementNode node)
+        {
+            WriteLine($"Continue {node.Kind}");
+        }
+
         public void Visit(AssignmentStatementNode node)
         {
             WriteLine($"Assignment ({node.Operator}):");

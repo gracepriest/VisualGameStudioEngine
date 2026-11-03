@@ -11149,6 +11149,16 @@ namespace BasicLang.Compiler.SemanticAnalysis
             }
         }
 
+        public void Visit(ContinueStatementNode node)
+        {
+            // Continue For/Do/While should be inside a loop
+            var loopScope = _currentScope.GetLoopScope();
+            if (loopScope == null)
+            {
+                Error($"Continue {node.Kind} must be inside a loop", node.Line, node.Column);
+            }
+        }
+
         /// <summary>
         /// ⭐ Task #178 — THE ONE PLACE a statement decides "this expression is being WRITTEN",
         /// and so the one place BC30526 is judged. Every statement that stores into an expression

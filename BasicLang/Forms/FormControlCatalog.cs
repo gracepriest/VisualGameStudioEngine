@@ -254,7 +254,9 @@ public sealed record FormPropertyDef(
     FormTranslucency WinFormsTranslucency = FormTranslucency.Allowed,
     bool Mergeable = true,
     string? DomMember = null,
-    bool PortableCssOnly = false)
+    bool PortableCssOnly = false,
+    bool IsDynamic = false,
+    string? DynamicType = null)
 {
     // Mergeable: whether Visual Studio's Properties window offers this row when SEVERAL controls are selected ΓÇö WinForms'
     // [MergableProperty] (.NET spells it "Mergable"), absent = true. MEASURED, not chosen: tools/WinFormsMetadataDump records
@@ -1374,7 +1376,11 @@ public enum FormSchematic
     ToolButton,
 
     /// <summary>A status panel: its caption centred, behind the divider rule that starts the panel.</summary>
-    StatusLabel
+    StatusLabel,
+
+    /// <summary>A NewCOM-hosted control: a dashed box with a plug glyph, since its face is defined
+    /// by the native component and cannot be drawn at design time.</summary>
+    NewComControl
 }
 
 /// <summary>
@@ -1526,7 +1532,9 @@ public sealed record FormControlDef(
     string? PasswordProperty = null,
     FormEnableTarget? EnableTarget = null,
     FormClientRule? ClientArea = null,
-    string? PortableCss = null)
+    string? PortableCss = null,
+    bool IsDynamic = false,
+    string? DynamicType = null)
 {
     /// <summary>Task 25's flag, now derived: the eleven sites that read it keep reading it.</summary>
     public bool IsComponent => Place == FormPlace.Tray;
@@ -2435,7 +2443,12 @@ public static class FormControlCatalog
     /// leaves every shared property null inside the concat ΓÇö with no compile error and no exception
     /// at init, just a NullReferenceException later from <c>Property()</c> or <c>Accepts()</c>.</para>
     /// </summary>
-    public static readonly IReadOnlyList<FormControlDef> All = new List<FormControlDef>
+    private static readonly List<FormControlDef> _external = new();
+    public static IReadOnlyList<FormControlDef> All => _staticAll.Concat(_external).ToList().AsReadOnly();
+    public static void RegisterExternal(FormControlDef def) { if (!_external.Any(d => d.Kind == def.Kind)) _external.Add(def); }
+    public static IReadOnlyList<FormControlDef> StaticAll => _staticAll;
+
+    private static readonly List<FormControlDef> _staticAll = new List<FormControlDef>
     {
         new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign, PaddingRow,
             LabelAutoSize(),
@@ -3186,6 +3199,12 @@ public static class FormControlCatalog
             Schematic: FormSchematic.StatusLabel,
             Events: ToolStripStatusLabelEvents(),
             Place: FormPlace.Item),
+        // Phase 3: a NewCOM-hosted control. WinFormsType is a placeholder (Control) until
+        // NewCom.Runtime is referenced by the build/test projects; swap to
+        // "NewCom.Runtime.NewComControlHost" once the SDK dependency is wired.
+        new("NewComControl", "Control", null, null, false, Common(Text),
+            DefaultWidth: 100, DefaultHeight: 30, Schematic: FormSchematic.NewComControl,
+            Events: Ev("Click", "click", category: FormEventCategory.Action, description: ClickedDescription)),
     }.Select(WithWebExtras).ToList();
 
     /// <summary>

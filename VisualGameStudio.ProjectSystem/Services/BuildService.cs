@@ -467,7 +467,11 @@ public class BuildService : IBuildService
             // C++ backend (TargetBackend=Cpp, transpiled to native) build through
             // the SAME CppProjectBuilder the CLI uses — one native-project path, no
             // IDE-side reimplementation (the CLI mirror is ProjectFile.IsNativeProject).
-            if (project.IsNativeBuild)
+            if (project.IsComponentBuild)
+            {
+                result = await Task.Run(() => BuildComponentProject(project), cancellationToken);
+            }
+            else if (project.IsNativeBuild)
             {
                 // BuildCppProject never throws (exceptions map to a failed result)
                 // so execution ALWAYS falls through to the shared finalization
@@ -1206,6 +1210,14 @@ public class BuildService : IBuildService
         bool usesAvalonia = codeUpper.Contains("USING AVALONIA;");
         bool usesAspNet = codeUpper.Contains("USING MICROSOFT.ASPNETCORE;");
 
+        // Phase 0 guard: component output is not wired yet (Phase 1 = IL2CPP component
+        // emission). Fail loudly instead of silently producing an Exe/Library.
+        if (project.OutputType == OutputType.Component)
+            throw new NotSupportedException(
+                "NewCOM component output (OutputType.Component) is not yet wired. " +
+                "Phase 1 (IL2CPP component emission: vtable + factory + shared library) is pending. " +
+                "Use the manual C++ annotation path (newcom_gen.py) in the meantime.");
+
         string outputType = project.OutputType switch
         {
             OutputType.WinExe => "WinExe",
@@ -1366,6 +1378,100 @@ public class BuildService : IBuildService
         // Show both stdout and stderr for better error diagnostics
         var output = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
         return (buildProcess.ExitCode, output);
+    }
+
+    /// <summary>
+    /// NewCOM component build: shells out to `BasicLang.exe build` (IL2CPP pipeline),
+    /// which produces the shared lib + vtable + factory + manifest + .bas binding.
+    /// Never throws: failures map to a failed BuildResult.
+    /// </summary>
+    private BuildResult BuildComponentProject(BasicLangProject project)
+    {
+        var result = new BuildResult();
+        var configuration = CurrentConfiguration?.Name ?? "Debug";
+        _outputService.WriteLine($"Building NewCOM component {project.Name} [{configuration}]...", OutputCategory.Build);
+
+        var exe = FindBasicLangExe();
+        if (exe == null)
+        {
+            result.Success = false;
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL7001",
+                Message = "BasicLang.exe not found. Cannot build NewCOM component.",
+                FilePath = project.FilePath,
+                Severity = DiagnosticSeverity.Error,
+                Source = "newcom"
+            });
+            _outputService.WriteError("BasicLang.exe not found.", OutputCategory.Build);
+            return result;
+        }
+
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(exe, $"build \"{project.FilePath}\"")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(project.FilePath) ?? "."
+            };
+            var proc = System.Diagnostics.Process.Start(psi)!;
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            foreach (var line in (stdout + "\n" + stderr).Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+                _outputService.WriteLine(line, OutputCategory.Build);
+
+            result.Success = proc.ExitCode == 0;
+            if (!result.Success)
+            {
+                result.Diagnostics.Add(new DiagnosticItem
+                {
+                    Id = "BL7002",
+                    Message = $"NewCOM component build failed (exit {proc.ExitCode}).",
+                    FilePath = project.FilePath,
+                    Severity = DiagnosticSeverity.Error,
+                    Source = "newcom"
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.Diagnostics.Add(new DiagnosticItem
+            {
+                Id = "BL7003",
+                Message = $"NewCOM component build failed: {ex.Message}",
+                FilePath = project.FilePath,
+                Severity = DiagnosticSeverity.Error,
+                Source = "newcom"
+            });
+            _outputService.WriteError($"NewCOM component build failed: {ex.Message}", OutputCategory.Build);
+        }
+        return result;
+    }
+
+    private static string? FindBasicLangExe()
+    {
+        // Primary: next to the running IDE.
+        var baseDir = AppContext.BaseDirectory;
+        var cand = Path.Combine(baseDir, "BasicLang.exe");
+        if (File.Exists(cand)) return cand;
+        // Dev-tree: IDE/bin/.../net8.0 -> repo/BasicLang/bin/Debug/net8.0
+        foreach (var levelsUp in new[] { "..", @"..\..\..", @"..\..\..\.." })
+        {
+            cand = Path.Combine(baseDir, levelsUp, "BasicLang", "bin", "Debug", "net8.0", "BasicLang.exe");
+            if (File.Exists(cand)) return Path.GetFullPath(cand);
+            cand = Path.Combine(baseDir, levelsUp, "BasicLang", "bin", "Release", "net8.0", "BasicLang.exe");
+            if (File.Exists(cand)) return Path.GetFullPath(cand);
+        }
+        // Committed drop.
+        cand = Path.Combine(baseDir, "..", "..", "..", "..", "IDE", "BasicLang.exe");
+        if (File.Exists(cand)) return Path.GetFullPath(cand);
+        return null;
     }
 
     /// <summary>

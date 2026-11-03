@@ -4843,8 +4843,8 @@ namespace BasicLang.Compiler.IR
 
             EmitInstruction(new IRConditionalBranch(cond, bodyBlock, endBlock));
 
-            // Push loop context
-            _loopStack.Push(new LoopContext(condBlock, endBlock, bodyBlock, _currentFunction));
+            // Push loop context (Continue goes to inc block)
+            _loopStack.Push(new LoopContext(incBlock, endBlock, bodyBlock, _currentFunction));
 
             // Body block
             _currentBlock = bodyBlock;
@@ -5925,6 +5925,20 @@ namespace BasicLang.Compiler.IR
                     break;
             }
         }
+
+        public void Visit(ContinueStatementNode node)
+        {
+            TrackSourceLine(node);
+            if (_loopStack.Count == 0)
+            {
+                throw new Exception($"Continue {node.Kind} outside of loop");
+            }
+            var loopContext = _loopStack.Peek();
+            // An ordinary branch (not a loop exit) to the loop's continue target.
+            EmitInstruction(new IRBranch(loopContext.ContinueTarget));
+        }
+
+
 
         public void Visit(AssignmentStatementNode node)
         {

@@ -27,8 +27,26 @@ namespace BasicLang.Compiler.ILReader
         private readonly HashSet<string> _virtualMethodKeys = new();
         private readonly HashSet<string> _genericInstantiations = new();
         private readonly StringBuilder _sb = new();
+
+    /// <summary>
+    /// Phase 1: public instance methods collected during emission, used to generate
+    /// a NewCOM vtable/factory/thunks for component output.
+    /// </summary>
+    public class ComponentMethod
+    {
+        public string ClassName;
+        public string MethodName;
+        public string ReturnType;
+        public List<string> ParamTypes = new();
+        public List<string> ParamNames = new();
+    }
+    public readonly List<ComponentMethod> ComponentApi = new();
+
+    /// <summary>When true, Emit() does not require or emit a Main() entry point.</summary>
+    public bool ComponentMode { get; set; }
         private int _indent;
         private byte[] _il;
+    private bool _emitMain;
         private int _localCounter;
         private bool _isInstanceMethod;
 
@@ -241,6 +259,32 @@ namespace BasicLang.Compiler.ILReader
                     var paramsStr = string.Join(", ", paramList);
                     var funcName = (methodName == ".ctor") ? "_ctor" : methodName;
                     _sb.AppendLine($"{returnType} {typeName}_{funcName}({paramsStr});");
+
+                    // Phase 1: record public instance methods for NewCOM component generation.
+                    // Only public (non-static, non-constructor) methods of user types.
+                    try
+                    {
+                        bool isPublic = md.Attributes.HasFlag(System.Reflection.MethodAttributes.Public);
+                        if (isPublic && !isStatic && methodName != ".ctor" && methodName != ".cctor")
+                        {
+                            var cm = new ComponentMethod
+                            {
+                                ClassName = typeName,
+                                MethodName = methodName,
+                                ReturnType = returnType
+                            };
+                            // Re-derive param names/types (already built above)
+                            int _p = 0;
+                            foreach (var pType in sig.ParameterTypes)
+                            {
+                                cm.ParamTypes.Add(ILTypeMapper.Map(pType));
+                                cm.ParamNames.Add($"arg{_p}");
+                                _p++;
+                            }
+                            ComponentApi.Add(cm);
+                        }
+                    }
+                    catch { }
                 }
             }
             _sb.AppendLine();
@@ -393,30 +437,41 @@ namespace BasicLang.Compiler.ILReader
             }
 
             if (ilBytes == null)
-                throw new InvalidOperationException("Main method not found or has no body.");
+            {
+                if (!ComponentMode)
+                    throw new InvalidOperationException("Main method not found or has no body.");
+                // Component mode: no entry point needed; skip main() emission.
+            }
 
+            _emitMain = ilBytes != null;
             _il = ilBytes;
-            ParseLocalTypes(_methodBody);
-            IdentifyBranchTargets();
+            if (_emitMain)
+            {
+                ParseLocalTypes(_methodBody);
+                IdentifyBranchTargets();
+            }
 
             // Map method calls: Box.GetX → Box_GetX
             // (handled in ResolveMethodName via type name)
 
-            _sb.AppendLine("int main()");
-            _sb.AppendLine("{");
-            _indent = 1;
-
-            try
+            if (_emitMain)
             {
-                EmitMethodBody();
-            }
-            catch (Exception ex)
-            {
-                System.IO.File.WriteAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emit-error.txt", $"Main: {ex.Message}\n{ex.StackTrace}");
-            }
+                _sb.AppendLine("int main()");
+                _sb.AppendLine("{");
+                _indent = 1;
 
-            _sb.AppendLine("    return 0;");
-            _sb.AppendLine("}");
+                try
+                {
+                    EmitMethodBody();
+                }
+                catch (Exception ex)
+                {
+                    System.IO.File.WriteAllText("C:\\Users\\melvi\\AppData\\Local\\Temp\\opencode\\emit-error.txt", $"Main: {ex.Message}\n{ex.StackTrace}");
+                }
+
+                _sb.AppendLine("    return 0;");
+                _sb.AppendLine("}");
+            }
             return _sb.ToString();
         }
 

@@ -124,6 +124,17 @@ namespace BasicLang.Compiler.Driver
                             return 1;
                         }
 
+                    case "component":
+                        try
+                        {
+                            return HandleComponentCommand(subArgs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"Component command failed: {ex.Message}");
+                            return 1;
+                        }
+
                     case "run":
                         try
                         {
@@ -774,6 +785,144 @@ namespace BasicLang.Compiler.Driver
             }
         }
 
+        static int HandleComponentCommand(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage: basiclang component <pack|add|list> [options]");
+                Console.WriteLine("  pack <dir> -o <file.ncom>   Package a built component directory into a .ncom file.");
+                Console.WriteLine("  add <file.ncom>             Extract a .ncom into ~/.newcom/<name>/.");
+                Console.WriteLine("  list                        List installed components.");
+                return 0;
+            }
+
+            var sub = args[0].ToLowerInvariant();
+            var rest = args.Skip(1).ToArray();
+
+            switch (sub)
+            {
+                case "pack":
+                    return PackComponent(rest);
+                case "add":
+                    return AddComponent(rest);
+                case "list":
+                    return ListComponents();
+                default:
+                    Console.Error.WriteLine($"Unknown component subcommand: {sub}");
+                    return 1;
+            }
+        }
+
+        static int PackComponent(string[] args)
+        {
+            string? dir = null;
+            string? output = null;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "-o" && i + 1 < args.Length) { output = args[++i]; }
+                else if (dir == null) { dir = args[i]; }
+            }
+            if (dir == null)
+            {
+                Console.Error.WriteLine("Usage: basiclang component pack <dir> -o <file.ncom>");
+                return 1;
+            }
+            dir = Path.GetFullPath(dir);
+            if (!Directory.Exists(dir))
+            {
+                Console.Error.WriteLine($"Directory not found: {dir}");
+                return 1;
+            }
+            if (string.IsNullOrEmpty(output))
+            {
+                var name = new DirectoryInfo(dir).Name;
+                output = Path.Combine(Directory.GetCurrentDirectory(), name + ".ncom");
+            }
+            output = Path.GetFullPath(output);
+
+            // Validate manifest exists
+            var manifestPath = Path.Combine(dir, "newcom.json");
+            if (!File.Exists(manifestPath))
+            {
+                Console.Error.WriteLine($"No newcom.json found in {dir}");
+                return 1;
+            }
+
+            // Zip the directory contents into the .ncom file
+            if (File.Exists(output)) File.Delete(output);
+            System.IO.Compression.ZipFile.CreateFromDirectory(dir, output);
+            Console.WriteLine($"Packed component: {output}");
+            return 0;
+        }
+
+        static int AddComponent(string[] args)
+        {
+            if (args.Length == 0)
+            {
+                Console.Error.WriteLine("Usage: basiclang component add <file.ncom>");
+                return 1;
+            }
+            var file = Path.GetFullPath(args[0]);
+            if (!File.Exists(file))
+            {
+                Console.Error.WriteLine($"File not found: {file}");
+                return 1;
+            }
+
+            // Read manifest from the zip to get the name
+            string name = Path.GetFileNameWithoutExtension(file);
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(file))
+            {
+                var entry = zip.GetEntry("newcom.json");
+                if (entry != null)
+                {
+                    using var s = entry.Open();
+                    using var r = new StreamReader(s);
+                    var json = r.ReadToEnd();
+                    // Minimal JSON parse for "name"
+                    var idx = json.IndexOf("\"name\"");
+                    if (idx >= 0)
+                    {
+                        var colon = json.IndexOf(':', idx);
+                        var q1 = json.IndexOf('"', colon);
+                        var q2 = json.IndexOf('"', q1 + 1);
+                        if (q1 >= 0 && q2 > q1) name = json.Substring(q1 + 1, q2 - q1 - 1);
+                    }
+                }
+            }
+
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".newcom", name);
+            Directory.CreateDirectory(cacheDir);
+            // Clear old contents
+            foreach (var f in Directory.GetFiles(cacheDir)) File.Delete(f);
+            foreach (var d in Directory.GetDirectories(cacheDir)) Directory.Delete(d, true);
+
+            System.IO.Compression.ZipFile.ExtractToDirectory(file, cacheDir);
+            Console.WriteLine($"Installed component '{name}' to {cacheDir}");
+            return 0;
+        }
+
+        static int ListComponents()
+        {
+            var cacheDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".newcom");
+            if (!Directory.Exists(cacheDir))
+            {
+                Console.WriteLine("No components installed.");
+                return 0;
+            }
+            foreach (var dir in Directory.GetDirectories(cacheDir))
+            {
+                var manifest = Path.Combine(dir, "newcom.json");
+                if (File.Exists(manifest))
+                {
+                    Console.WriteLine(Path.GetFileName(dir));
+                }
+            }
+            return 0;
+        }
+
         static async Task<int> HandleBuildCommand(string[] args)
         {
             var projectPath = FindProjectFile(args.FirstOrDefault(a => !a.StartsWith("-")));
@@ -802,8 +951,11 @@ namespace BasicLang.Compiler.Driver
                 }
             }
 
-            // ---------- IL2CPP projects: route through the IL2CPP pipeline. ----------
-            if (project.Backend?.ToLowerInvariant() == "il2cpp")
+            // ---------- IL2CPP / NewCOM component projects: route through the IL2CPP pipeline. ----------
+            // A component project (OutputType=Component) is always built via IL2CPP regardless
+            // of the declared Backend, so the IDE can emit Backend=CSharp and still build.
+            if (project.Backend?.ToLowerInvariant() == "il2cpp" ||
+                string.Equals(project.OutputType, "Component", StringComparison.OrdinalIgnoreCase))
             {
                 return CompileProjectIL2CPP(project, projectPath, args);
             }
@@ -1135,6 +1287,7 @@ namespace BasicLang.Compiler.Driver
                     {
                         "Library" => "Library",
                         "WinExe" => "WinExe",
+                        "Component" => "Component",
                         _ => "Exe"
                     };
 
@@ -1953,6 +2106,348 @@ namespace BasicLang.Compiler.Driver
             Console.WriteLine();
             Console.WriteLine($"  Output binary: {binPath}");
             return runProc.ExitCode;
+        }
+
+        // Phase 1: wrap an IL2CPP-generated C++ translation unit as a NewCOM component.
+        // Appends INewUnknown vtable + ref counting + factory + C-ABI thunks + includes.
+        static string WrapAsNewComComponent(string cppCode, List<BasicLang.Compiler.ILReader.ILCppEmitter.ComponentMethod> api, string componentName, bool isControl = false)
+        {
+            if (api == null || api.Count == 0)
+            {
+                // No public instance methods; still emit a minimal component.
+            }
+
+            // Determine the component class name: first distinct class in api, else componentName.
+            string className = componentName;
+            if (api != null && api.Count > 0) className = api[0].ClassName;
+            if (string.IsNullOrEmpty(className)) className = componentName;
+
+            // Filter to that class's methods.
+            var methods = (api ?? new List<BasicLang.Compiler.ILReader.ILCppEmitter.ComponentMethod>())
+                .Where(m => m.ClassName == className).ToList();
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine(cppCode);
+            sb.AppendLine();
+            sb.AppendLine("#include \"newcom_abi.h\"");
+            sb.AppendLine("#include <cstring>");
+            sb.AppendLine("#include <cstdlib>");
+            sb.AppendLine("#include <atomic>");
+            sb.AppendLine();
+
+            // Forward declarations
+            sb.AppendLine($"struct I{className}Vtbl;");
+            sb.AppendLine($"struct I{className};");
+            sb.AppendLine();
+
+            // Impl struct
+            sb.AppendLine($"struct {className}NewComImpl {{");
+            sb.AppendLine($"    const I{className}Vtbl* vtbl;");
+            sb.AppendLine($"    std::atomic<uint32_t> refCount;");
+            sb.AppendLine($"    {className}* instance;");
+            sb.AppendLine($"    {className}NewComImpl() : refCount(1), vtbl(nullptr), instance(nullptr) {{}}");
+            sb.AppendLine("};");
+            sb.AppendLine();
+
+            // VTable struct: QI/AddRef/Release + method slots
+            sb.AppendLine($"struct I{className}Vtbl {{");
+            sb.AppendLine("    int32_t  (*QueryInterface)(INewUnknown* self, const NewComGUID* iid, void** out);");
+            sb.AppendLine("    uint32_t (*AddRef)(INewUnknown* self);");
+            sb.AppendLine("    uint32_t (*Release)(INewUnknown* self);");
+            foreach (var m in methods)
+            {
+                string ret = m.ReturnType;
+                bool isVoid = ret == "void";
+                // NewCOM return type for the slot
+                string slotRet;
+                if (isVoid) slotRet = "void";
+                else if (ret == "std::string") slotRet = "int32_t";
+                else slotRet = "int32_t"; // non-void methods return NEWCOM_OK + out param
+                // Actually keep numeric returns direct? NewCOM convention: non-void returns int (error) + out param.
+                // We'll make ALL non-void return int32_t (NEWCOM_OK) with an out param.
+                var paramList = new List<string>();
+                // self is implicit in vtable (first arg self)
+                foreach (var p in m.ParamTypes)
+                {
+                    string pt = MapCppToNewComParam(p);
+                    paramList.Add($"{pt}");
+                }
+                if (!isVoid)
+                {
+                    string outType = MapCppToNewComOut(ret);
+                    paramList.Add($"{outType}");
+                }
+                string paramsStr = string.Join(", ", paramList.Select((t, i) => $"{t} a{i}"));
+                // vtable slot signature includes self
+                string selfParam = $"I{className}* self";
+                string fullParams = string.IsNullOrEmpty(paramsStr) ? selfParam : selfParam + ", " + paramsStr;
+                sb.AppendLine($"    {slotRet} (*{m.MethodName})({fullParams});");
+            }
+            sb.AppendLine("};");
+            sb.AppendLine();
+
+            // Interface struct (vtable pointer only; QI/AddRef/Release slots live in I{className}Vtbl)
+            sb.AppendLine($"struct I{className} {{");
+            sb.AppendLine($"    const I{className}Vtbl* vtbl;");
+            sb.AppendLine("};");
+            sb.AppendLine();
+
+            // QueryInterface/AddRef/Release
+            sb.AppendLine($"static int32_t {className}_QI(INewUnknown* self, const NewComGUID* iid, void** out) {{ *out = self; reinterpret_cast<{className}NewComImpl*>(self)->refCount++; return NEWCOM_OK; }}");
+            sb.AppendLine($"static uint32_t {className}_AddRef(INewUnknown* self) {{ return ++reinterpret_cast<{className}NewComImpl*>(self)->refCount; }}");
+            sb.AppendLine($"static uint32_t {className}_Release(INewUnknown* self) {{");
+            sb.AppendLine($"    auto impl = reinterpret_cast<{className}NewComImpl*>(self);");
+            sb.AppendLine($"    uint32_t c = --impl->refCount;");
+            sb.AppendLine($"    if (c == 0) {{ delete impl->instance; delete impl; }}");
+            sb.AppendLine($"    return c;");
+            sb.AppendLine("}");
+            sb.AppendLine();
+
+            // Method thunks (vtable impls)
+            foreach (var m in methods)
+            {
+                bool isVoid = m.ReturnType == "void";
+                // Build param list for thunk signature (self + newcom params)
+                var newcomParams = new List<string>();
+                for (int i = 0; i < m.ParamTypes.Count; i++)
+                {
+                    string pt = MapCppToNewComParam(m.ParamTypes[i]);
+                    newcomParams.Add($"{pt} a{i}");
+                }
+                if (!isVoid)
+                {
+                    string outType = MapCppToNewComOut(m.ReturnType);
+                    newcomParams.Add($"{outType} outResult");
+                }
+                string thunkParams = $"I{className}* self" + (newcomParams.Count > 0 ? ", " + string.Join(", ", newcomParams) : "");
+                string thunkRet = isVoid ? "void" : "int32_t";
+                sb.AppendLine($"static {thunkRet} {className}_{m.MethodName}Impl({thunkParams}) {{");
+                sb.AppendLine($"    auto impl = reinterpret_cast<{className}NewComImpl*>(self);");
+                // Convert input params to IL2CPP types for the call
+                var callArgs = new List<string>();
+                for (int i = 0; i < m.ParamTypes.Count; i++)
+                {
+                    string cppType = m.ParamTypes[i];
+                    if (cppType == "std::string")
+                        callArgs.Add($"std::string(a{i} ? a{i} : \"\")");
+                    else
+                        callArgs.Add($"a{i}");
+                }
+                string callExpr = $"{className}_{m.MethodName}(impl->instance" + (callArgs.Count > 0 ? ", " + string.Join(", ", callArgs) : "") + ")";
+                if (isVoid)
+                {
+                    sb.AppendLine($"    {callExpr};");
+                }
+                else if (m.ReturnType == "std::string")
+                {
+                    sb.AppendLine($"    std::string __r = {callExpr};");
+                    sb.AppendLine($"    if (outResult) {{ *outResult = (char*)malloc(__r.size() + 1); strcpy(*outResult, __r.c_str()); }}");
+                    sb.AppendLine($"    return NEWCOM_OK;");
+                }
+                else
+                {
+                    sb.AppendLine($"    if (outResult) *outResult = {callExpr};");
+                    sb.AppendLine($"    return NEWCOM_OK;");
+                }
+                sb.AppendLine("}");
+                sb.AppendLine();
+            }
+
+            // Static vtable instance
+            sb.AppendLine($"static const I{className}Vtbl g_{className}_vtbl = {{");
+            sb.AppendLine($"    {className}_QI,");
+            sb.AppendLine($"    {className}_AddRef,");
+            sb.AppendLine($"    {className}_Release,");
+            foreach (var m in methods)
+            {
+                sb.AppendLine($"    {className}_{m.MethodName}Impl,");
+            }
+            sb.AppendLine("};");
+            sb.AppendLine();
+
+            // Factory
+            sb.AppendLine($"extern \"C\" NEWCOM_EXPORT I{className}* {className}_Create() {{");
+            sb.AppendLine($"    auto impl = new {className}NewComImpl();");
+            sb.AppendLine($"    impl->instance = new {className}();");
+            // call default ctor if exists? _ctor with 0 args not emitted call; struct default. Fine.
+            sb.AppendLine($"    impl->vtbl = &g_{className}_vtbl;");
+            sb.AppendLine($"    return reinterpret_cast<I{className}*>(impl);");
+            sb.AppendLine("}");
+            sb.AppendLine();
+
+            // C-ABI thunks
+            foreach (var m in methods)
+            {
+                bool isVoid = m.ReturnType == "void";
+                var newcomParams = new List<string>();
+                for (int i = 0; i < m.ParamTypes.Count; i++)
+                {
+                    string pt = MapCppToNewComParam(m.ParamTypes[i]);
+                    newcomParams.Add($"{pt} a{i}");
+                }
+                if (!isVoid)
+                {
+                    string outType = MapCppToNewComOut(m.ReturnType);
+                    newcomParams.Add($"{outType} outResult");
+                }
+                string thunkSigParams = "void* h" + (newcomParams.Count > 0 ? ", " + string.Join(", ", newcomParams) : "");
+                string thunkRet = isVoid ? "void" : "int32_t";
+                // vtable call arg list: self + a0.. + (outResult if non-void)
+                var callArgs = new List<string> { $"reinterpret_cast<I{className}*>(h)" };
+                for (int i = 0; i < m.ParamTypes.Count; i++) callArgs.Add($"a{i}");
+                if (!isVoid) callArgs.Add("outResult");
+                string callArgsStr = string.Join(", ", callArgs);
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT {thunkRet} {className}_{m.MethodName}({thunkSigParams}) {{");
+                if (isVoid)
+                    sb.AppendLine($"    reinterpret_cast<I{className}*>(h)->vtbl->{m.MethodName}({callArgsStr});");
+                else
+                    sb.AppendLine($"    return reinterpret_cast<I{className}*>(h)->vtbl->{m.MethodName}({callArgsStr});");
+                sb.AppendLine("}");
+                sb.AppendLine();
+            }
+
+            // Release thunk
+            sb.AppendLine($"extern \"C\" NEWCOM_EXPORT uint32_t {className}_Release(void* h) {{");
+            sb.AppendLine($"    return reinterpret_cast<I{className}*>(h)->vtbl->Release(reinterpret_cast<INewUnknown*>(h));");
+            sb.AppendLine("}");
+
+            if (isControl)
+            {
+                // INewComControl contract stubs. A real control component overrides
+                // these (e.g., by exposing a native window handle); defaults are
+                // safe no-ops so the host can call them without crashing.
+                sb.AppendLine();
+                sb.AppendLine($"// ─── INewComControl contract (control-mode component) ─────────────────────");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void* {className}_GetHwnd(void* h) {{ return nullptr; }}");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void {className}_SetParent(void* h, void* parentHwnd) {{ (void)h; (void)parentHwnd; }}");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void {className}_SetBounds(void* h, int32_t x, int32_t y, int32_t w, int32_t hh) {{ (void)h; (void)x; (void)y; (void)w; (void)hh; }}");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void {className}_SetVisible(void* h, int32_t visible) {{ (void)h; (void)visible; }}");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void {className}_SetHost(void* h, void* host) {{ (void)h; (void)host; }}");
+                sb.AppendLine($"extern \"C\" NEWCOM_EXPORT void {className}_Paint(void* h, void* hdc) {{ (void)h; (void)hdc; }}");
+            }
+
+            return sb.ToString();
+        }
+
+        static string GenerateNewComBinding(string componentName, List<BasicLang.Compiler.ILReader.ILCppEmitter.ComponentMethod> api)
+        {
+            var methods = (api ?? new List<BasicLang.Compiler.ILReader.ILCppEmitter.ComponentMethod>())
+                .Where(m => m.ClassName == (api != null && api.Count > 0 ? api[0].ClassName : componentName)).ToList();
+            string className = methods.Count > 0 ? methods[0].ClassName : componentName;
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"' {componentName}.bas - BasicLang binding for NewCOM {componentName} component");
+            sb.AppendLine($"' Auto-generated by BasicLang IL2CPP component mode.");
+            sb.AppendLine();
+            // Declare functions
+            sb.AppendLine($"Declare Function {componentName}_Create Lib \"{componentName}_newcom\" () As Integer");
+            foreach (var m in methods)
+            {
+                bool isVoid = m.ReturnType == "void";
+                // Build param list for the C ABI (h + params + outResult if non-void)
+                var pars = new List<string>();
+                for (int i = 0; i < m.ParamTypes.Count; i++)
+                {
+                    string bt = CppToBasicType(m.ParamTypes[i]);
+                    pars.Add($"arg{i} As {bt}");
+                }
+                if (isVoid)
+                {
+                    sb.AppendLine($"Declare Sub {componentName}_{m.MethodName} Lib \"{componentName}_newcom\" (h As Integer" +
+                        (pars.Count > 0 ? ", " + string.Join(", ", pars) : "") + ")");
+                }
+                else
+                {
+                    string retBt = CppToBasicType(m.ReturnType);
+                    // out result param
+                    string outParam = retBt == "String" ? "ByRef outResult As String" : $"ByRef outResult As {retBt}";
+                    var allPars = new List<string> { "h As Integer" };
+                    allPars.AddRange(pars);
+                    allPars.Add(outParam);
+                    sb.AppendLine($"Declare Function {componentName}_{m.MethodName} Lib \"{componentName}_newcom\" ({string.Join(", ", allPars)}) As Integer");
+                }
+            }
+            sb.AppendLine($"Declare Sub {componentName}_Release Lib \"{componentName}_newcom\" (h As Integer)");
+            sb.AppendLine();
+            // Wrapper class
+            sb.AppendLine($"Class {className}");
+            sb.AppendLine($"    Private _handle As Integer");
+            sb.AppendLine();
+            sb.AppendLine($"    Public Sub New()");
+            sb.AppendLine($"        _handle = {componentName}_Create()");
+            sb.AppendLine($"    End Sub");
+            sb.AppendLine();
+            foreach (var m in methods)
+            {
+                bool isVoid = m.ReturnType == "void";
+                if (isVoid)
+                {
+                    var pars = string.Join(", ", m.ParamTypes.Select((t, i) => $"{ParamName(i)} As {CppToBasicType(t)}"));
+                    sb.AppendLine($"    Public Sub {m.MethodName}({pars})");
+                    var callArgs = new List<string> { "_handle" };
+                    for (int i = 0; i < m.ParamTypes.Count; i++) callArgs.Add(ParamName(i));
+                    sb.AppendLine($"        {componentName}_{m.MethodName}({string.Join(", ", callArgs)})");
+                    sb.AppendLine($"    End Sub");
+                }
+                else
+                {
+                    var pars = string.Join(", ", m.ParamTypes.Select((t, i) => $"{ParamName(i)} As {CppToBasicType(t)}"));
+                    string retBt = CppToBasicType(m.ReturnType);
+                    sb.AppendLine($"    Public Function {m.MethodName}({pars}) As {retBt}");
+                    var callArgs = new List<string> { "_handle" };
+                    for (int i = 0; i < m.ParamTypes.Count; i++) callArgs.Add(ParamName(i));
+                    sb.AppendLine($"        Dim outResult As {retBt} = Nothing");
+                    callArgs.Add("outResult");
+                    sb.AppendLine($"        {componentName}_{m.MethodName}({string.Join(", ", callArgs)})");
+                    sb.AppendLine($"        Return outResult");
+                    sb.AppendLine($"    End Function");
+                }
+                sb.AppendLine();
+            }
+            sb.AppendLine($"    Public Sub Close()");
+            sb.AppendLine($"        {componentName}_Release(_handle)");
+            sb.AppendLine($"        _handle = 0");
+            sb.AppendLine($"    End Sub");
+            sb.AppendLine($"End Class");
+            return sb.ToString();
+        }
+
+        static string ParamName(int i) => "arg" + i;
+
+        static string CppToBasicType(string cppType)
+        {
+            if (cppType == "std::string") return "String";
+            if (cppType == "int32_t") return "Integer";
+            if (cppType == "int64_t") return "Long";
+            if (cppType == "float") return "Single";
+            if (cppType == "double") return "Double";
+            if (cppType == "bool") return "Boolean";
+            if (cppType == "void*") return "Integer";
+            return "Integer";
+        }
+
+        static string MapCppToNewComParam(string cppType)
+        {
+            if (cppType == "std::string") return "const char*";
+            if (cppType == "int32_t") return "int32_t";
+            if (cppType == "int64_t") return "int64_t";
+            if (cppType == "float") return "float";
+            if (cppType == "double") return "double";
+            if (cppType == "bool") return "bool";
+            if (cppType == "void*") return "void*";
+            return cppType;
+        }
+
+        static string MapCppToNewComOut(string cppType)
+        {
+            if (cppType == "std::string") return "char**";
+            if (cppType == "int32_t") return "int32_t*";
+            if (cppType == "int64_t") return "int64_t*";
+            if (cppType == "float") return "float*";
+            if (cppType == "double") return "double*";
+            if (cppType == "bool") return "bool*";
+            if (cppType == "void*") return "void**";
+            return cppType + "*";
         }
 
         static void DemoSimpleFunction()
@@ -4671,10 +5166,16 @@ End Sub
             }
 
             var baseName = project.AssemblyName ?? project.ProjectName ?? "Program";
+            bool componentMode = string.Equals(project.OutputType, "Component", StringComparison.OrdinalIgnoreCase);
+            bool controlMode = componentMode && string.Equals(project.NewComKind, "control", StringComparison.OrdinalIgnoreCase);
             var ilPath = Path.Combine(outputDir, baseName + ".il");
-            var pePath = Path.Combine(outputDir, baseName + ".exe");
+            var pePath = componentMode
+                ? Path.Combine(outputDir, baseName + ".dll")
+                : Path.Combine(outputDir, baseName + ".exe");
             var cppPath = Path.Combine(outputDir, baseName + "_il2cpp.cpp");
-            var binPath = Path.Combine(outputDir, baseName + "_il2cpp.exe");
+            var binPath = componentMode
+                ? Path.Combine(outputDir, baseName + "_newcom.dll")
+                : Path.Combine(outputDir, baseName + "_il2cpp.exe");
 
             Console.WriteLine("  Step 1: Compiling to MSIL...");
             var options = new BasicLang.Compiler.CompilerOptions();
@@ -4697,7 +5198,8 @@ End Sub
             Console.WriteLine("  Step 2: Assembling IL with ilasm...");
             var ilasmPath = @"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe";
             if (!File.Exists(ilasmPath)) ilasmPath = "ilasm";
-            var psi = new System.Diagnostics.ProcessStartInfo(ilasmPath, $"\"{ilPath}\" /exe /output=\"{pePath}\"")
+            var ilasmFlag = componentMode ? "/dll" : "/exe";
+            var psi = new System.Diagnostics.ProcessStartInfo(ilasmPath, $"\"{ilPath}\" {ilasmFlag} /output=\"{pePath}\"")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -4715,7 +5217,30 @@ End Sub
 
             Console.WriteLine("  Step 3: Emitting C++ from IL...");
             var emitter = new BasicLang.Compiler.ILReader.ILCppEmitter(pePath);
+            emitter.ComponentMode = componentMode;
             var cppCode = emitter.Emit();
+            if (componentMode)
+            {
+                cppCode = WrapAsNewComComponent(cppCode, emitter.ComponentApi, baseName, controlMode);
+                // Generate BasicLang binding module
+                var bindingPath = Path.Combine(outputDir, baseName + ".bas");
+                File.WriteAllText(bindingPath, GenerateNewComBinding(baseName, emitter.ComponentApi));
+                Console.WriteLine($"  Binding written to: {bindingPath}");
+                var manifestPath = Path.Combine(outputDir, "newcom.json");
+                var clsid = Guid.NewGuid().ToString();
+                var kindLine = controlMode ? $"  \"kind\": \"control\",\n" : "";
+                var propsLine = controlMode ? $"  \"properties\": [],\n  \"events\": [],\n  \"defaultSize\": [100, 30],\n" : "";
+                File.WriteAllText(manifestPath,
+                    "{\n" +
+                    $"  \"name\": \"{baseName}\",\n" +
+                    kindLine +
+                    $"  \"clsid\": \"{clsid}\",\n" +
+                    $"  \"library\": \"{Path.GetFileName(binPath)}\",\n" +
+                    propsLine +
+                    $"  \"factory\": \"{baseName}_Create\"\n" +
+                    "}\n");
+                Console.WriteLine($"  Manifest written to: {manifestPath}");
+            }
             File.WriteAllText(cppPath, cppCode);
             Console.WriteLine($"  C++ written to: {cppPath}");
 
@@ -4724,8 +5249,19 @@ End Sub
             var vcvars = Path.Combine(vsPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
             var shimDir = @"C:\Users\melvi\source\repos\VisualGameStudioEngine\BasicLang\Compiler\CodeGen\CPlusPlus";
 
+            // Locate newcom_abi.h
+            var newcomDir = @"C:\Users\melvi\source\repos\VisualGameStudioEngine\NewCom";
+            if (!Directory.Exists(newcomDir))
+                newcomDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "NewCom");
+            if (!Directory.Exists(newcomDir))
+                newcomDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "NewCom");
+
+            string clFlags = componentMode
+                ? $"/LD /EHsc /I\"{shimDir}\" /I\"{newcomDir}\" /Fe:\"{binPath}\" \"{cppPath}\""
+                : $"/EHsc /I\"{shimDir}\" /Fe:\"{binPath}\" \"{cppPath}\"";
+
             var compilePsi = new System.Diagnostics.ProcessStartInfo("cmd.exe",
-                $"/c \"\"{vcvars}\" && cl /EHsc /I\"{shimDir}\" /Fe:\"{binPath}\" \"{cppPath}\"\"")
+                $"/c \"\"{vcvars}\" && cl {clFlags}\"")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -4743,6 +5279,14 @@ End Sub
                 return 1;
             }
             Console.WriteLine("  C++ compilation successful.");
+
+            if (componentMode)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"  Component built: {binPath}");
+                Console.WriteLine($"  Manifest: {Path.Combine(outputDir, "newcom.json")}");
+                return 0;
+            }
 
             Console.WriteLine("  Step 5: Running...");
             Console.WriteLine();

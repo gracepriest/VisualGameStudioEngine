@@ -3527,6 +3527,20 @@ public class FormCanvasControl : Control
                 break;
             }
 
+            case FormSchematic.NewComControl:
+            {
+                // A dashed outline with a plug glyph — the face is defined by the native component,
+                // so at design time we only show a placeholder. Distinct from every other schematic.
+                var pen = new Pen(ink, 1) { DashStyle = DashStyle.Dash };
+                context.DrawRectangle(null, pen, bounds);
+                // Draw a small plug mark in the centre.
+                var cx = bounds.X + bounds.Width / 2;
+                var cy = bounds.Y + bounds.Height / 2;
+                context.DrawLine(new Pen(ink, 1), new Point(cx - 4, cy), new Point(cx + 4, cy));
+                context.DrawLine(new Pen(ink, 1), new Point(cx, cy - 4), new Point(cx, cy + 4));
+                break;
+            }
+
             default:
                 // A TextBox and anything text-entry shaped: white client, sunken edge.
                 context.FillRectangle(client, bounds);

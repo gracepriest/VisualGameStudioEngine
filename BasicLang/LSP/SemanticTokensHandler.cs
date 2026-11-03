@@ -354,6 +354,7 @@ namespace BasicLang.Compiler.LSP
                 case TokenType.Until:
                 case TokenType.Return:
                 case TokenType.Exit:
+                case TokenType.Continue:
                 case TokenType.Select:
                 case TokenType.Case:
                 case TokenType.EndSelect:

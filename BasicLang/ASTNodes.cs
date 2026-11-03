@@ -65,6 +65,7 @@ namespace BasicLang.Compiler.AST
         void Visit(ThrowStatementNode node);
         void Visit(ReturnStatementNode node);
         void Visit(ExitStatementNode node);
+        void Visit(ContinueStatementNode node);
         void Visit(AssignmentStatementNode node);
         void Visit(ExpressionStatementNode node);
         void Visit(BinaryExpressionNode node);
@@ -1519,11 +1520,22 @@ namespace BasicLang.Compiler.AST
 
     public enum ExitKind { For, Do, While, Sub, Function, Property }
 
+    public enum ContinueKind { For, Do, While }
+
     public class ExitStatementNode : StatementNode
     {
         public ExitKind Kind { get; set; }
 
         public ExitStatementNode(int line, int column) : base(line, column) { }
+
+        public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
+    }
+
+    public class ContinueStatementNode : StatementNode
+    {
+        public ContinueKind Kind { get; set; }
+
+        public ContinueStatementNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
