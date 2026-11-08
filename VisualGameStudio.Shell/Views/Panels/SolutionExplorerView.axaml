@@ -71,6 +71,12 @@
                   <TextBlock Text="F" FontSize="12" FontWeight="Bold" Foreground="#CE93D8"/>
                 </MenuItem.Icon>
               </MenuItem>
+              <MenuItem Header="NewCOM Component..."
+                        Command="{Binding #SolutionTreeView.DataContext.AddNewComComponentCommand}">
+                <MenuItem.Icon>
+                  <TextBlock Text="N" FontSize="12" FontWeight="Bold" Foreground="#FFB86C"/>
+                </MenuItem.Icon>
+              </MenuItem>
               <Separator/>
               <MenuItem Header="New File..." Command="{Binding #SolutionTreeView.DataContext.AddNewFileCommand}">
                 <MenuItem.Icon>
@@ -90,7 +96,8 @@
               </MenuItem>
             </MenuItem>
             <Separator/>
-            <MenuItem Header="Open" Click="OnOpenMenuItemClick"/>
+            <MenuItem Header="Open" Click="OnOpenMenuItemClick"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFile}"/>
             <!-- Task 21: convert the selected form document to the other target. Writes a NEW
                  document + code-behind pair into a folder the user picks and never touches this
                  project — the pair's class is named after the form and would collide with the
@@ -98,30 +105,36 @@
             <MenuItem Header="Retarget Form..."
                       Command="{Binding #SolutionTreeView.DataContext.RetargetFormCommand}"
                       IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFormDocument}"/>
-            <Separator/>
-            <MenuItem Header="Rename" Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}" InputGesture="F2"/>
-            <MenuItem Header="Delete" Command="{Binding #SolutionTreeView.DataContext.DeleteCommand}" InputGesture="Delete">
+            <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsFile}"/>
+            <MenuItem Header="Rename"
+                      Command="{Binding #SolutionTreeView.DataContext.StartRenameCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedCanRenameOrDelete}"
+                      InputGesture="F2"/>
+            <MenuItem Header="Delete"
+                      Command="{Binding #SolutionTreeView.DataContext.DeleteCommand}"
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedCanRenameOrDelete}"
+                      InputGesture="Delete">
               <MenuItem.Icon>
                 <TextBlock Text="🗑" FontSize="12"/>
               </MenuItem.Icon>
             </MenuItem>
-            <Separator/>
+            <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedCanRenameOrDelete}"/>
             <MenuItem Header="Open in Explorer" Command="{Binding #SolutionTreeView.DataContext.OpenInExplorerCommand}"/>
             <MenuItem Header="Open in Terminal" Command="{Binding #SolutionTreeView.DataContext.OpenInTerminalCommand}"/>
             <MenuItem Header="Copy Path" Command="{Binding #SolutionTreeView.DataContext.CopyPathCommand}"/>
             <Separator IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
             <MenuItem Header="Add Project Reference..."
                       Command="{Binding #SolutionTreeView.DataContext.AddProjectReferenceCommand}"
-                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsSolutionProject}"/>
             <MenuItem Header="Set as Startup Project"
                       Command="{Binding #SolutionTreeView.DataContext.SetAsStartupProjectCommand}"
-                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsSolutionProject}"/>
             <MenuItem Header="Build Project"
                       Command="{Binding #SolutionTreeView.DataContext.BuildProjectCommand}"
                       IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
             <MenuItem Header="Remove from Solution"
                       Command="{Binding #SolutionTreeView.DataContext.RemoveFromSolutionCommand}"
-                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsProject}"/>
+                      IsVisible="{Binding #SolutionTreeView.DataContext.SelectedIsSolutionProject}"/>
           </ContextMenu>
         </TreeView.ContextMenu>
 

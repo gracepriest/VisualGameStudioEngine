@@ -556,6 +556,28 @@ public class DockFactory : Factory
         }
     }
 
+    /// <summary>
+    /// Shows the Start Page, recreating it if the user closed the tab. "Help → Welcome" used to
+    /// only raise a notification, so it was a menu entry that visibly did nothing.
+    /// </summary>
+    public void ShowWelcomeDocument()
+    {
+        if (_documentDock == null) return;
+
+        var welcome = _documentDock.VisibleDockables?
+            .OfType<WelcomeDocument>()
+            .FirstOrDefault();
+
+        if (welcome == null)
+        {
+            welcome = new WelcomeDocument { Id = "Welcome", Title = "Start Page" };
+            AddDockable(_documentDock, welcome);
+        }
+
+        SetActiveDockable(welcome);
+        SetFocusedDockable(_documentDock, welcome);
+    }
+
     public void AddWebViewDocument(WebViewDocumentViewModel viewModel)
     {
         if (_documentDock == null) return;

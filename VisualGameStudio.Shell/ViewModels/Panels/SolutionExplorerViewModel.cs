@@ -86,6 +86,8 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     public event EventHandler<string>? OpenInTerminalRequested;
     public event EventHandler<string>? FindInFolderRequested;
     public event EventHandler<string>? ShowFileHistoryRequested;
+    /// <summary>Raised with the selected project's .blproj path when Build Project is chosen.</summary>
+    public event EventHandler<string>? BuildProjectRequested;
     /// <summary>Raised to request clipboard set from the View (needs TopLevel access).</summary>
     public event EventHandler<string>? ClipboardCopyRequested;
 
@@ -132,8 +134,14 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         AddProjectReferenceCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SelectedIsProject));
+        OnPropertyChanged(nameof(SelectedIsFile));
+        OnPropertyChanged(nameof(SelectedCanRenameOrDelete));
+        OnPropertyChanged(nameof(SelectedIsSolutionProject));
         OnPropertyChanged(nameof(SelectedIsFormDocument));
     }
+
+    partial void OnCurrentSolutionChanged(BasicLangSolution? value) =>
+        OnPropertyChanged(nameof(SelectedIsSolutionProject));
 
     /// <summary>
     /// Whether the currently selected node is a project — gates the project-only section of
@@ -141,6 +149,23 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     /// Build Project, Remove from Solution).
     /// </summary>
     public bool SelectedIsProject => SelectedNode?.IsProject == true;
+
+    /// <summary>Whether a real file is selected — gates the context menu's Open entry.</summary>
+    public bool SelectedIsFile => SelectedNode?.IsFile == true;
+
+    /// <summary>
+    /// Project and solution nodes are structural; Rename/Delete on them are no-ops by design.
+    /// Hide those entries instead of offering dead actions.
+    /// </summary>
+    public bool SelectedCanRenameOrDelete =>
+        SelectedNode is { IsProject: false, IsSolution: false };
+
+    /// <summary>
+    /// Solution-only project actions (references, startup project, remove from solution) are
+    /// meaningless for a standalone .blproj; hide them unless a solution owns the node.
+    /// </summary>
+    public bool SelectedIsSolutionProject =>
+        SelectedNode?.IsProject == true && CurrentSolution != null;
 
     /// <summary>
     /// Whether the selected node is a form DOCUMENT (<c>.blform</c> / <c>.blwebform</c>) — gates
@@ -585,21 +610,21 @@ public partial class SolutionExplorerViewModel : ViewModelBase
     {
         if (SelectedNode == null || !SelectedNode.IsProject) return;
 
-        var solProject = SelectedNode.Tag as SolutionProject;
-        if (solProject == null || CurrentSolution == null) return;
+        var projectPath = SelectedNode.Tag is SolutionProject solProject && CurrentSolution != null
+            ? solProject.GetFullPath(CurrentSolution.SolutionDirectory)
+            : SelectedNode.FullPath;
 
-        var projectPath = solProject.GetFullPath(CurrentSolution.SolutionDirectory);
-        if (File.Exists(projectPath))
+        if (!File.Exists(projectPath))
         {
-            try
-            {
-                await _projectService.OpenProjectAsync(projectPath);
-            }
-            catch (Exception ex)
-            {
-                await _dialogService.ShowMessageAsync("Build Error", $"Failed to build project: {ex.Message}");
-            }
+            await _dialogService.ShowMessageAsync(
+                "Build Project",
+                $"The project file no longer exists:\n{projectPath}");
+            return;
         }
+
+        // The actual build lives in MainWindowViewModel (the same command the Build menu uses).
+        // Raise the path instead of only re-opening the project, which the old implementation did.
+        BuildProjectRequested?.Invoke(this, projectPath);
     }
 
     /// <summary>
@@ -1386,6 +1411,177 @@ public partial class SolutionExplorerViewModel : ViewModelBase
         // seam can promise.
         FileOpenRequested?.Invoke(this, documentPath);
     }
+
+    /// <summary>
+    /// "Add ▸ New NewCOM Component..." — creates the same three-file component shape the
+    /// NewComComponent project template ships, named after the user's component:
+    /// an annotated C++ header, its C++ implementation, and the BasicLang P/Invoke binding.
+    /// NewCOM is a native C++ ABI, so the menu entry is only meaningful on a C++ project.
+    /// </summary>
+    [RelayCommand]
+    private async Task AddNewComComponentAsync()
+    {
+        var project = _projectService.CurrentProject;
+        if (project == null) return;
+
+        if (project.Language != ProjectLanguage.Cpp)
+        {
+            await _dialogService.ShowMessageAsync(
+                "NewCOM Component",
+                "NewCOM components are native C++ components. Create them in a C++ project, " +
+                "or use File > New Project and choose the NewCOM Component template.");
+            return;
+        }
+
+        var targetDir = GetTargetDirectory();
+        if (targetDir == null) return;
+
+        var name = await _dialogService.PromptAsync(
+            "New NewCOM Component", "Component name:", "MyComponent");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        name = Path.GetFileNameWithoutExtension(name.Trim());
+        var illegal = BasicLang.Forms.FormScaffolder.DescribeIllegalName(name);
+        if (illegal != null)
+        {
+            await _dialogService.ShowMessageAsync("Error", illegal);
+            return;
+        }
+
+        var headerPath = Path.Combine(targetDir, name + ".h");
+        var cppPath = Path.Combine(targetDir, name + ".cpp");
+        var bindingPath = Path.Combine(targetDir, name + ".bas");
+
+        if (File.Exists(headerPath) || File.Exists(cppPath) || File.Exists(bindingPath))
+        {
+            await _dialogService.ShowMessageAsync("Error", $"'{name}' already exists in this folder.");
+            return;
+        }
+
+        var materialised = ProjectGlobSafety.MaterialiseGlobbedSources(project);
+        if (materialised.Count > 0)
+        {
+            await _dialogService.ShowMessageAsync(
+                "Project sources listed explicitly",
+                $"Adding a NewCOM component makes this project's source list explicit, so " +
+                $"{materialised.Count} existing source file(s) have been listed in the project file.");
+        }
+
+        await File.WriteAllTextAsync(headerPath, NewComHeaderTemplate.Replace("__NAME__", name));
+        await File.WriteAllTextAsync(cppPath, NewComCppTemplate.Replace("__NAME__", name));
+        await File.WriteAllTextAsync(bindingPath, NewComBindingTemplate.Replace("__NAME__", name));
+
+        foreach (var path in new[] { headerPath, cppPath, bindingPath })
+        {
+            project.Items.Add(new ProjectItem
+            {
+                Include = Path.GetRelativePath(project.ProjectDirectory, path),
+                ItemType = GetItemTypeForExtension(path)
+            });
+        }
+
+        await SaveProjectOrReportAsync();
+        RefreshTree(project);
+        FileOpenRequested?.Invoke(this, headerPath);
+    }
+
+    private const string NewComHeaderTemplate = """
+// __NAME__ - NewCOM Component
+// Created by Visual Game Studio
+//
+// Annotate the interface here, then run NewCom/tools/newcom_gen.py to generate
+// the interface, implementation shim, and BasicLang binding.
+
+#include "newcom_abi.h"
+
+NEWCOM_COMPONENT(__NAME__)
+    NEWCOM_METHOD(int, GetValue)
+NEWCOM_END
+""";
+
+    private const string NewComCppTemplate = """
+// __NAME__.cpp - NewCOM component implementation
+#include "__NAME__.h"
+#include <cstring>
+#include <cstdlib>
+#include <atomic>
+
+struct __NAME__Impl {
+    const I__NAME__Vtbl* vtbl;
+    std::atomic<uint32_t> refCount;
+
+    __NAME__Impl() : refCount(1), vtbl(nullptr) {}
+};
+
+static int32_t __NAME___QueryInterface(INewUnknown* self, const NewComGUID* iid, void** out) {
+    *out = self;
+    reinterpret_cast<__NAME__Impl*>(self)->refCount++;
+    return NEWCOM_OK;
+}
+
+static uint32_t __NAME___AddRef(INewUnknown* self) {
+    return ++reinterpret_cast<__NAME__Impl*>(self)->refCount;
+}
+
+static uint32_t __NAME___Release(INewUnknown* self) {
+    auto impl = reinterpret_cast<__NAME__Impl*>(self);
+    uint32_t c = --impl->refCount;
+    if (c == 0) delete impl;
+    return c;
+}
+
+static int __NAME___GetValue(I__NAME__* self) {
+    // TODO: implement
+    return 42;
+}
+
+static const I__NAME__Vtbl g_vtbl = {
+    __NAME___QueryInterface,
+    __NAME___AddRef,
+    __NAME___Release,
+    __NAME___GetValue,
+};
+
+extern "C" __declspec(dllexport) I__NAME__* __NAME___Create() {
+    auto impl = new __NAME__Impl();
+    impl->vtbl = &g_vtbl;
+    return reinterpret_cast<I__NAME__*>(impl);
+}
+
+extern "C" __declspec(dllexport) int __NAME___GetValue(void* h) {
+    return reinterpret_cast<I__NAME__*>(h)->vtbl->GetValue(reinterpret_cast<I__NAME__*>(h));
+}
+
+extern "C" __declspec(dllexport) uint32_t __NAME___Release(void* h) {
+    return reinterpret_cast<I__NAME__*>(h)->vtbl->Release(reinterpret_cast<INewUnknown*>(h));
+}
+""";
+
+    private const string NewComBindingTemplate = """
+' __NAME__ - BasicLang binding for NewCOM component
+' Created by Visual Game Studio
+
+Declare Function __NAME___Create Lib "__NAME___newcom" () As Integer
+Declare Function __NAME___GetValue Lib "__NAME___newcom" (h As Integer) As Integer
+Declare Sub __NAME___Release Lib "__NAME___newcom" (h As Integer)
+
+Class __NAME__
+    Private _handle As Integer
+
+    Public Sub New()
+        _handle = __NAME___Create()
+    End Sub
+
+    Public Function GetValue() As Integer
+        Return __NAME___GetValue(_handle)
+    End Function
+
+    Public Sub Close()
+        __NAME___Release(_handle)
+        _handle = 0
+    End Sub
+End Class
+""";
 
     /// <summary>
     /// "Retarget Form…" — Task 21's entry point in the IDE. Converts the selected form document to

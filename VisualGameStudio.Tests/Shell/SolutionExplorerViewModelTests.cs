@@ -75,6 +75,52 @@ public class SolutionExplorerViewModelTests
     }
 
     /// <summary>
+    /// Project nodes are structural. Open/Rename/Delete were visible on them but every command
+    /// silently returned, producing dead context-menu entries. Solution-only actions must also
+    /// be hidden for a standalone .blproj.
+    /// </summary>
+    [Test]
+    public void ProjectNode_HidesTheActionsThatCannotApply()
+    {
+        _vm.SelectedNode = new TreeNode
+        {
+            Name = "App",
+            NodeType = TreeNodeType.Project,
+            FullPath = Path.Combine(_dir, "App.blproj")
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_vm.SelectedIsProject, Is.True);
+            Assert.That(_vm.SelectedIsFile, Is.False, "Open is a file-only action");
+            Assert.That(_vm.SelectedCanRenameOrDelete, Is.False, "Rename/Delete reject project nodes");
+            Assert.That(_vm.SelectedIsSolutionProject, Is.False,
+                "Add Reference / Set Startup / Remove from Solution need a solution");
+        });
+    }
+
+    [Test]
+    public async Task BuildProjectCommand_OnAStandaloneProject_RaisesTheBuildRequest()
+    {
+        var projectPath = Path.Combine(_dir, "App.blproj");
+        File.WriteAllText(projectPath, "<BasicLangProject Version=\"1.0\"></BasicLangProject>");
+        _vm.SelectedNode = new TreeNode
+        {
+            Name = "App",
+            NodeType = TreeNodeType.Project,
+            FullPath = projectPath
+        };
+
+        string? requested = null;
+        _vm.BuildProjectRequested += (_, path) => requested = path;
+
+        await _vm.BuildProjectCommand.ExecuteAsync(null);
+
+        Assert.That(requested, Is.EqualTo(projectPath),
+            "the menu command must reach the real build route, not only re-open the project");
+    }
+
+    /// <summary>
     /// Project/solution nodes have a FILE FullPath but TreeNode.IsFile is false. The old
     /// OpenInExplorer only checked IsFile and then Directory.Exists, so it silently did
     /// nothing on projects and solutions. A missing target must now at least explain itself.
