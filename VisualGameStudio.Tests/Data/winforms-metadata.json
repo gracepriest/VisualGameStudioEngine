@@ -36144,6 +36144,982 @@
           "description": "Occurs when the visibility of an item has changed."
         }
       ]
+    },
+    {
+      "name": "NewComControl",
+      "clrType": "System.Windows.Forms.Control",
+      "defaultEvent": "Click",
+      "defaultProperty": "Text",
+      "properties": [
+        {
+          "name": "AccessibleDescription",
+          "category": "Accessibility",
+          "type": "String",
+          "typeFullName": "System.String",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": null,
+          "description": "The description that will be reported to accessibility clients."
+        },
+        {
+          "name": "AccessibleName",
+          "category": "Accessibility",
+          "type": "String",
+          "typeFullName": "System.String",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": null,
+          "description": "The name that will be reported to accessibility clients."
+        },
+        {
+          "name": "AccessibleRole",
+          "category": "Accessibility",
+          "type": "AccessibleRole",
+          "typeFullName": "System.Windows.Forms.AccessibleRole",
+          "isEnum": true,
+          "isFlags": false,
+          "enumMembers": [
+            "None",
+            "TitleBar",
+            "MenuBar",
+            "ScrollBar",
+            "Grip",
+            "Sound",
+            "Cursor",
+            "Caret",
+            "Alert",
+            "Window",
+            "Client",
+            "MenuPopup",
+            "MenuItem",
+            "ToolTip",
+            "Application",
+            "Document",
+            "Pane",
+            "Chart",
+            "Dialog",
+            "Border",
+            "Grouping",
+            "Separator",
+            "ToolBar",
+            "StatusBar",
+            "Table",
+            "ColumnHeader",
+            "RowHeader",
+            "Column",
+            "Row",
+            "Cell",
+            "Link",
+            "HelpBalloon",
+            "Character",
+            "List",
+            "ListItem",
+            "Outline",
+            "OutlineItem",
+            "PageTab",
+            "PropertyPage",
+            "Indicator",
+            "Graphic",
+            "StaticText",
+            "Text",
+            "PushButton",
+            "CheckButton",
+            "RadioButton",
+            "ComboBox",
+            "DropList",
+            "ProgressBar",
+            "Dial",
+            "HotkeyField",
+            "Slider",
+            "SpinButton",
+            "Diagram",
+            "Animation",
+            "Equation",
+            "ButtonDropDown",
+            "ButtonMenu",
+            "ButtonDropDownGrid",
+            "WhiteSpace",
+            "PageTabList",
+            "Clock",
+            "SplitButton",
+            "IpAddress",
+            "OutlineButton",
+            "Default"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "Default",
+          "description": "The role that will be reported to accessibility clients."
+        },
+        {
+          "name": "AllowDrop",
+          "category": "Behavior",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "False",
+          "description": "Indicates whether the control can accept data that the user drags onto it."
+        },
+        {
+          "name": "Anchor",
+          "category": "Layout",
+          "type": "AnchorStyles",
+          "typeFullName": "System.Windows.Forms.AnchorStyles",
+          "isEnum": true,
+          "isFlags": true,
+          "enumMembers": [
+            "None",
+            "Top",
+            "Bottom",
+            "Left",
+            "Right"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "Top, Left",
+          "description": "Defines the edges of the container to which a certain control is bound. When a control is anchored to an edge, the distance between the control's closest edge and the specified edge will remain constant. "
+        },
+        {
+          "name": "BackColor",
+          "category": "Appearance",
+          "type": "Color",
+          "typeFullName": "System.Drawing.Color",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "ambient",
+          "default": null,
+          "description": "The background color of the component. "
+        },
+        {
+          "name": "BackgroundImage",
+          "category": "Appearance",
+          "type": "Image",
+          "typeFullName": "System.Drawing.Image",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": null,
+          "description": "The background image used for the control."
+        },
+        {
+          "name": "BackgroundImageLayout",
+          "category": "Appearance",
+          "type": "ImageLayout",
+          "typeFullName": "System.Windows.Forms.ImageLayout",
+          "isEnum": true,
+          "isFlags": false,
+          "enumMembers": [
+            "None",
+            "Tile",
+            "Center",
+            "Stretch",
+            "Zoom"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "Tile",
+          "description": "The background image layout used for the component."
+        },
+        {
+          "name": "CausesValidation",
+          "category": "Focus",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "True",
+          "description": "Indicates whether this component raises validation events. "
+        },
+        {
+          "name": "ContextMenuStrip",
+          "category": "Behavior",
+          "type": "ContextMenuStrip",
+          "typeFullName": "System.Windows.Forms.ContextMenuStrip",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": null,
+          "description": "The shortcut menu to display when the user right-clicks the control."
+        },
+        {
+          "name": "Cursor",
+          "category": "Appearance",
+          "type": "Cursor",
+          "typeFullName": "System.Windows.Forms.Cursor",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "ambient",
+          "default": null,
+          "description": "The cursor that appears when the pointer moves over the control."
+        },
+        {
+          "name": "DataBindings",
+          "category": "Data",
+          "type": "ControlBindingsCollection",
+          "typeFullName": "System.Windows.Forms.ControlBindingsCollection",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": true,
+          "mergeable": true,
+          "defaultKind": "collection",
+          "default": null,
+          "description": "The data bindings for the control."
+        },
+        {
+          "name": "Dock",
+          "category": "Layout",
+          "type": "DockStyle",
+          "typeFullName": "System.Windows.Forms.DockStyle",
+          "isEnum": true,
+          "isFlags": false,
+          "enumMembers": [
+            "None",
+            "Top",
+            "Bottom",
+            "Left",
+            "Right",
+            "Fill"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "None",
+          "description": "Defines which borders of the control are bound to the container. "
+        },
+        {
+          "name": "Enabled",
+          "category": "Behavior",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "True",
+          "description": "Indicates whether the control is enabled."
+        },
+        {
+          "name": "Font",
+          "category": "Appearance",
+          "type": "Font",
+          "typeFullName": "System.Drawing.Font",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "ambient",
+          "default": null,
+          "description": "The font used to display text in the control."
+        },
+        {
+          "name": "ForeColor",
+          "category": "Appearance",
+          "type": "Color",
+          "typeFullName": "System.Drawing.Color",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "ambient",
+          "default": null,
+          "description": "The foreground color of this component, which is used to display text."
+        },
+        {
+          "name": "ImeMode",
+          "category": "Behavior",
+          "type": "ImeMode",
+          "typeFullName": "System.Windows.Forms.ImeMode",
+          "isEnum": true,
+          "isFlags": false,
+          "enumMembers": [
+            "NoControl",
+            "On",
+            "Off",
+            "Disable",
+            "Hiragana",
+            "Katakana",
+            "KatakanaHalf",
+            "AlphaFull",
+            "Alpha",
+            "HangulFull",
+            "Hangul",
+            "Close",
+            "OnHalf",
+            "Inherit"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "NoControl",
+          "description": "Determines the IME (Input Method Editor) status of the object when selected."
+        },
+        {
+          "name": "Location",
+          "category": "Layout",
+          "type": "Point",
+          "typeFullName": "System.Drawing.Point",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "serialized",
+          "default": "0, 0",
+          "description": "The coordinates of the upper-left corner of the control relative to the upper-left corner of its container."
+        },
+        {
+          "name": "Margin",
+          "category": "Layout",
+          "type": "Padding",
+          "typeFullName": "System.Windows.Forms.Padding",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "3",
+          "description": "Specifies space between this control and another control's margin."
+        },
+        {
+          "name": "MaximumSize",
+          "category": "Layout",
+          "type": "Size",
+          "typeFullName": "System.Drawing.Size",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "0, 0",
+          "description": "Specifies the maximum size of the control."
+        },
+        {
+          "name": "MinimumSize",
+          "category": "Layout",
+          "type": "Size",
+          "typeFullName": "System.Drawing.Size",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "0, 0",
+          "description": "Specifies the minimum size of the control."
+        },
+        {
+          "name": "Padding",
+          "category": "Layout",
+          "type": "Padding",
+          "typeFullName": "System.Windows.Forms.Padding",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "0",
+          "description": "Specifies the interior spacing of a control."
+        },
+        {
+          "name": "RightToLeft",
+          "category": "Appearance",
+          "type": "RightToLeft",
+          "typeFullName": "System.Windows.Forms.RightToLeft",
+          "isEnum": true,
+          "isFlags": false,
+          "enumMembers": [
+            "No",
+            "Yes",
+            "Inherit"
+          ],
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "ambient",
+          "default": null,
+          "description": "Indicates whether the component should draw right-to-left for RTL languages."
+        },
+        {
+          "name": "Size",
+          "category": "Layout",
+          "type": "Size",
+          "typeFullName": "System.Drawing.Size",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "0, 0",
+          "description": "The size of the control in pixels."
+        },
+        {
+          "name": "TabIndex",
+          "category": "Behavior",
+          "type": "Int32",
+          "typeFullName": "System.Int32",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": false,
+          "defaultKind": "serialized",
+          "default": "0",
+          "description": "Determines the index in the TAB order that this control will occupy."
+        },
+        {
+          "name": "TabStop",
+          "category": "Behavior",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "True",
+          "description": "Indicates whether the user can use the TAB key to give focus to the control."
+        },
+        {
+          "name": "Tag",
+          "category": "Data",
+          "type": "Object",
+          "typeFullName": "System.Object",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": null,
+          "description": "User-defined data associated with the object."
+        },
+        {
+          "name": "Text",
+          "category": "Appearance",
+          "type": "String",
+          "typeFullName": "System.String",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "",
+          "description": "The text associated with the control."
+        },
+        {
+          "name": "UseWaitCursor",
+          "category": "Appearance",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "attribute",
+          "default": "False",
+          "description": "When this property is true, the Cursor property of the control and its child controls is set to WaitCursor."
+        },
+        {
+          "name": "Visible",
+          "category": "Behavior",
+          "type": "Boolean",
+          "typeFullName": "System.Boolean",
+          "isEnum": false,
+          "isFlags": false,
+          "enumMembers": null,
+          "isCollection": false,
+          "mergeable": true,
+          "defaultKind": "reset",
+          "default": "True",
+          "description": "Determines whether the control is visible or hidden."
+        }
+      ],
+      "events": [
+        {
+          "name": "BackColorChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the BackColor property is changed on Control."
+        },
+        {
+          "name": "BackgroundImageChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the BackgroundImage property is changed on Control."
+        },
+        {
+          "name": "BackgroundImageLayoutChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the BackgroundImageLayout property is changed on Control."
+        },
+        {
+          "name": "BindingContextChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the BindingContext property is changed on Control."
+        },
+        {
+          "name": "CausesValidationChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the CausesValidation property is changed on Control."
+        },
+        {
+          "name": "ChangeUICues",
+          "category": "Behavior",
+          "argsType": "UICuesEventArgs",
+          "argsFullName": "System.Windows.Forms.UICuesEventArgs",
+          "description": "Occurs when focus rectangles and keyboard cue underlines are being shown or hidden."
+        },
+        {
+          "name": "Click",
+          "category": "Action",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the component is clicked."
+        },
+        {
+          "name": "ClientSizeChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the ClientSize property is changed on Control."
+        },
+        {
+          "name": "ContextMenuStripChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the value of the ContextMenuStrip property changes."
+        },
+        {
+          "name": "ControlAdded",
+          "category": "Behavior",
+          "argsType": "ControlEventArgs",
+          "argsFullName": "System.Windows.Forms.ControlEventArgs",
+          "description": "Occurs when a control is added to this control."
+        },
+        {
+          "name": "ControlRemoved",
+          "category": "Behavior",
+          "argsType": "ControlEventArgs",
+          "argsFullName": "System.Windows.Forms.ControlEventArgs",
+          "description": "Occurs when a control is removed from this control."
+        },
+        {
+          "name": "CursorChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Cursor property is changed on Control."
+        },
+        {
+          "name": "DataContextChanged",
+          "category": "Data",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the value of the DataContext property changes."
+        },
+        {
+          "name": "DockChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Dock property is changed on Control."
+        },
+        {
+          "name": "DoubleClick",
+          "category": "Action",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the component is double-clicked."
+        },
+        {
+          "name": "DpiChangedAfterParent",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the top level parent of this control is moved to a monitor with a different resolution and scaling level, or when parent's monitor scaling level is changed in Windows settings. Child windows receive this message after parent window receives DpiChanged event."
+        },
+        {
+          "name": "DpiChangedBeforeParent",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the top level parent of this control is moved to a monitor with a different resolution and scaling level, or when parent's monitor scaling level is changed in Windows settings. Child windows receive this message before parent window receives DpiChanged event."
+        },
+        {
+          "name": "DragDrop",
+          "category": "Drag Drop",
+          "argsType": "DragEventArgs",
+          "argsFullName": "System.Windows.Forms.DragEventArgs",
+          "description": "Occurs when a drag-and-drop operation is completed."
+        },
+        {
+          "name": "DragEnter",
+          "category": "Drag Drop",
+          "argsType": "DragEventArgs",
+          "argsFullName": "System.Windows.Forms.DragEventArgs",
+          "description": "Occurs when the mouse drags an item into the client area for this Control."
+        },
+        {
+          "name": "DragLeave",
+          "category": "Drag Drop",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when an object is dragged out of the control's bounds."
+        },
+        {
+          "name": "DragOver",
+          "category": "Drag Drop",
+          "argsType": "DragEventArgs",
+          "argsFullName": "System.Windows.Forms.DragEventArgs",
+          "description": "Occurs when an object is dragged over the control's bounds."
+        },
+        {
+          "name": "EnabledChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the control's enabled state changes."
+        },
+        {
+          "name": "Enter",
+          "category": "Focus",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the control becomes the active control of the form."
+        },
+        {
+          "name": "FontChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Font property is changed on Control."
+        },
+        {
+          "name": "ForeColorChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the ForeColor property is changed on Control."
+        },
+        {
+          "name": "GiveFeedback",
+          "category": "Drag Drop",
+          "argsType": "GiveFeedbackEventArgs",
+          "argsFullName": "System.Windows.Forms.GiveFeedbackEventArgs",
+          "description": "Occurs when the mouse drags an item. The system requests that the Control provide feedback to that effect."
+        },
+        {
+          "name": "HelpRequested",
+          "category": "Behavior",
+          "argsType": "HelpEventArgs",
+          "argsFullName": "System.Windows.Forms.HelpEventArgs",
+          "description": "Occurs when the user invokes Help for the control."
+        },
+        {
+          "name": "ImeModeChanged",
+          "category": "Behavior",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the control's input method editor (IME) mode changes."
+        },
+        {
+          "name": "KeyDown",
+          "category": "Key",
+          "argsType": "KeyEventArgs",
+          "argsFullName": "System.Windows.Forms.KeyEventArgs",
+          "description": "Occurs when a key is first pressed."
+        },
+        {
+          "name": "KeyPress",
+          "category": "Key",
+          "argsType": "KeyPressEventArgs",
+          "argsFullName": "System.Windows.Forms.KeyPressEventArgs",
+          "description": "Occurs when the control has focus and the user presses and releases a key."
+        },
+        {
+          "name": "KeyUp",
+          "category": "Key",
+          "argsType": "KeyEventArgs",
+          "argsFullName": "System.Windows.Forms.KeyEventArgs",
+          "description": "Occurs when a key is released."
+        },
+        {
+          "name": "Layout",
+          "category": "Layout",
+          "argsType": "LayoutEventArgs",
+          "argsFullName": "System.Windows.Forms.LayoutEventArgs",
+          "description": "Occurs when the control is about to lay out its contents."
+        },
+        {
+          "name": "Leave",
+          "category": "Focus",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the control is no longer the active control of the form."
+        },
+        {
+          "name": "LocationChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Location property is changed on Control."
+        },
+        {
+          "name": "MarginChanged",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the Margin property has changed."
+        },
+        {
+          "name": "MouseCaptureChanged",
+          "category": "Action",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs after the mouse capture is changed."
+        },
+        {
+          "name": "MouseClick",
+          "category": "Action",
+          "argsType": "MouseEventArgs",
+          "argsFullName": "System.Windows.Forms.MouseEventArgs",
+          "description": "Occurs when the control is clicked by the mouse."
+        },
+        {
+          "name": "MouseDoubleClick",
+          "category": "Action",
+          "argsType": "MouseEventArgs",
+          "argsFullName": "System.Windows.Forms.MouseEventArgs",
+          "description": "Occurs when the control is double clicked by the mouse."
+        },
+        {
+          "name": "MouseDown",
+          "category": "Mouse",
+          "argsType": "MouseEventArgs",
+          "argsFullName": "System.Windows.Forms.MouseEventArgs",
+          "description": "Occurs when the mouse pointer is over the component and a mouse button is pressed."
+        },
+        {
+          "name": "MouseEnter",
+          "category": "Mouse",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the mouse enters the visible part of the control."
+        },
+        {
+          "name": "MouseHover",
+          "category": "Mouse",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the mouse remains stationary inside of the control for an amount of time."
+        },
+        {
+          "name": "MouseLeave",
+          "category": "Mouse",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the mouse leaves the visible part of the control."
+        },
+        {
+          "name": "MouseMove",
+          "category": "Mouse",
+          "argsType": "MouseEventArgs",
+          "argsFullName": "System.Windows.Forms.MouseEventArgs",
+          "description": "Occurs when the mouse pointer is moved over the component."
+        },
+        {
+          "name": "MouseUp",
+          "category": "Mouse",
+          "argsType": "MouseEventArgs",
+          "argsFullName": "System.Windows.Forms.MouseEventArgs",
+          "description": "Occurs when the mouse pointer is over the component and a mouse button is released."
+        },
+        {
+          "name": "Move",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when a control is moved."
+        },
+        {
+          "name": "PaddingChanged",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the Padding property has changed."
+        },
+        {
+          "name": "Paint",
+          "category": "Appearance",
+          "argsType": "PaintEventArgs",
+          "argsFullName": "System.Windows.Forms.PaintEventArgs",
+          "description": "Occurs when a control needs repainting."
+        },
+        {
+          "name": "ParentChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Parent property is changed on Control."
+        },
+        {
+          "name": "PreviewKeyDown",
+          "category": "Key",
+          "argsType": "PreviewKeyDownEventArgs",
+          "argsFullName": "System.Windows.Forms.PreviewKeyDownEventArgs",
+          "description": "Occurs before the KeyDown event when a key is pressed while focus is on this control."
+        },
+        {
+          "name": "QueryAccessibilityHelp",
+          "category": "Behavior",
+          "argsType": "QueryAccessibilityHelpEventArgs",
+          "argsFullName": "System.Windows.Forms.QueryAccessibilityHelpEventArgs",
+          "description": "Occurs when an Accessibility client invokes Help for the control."
+        },
+        {
+          "name": "QueryContinueDrag",
+          "category": "Drag Drop",
+          "argsType": "QueryContinueDragEventArgs",
+          "argsFullName": "System.Windows.Forms.QueryContinueDragEventArgs",
+          "description": "Occurs when the mouse drags an item. The system requests whether the drag-and-drop operation should be allowed to continue."
+        },
+        {
+          "name": "RegionChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of Region property is changed on Control."
+        },
+        {
+          "name": "Resize",
+          "category": "Layout",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when a control is resized."
+        },
+        {
+          "name": "RightToLeftChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the value of the RightToLeft property changes."
+        },
+        {
+          "name": "SizeChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Size property is changed on Control."
+        },
+        {
+          "name": "StyleChanged",
+          "category": "Behavior",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the window style of a Control is changed."
+        },
+        {
+          "name": "SystemColorsChanged",
+          "category": "Behavior",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the system colors change."
+        },
+        {
+          "name": "TabIndexChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the TabIndex property is changed."
+        },
+        {
+          "name": "TabStopChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the TabStop property is changed on Control."
+        },
+        {
+          "name": "TextChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Event raised when the value of the Text property is changed on Control."
+        },
+        {
+          "name": "Validated",
+          "category": "Focus",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs after a control has been successfully validated."
+        },
+        {
+          "name": "Validating",
+          "category": "Focus",
+          "argsType": "CancelEventArgs",
+          "argsFullName": "System.ComponentModel.CancelEventArgs",
+          "description": "Occurs when the control is validating."
+        },
+        {
+          "name": "VisibleChanged",
+          "category": "Property Changed",
+          "argsType": "EventArgs",
+          "argsFullName": "System.EventArgs",
+          "description": "Occurs when the control's visibility changes."
+        }
+      ]
     }
   ]
 }

@@ -154,9 +154,10 @@ public class NewProjectWizardViewModelTests
         vm.SelectedLanguage = ProjectLanguage.Cpp;
 
         Assert.That(vm.SelectedBackend!.SolutionType.Id, Is.EqualTo("cpp"));
-        // cpp templates only: cpp-console-app, cpp-library, cpp-game-app
+        // cpp templates only: the three C++ ones, plus NewCOM (authored in C++ — its
+        // SupportedSolutionTypes lists "cpp", and Add → NewCOM Component is C++-only)
         Assert.That(vm.VisibleTemplates.Select(t => t.Id),
-            Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app" }));
+            Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app", "newcom-component" }));
     }
 
     [Test]
@@ -168,7 +169,7 @@ public class NewProjectWizardViewModelTests
         Assert.That(vm.SelectedLanguage, Is.EqualTo(ProjectLanguage.Cpp));
         Assert.That(vm.Backends.Select(b => b.SolutionType.Id), Is.All.EqualTo("cpp"));
         Assert.That(vm.VisibleTemplates.Select(t => t.Id),
-            Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app" }));
+            Is.EquivalentTo(new[] { "cpp-console-app", "cpp-library", "cpp-game-app", "newcom-component" }));
     }
 
     [Test]

@@ -85,6 +85,10 @@ internal static class Dump
         ("ToolStripSeparator", typeof(ToolStripSeparator)),
         ("ToolStripButton", typeof(ToolStripButton)),
         ("ToolStripStatusLabel", typeof(ToolStripStatusLabel)),
+        // The catalog's NewComControl row names Control as its WinFormsType (a placeholder until
+        // NewCom.Runtime.NewComControlHost is referenced here); the oracle measures the same type.
+        // Move both together.
+        ("NewComControl", typeof(Control)),
     };
 
     /// <summary>
