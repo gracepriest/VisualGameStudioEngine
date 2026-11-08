@@ -115,6 +115,20 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         private HashSet<BasicBlock> _labelledLoopEnds;
 
         /// <summary>
+        /// The increment block of each loop <see cref="GenerateLoop"/> has open, innermost on top
+        /// (null for a loop with none, or whose step ADR-0014 defers past the iteration's finally).
+        /// A walk that REACHES one of these from inside the body is a <c>Continue For</c> (or the
+        /// end of an If/Select arm): it must jump to the step, never write the step in place —
+        /// writing it in place gave the step to that one path and left every other path looping
+        /// forever (measured: <c>If i = 3 Then Continue For</c> over 1..5 never ended).
+        /// </summary>
+        private Stack<BasicBlock> _openLoopIncs;
+
+        /// <summary>Open increment blocks a <c>goto</c> was emitted for; the label is written
+        /// before the step ONLY then, since an unreferenced label is CS0164.</summary>
+        private HashSet<BasicBlock> _labelledLoopIncs;
+
+        /// <summary>
         /// ⭐ ADR-0014: the captured loop-body locals of the body being emitted, set by
         /// <see cref="DeclareLocals"/> (which every body emission calls first). Each is declared at
         /// the top of its loop's body from a carrier (<c>T x = __carry_x;</c>) so a lambda captures
@@ -2213,6 +2227,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             public HashSet<BasicBlock> ForEachEndBlocks;
             public Stack<int> LoopSwitchDepths;
             public HashSet<BasicBlock> LabelledLoopEnds;
+            public Stack<BasicBlock> OpenLoopIncs;
+            public HashSet<BasicBlock> LabelledLoopIncs;
             public int SwitchDepth;
             public KeyValuePair<string, string>[] ForEachRenames;
             public string[] OpenForEachVariables;
@@ -2268,6 +2284,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 ForEachEndBlocks = _forEachEndBlocks,
                 LoopSwitchDepths = _loopSwitchDepths,
                 LabelledLoopEnds = _labelledLoopEnds,
+                OpenLoopIncs = _openLoopIncs,
+                LabelledLoopIncs = _labelledLoopIncs,
                 SwitchDepth = _switchDepth,
                 ForEachRenames = _forEachRenames.ToArray(),
                 OpenForEachVariables = _openForEachVariables.ToArray(),
@@ -2359,6 +2377,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _forEachEndBlocks = outer.ForEachEndBlocks;
             _loopSwitchDepths = outer.LoopSwitchDepths;
             _labelledLoopEnds = outer.LabelledLoopEnds;
+            _openLoopIncs = outer.OpenLoopIncs;
+            _labelledLoopIncs = outer.LabelledLoopIncs;
             _switchDepth = outer.SwitchDepth;
 
             _forEachRenames.Clear();
@@ -2501,6 +2521,16 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         {
             if (block == null || _processedBlocks.Contains(block))
                 return;
+
+            // An open loop's step, reached from inside its body (Continue For, or an If/Select
+            // arm's end): jump to it. GenerateLoop writes the step once, after the body, under the
+            // label. Every route that would have written it HERE goes through this method.
+            if (_openLoopIncs.Contains(block))
+            {
+                _labelledLoopIncs.Add(block);
+                WriteLine($"goto {LoopIncrementLabel(block)};");
+                return;
+            }
 
             _processedBlocks.Add(block);
 
@@ -2848,6 +2878,7 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // Detect loop patterns
             if (IsLoopHeader(trueBlock, falseBlock, out var loopBody, out var loopEnd, out var loopInc, out var loopType, out var negateCondition))
             {
+                loopInc ??= FindReachedIncrementBlock(condBranch);
                 // #227: the own branch of a bottom-tested loop, whose `while (true)` is open around
                 // its body and whose condition the walk has just written (GenerateBottomTestedLoop)
                 // — the exit test, at the end of the iteration. Never a second copy of the body.
@@ -2924,15 +2955,6 @@ namespace BasicLang.Compiler.CodeGen.CSharp
                 }
                 if (bottom.PlainTest == null)
                     GenerateStructuredBlock(target);
-                return;
-            }
-
-            // Continue For: a branch to a loop's increment block must not inline that block
-            // into the branch site (which would steal the increment from the normal path).
-            // Jump to the increment block's label instead; GenerateLoop emits it after the body.
-            if (target.Name != null && target.Name.Contains(".inc"))
-            {
-                WriteLine($"goto {LoopIncrementLabel(target)};");
                 return;
             }
 
@@ -3253,6 +3275,15 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (terminator is IRBranch loopExit && TryEmitLoopExit(loopExit))
                 return;
 
+            // Likewise a `Continue For` (a jump to an open loop's step): GenerateStructuredBlock
+            // writes it as a goto, and a `break;` after it would be CS0162.
+            if (terminator is IRBranch toStep && _openLoopIncs.Contains(toStep.Target)
+                && !_processedBlocks.Contains(toStep.Target))
+            {
+                GenerateStructuredBlock(toStep.Target);
+                return;
+            }
+
             if (terminator is IRConditionalBranch cond)
                 HandleConditionalBranch(cond);
             else if (terminator is IRSwitch switchInst)
@@ -3368,6 +3399,47 @@ namespace BasicLang.Compiler.CodeGen.CSharp
         }
 
         /// <summary>
+        /// The step of the loop whose own branch is <paramref name="loopBranch"/>, when the body
+        /// does not END in a branch to it (<see cref="FindIncrementBlock"/> returns null whenever
+        /// the body's last statement is an If or a Select). Found by the back edge, not the name:
+        /// the <c>.inc</c> block that jumps to the block holding <paramref name="loopBranch"/>.
+        ///
+        /// <para>Taken ONLY when some other block jumps to it. That is the line the comment in
+        /// <see cref="FindIncrementBlock"/> draws: a step nothing reaches (a body ending in an
+        /// unconditional <c>Exit For</c>, unoptimized) must not be written after the
+        /// <c>break</c>. Without this, the step was written wherever the walk first reached it —
+        /// inside one arm of the body's If — and every other path through the body looped forever
+        /// (<c>If i = 3 Then Continue For</c> over 1..5, measured).</para>
+        /// </summary>
+        private BasicBlock FindReachedIncrementBlock(IRConditionalBranch loopBranch)
+        {
+            var blocks = _currentFunction?.Blocks;
+            if (blocks == null) return null;
+
+            var inc = blocks.FirstOrDefault(b =>
+                b.Name != null && b.Name.EndsWith(".inc") &&
+                b.Instructions.LastOrDefault() is IRBranch back &&
+                ReferenceEquals(back.Target.Instructions.LastOrDefault(), loopBranch));
+            if (inc == null) return null;
+
+            foreach (var block in blocks)
+            {
+                if (ReferenceEquals(block, inc)) continue;
+                switch (block.Instructions.LastOrDefault())
+                {
+                    case IRBranch br when ReferenceEquals(br.Target, inc):
+                    case IRConditionalBranch cb when ReferenceEquals(cb.TrueTarget, inc) || ReferenceEquals(cb.FalseTarget, inc):
+                        return inc;
+                    case IRSwitch sw when ReferenceEquals(sw.DefaultTarget, inc)
+                                          || sw.Cases.Any(c => ReferenceEquals(c.Item2, inc))
+                                          || sw.PatternCases.Any(p => ReferenceEquals(p.Target, inc)):
+                        return inc;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
         /// #256 — whether <paramref name="block"/> is the first block of a <c>While</c>/<c>Do</c>
         /// condition that holds CONTROL FLOW, and if so the loop's body. <c>AndAlso</c>,
         /// <c>OrElse</c> and <c>If()</c> are lowered to if-shaped blocks writing a carrier
@@ -3455,6 +3527,9 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             if (endBlock != null)
                 _loopEndBlocks.Push(endBlock);
             _loopSwitchDepths.Push(_switchDepth);
+            // A deferred step (ADR-0014 A1) is written after the iteration's finally and keeps
+            // its own route (_perIter.IsDeferredStep), so it is not registered for a goto.
+            _openLoopIncs.Push(_perIter.DeferredStep(bodyBlock) == null ? incBlock : null);
 
             if (exitTest != null)
             {
@@ -3515,6 +3590,12 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             // A wrapped counted For's step is emitted here, after that finally, and never from
             // inside the body (HandleUnconditionalBranch skips it there).
             incBlock = _perIter.DeferredStep(bodyBlock) ?? incBlock;
+
+            // The target of every goto GenerateStructuredBlock wrote for this step. The empty
+            // statement keeps the label legal whatever (if anything) the step writes after it.
+            _openLoopIncs.Pop();
+            if (incBlock != null && _labelledLoopIncs.Remove(incBlock))
+                WriteLine($"{LoopIncrementLabel(incBlock)}: ;");
 
             // Always generate increment if it exists
             if (incBlock != null && !_processedBlocks.Contains(incBlock))
@@ -3742,6 +3823,8 @@ namespace BasicLang.Compiler.CodeGen.CSharp
             _forEachEndBlocks = new HashSet<BasicBlock>();
             _loopSwitchDepths = new Stack<int>();
             _labelledLoopEnds = new HashSet<BasicBlock>();
+            _openLoopIncs = new Stack<BasicBlock>();
+            _labelledLoopIncs = new HashSet<BasicBlock>();
             _switchDepth = 0;
         }
 
