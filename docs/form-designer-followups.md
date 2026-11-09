@@ -12,21 +12,34 @@ Dates on the other entries are the plan's own.
 
 ## From the plan's own list
 
-### 1. Cross-file `Inherits` / `Implements` are both broken
-`SemanticAnalyzer.cs:4569` and `:4598`, same cause. *Unknown base class* / *Unknown interface*,
-exit 1. Out of the designer plan by owner decision 1. The spec's *Cross-file resolution* section
-carries the diagnosis and the fix shape: route through `ResolveTypeName`, add the `InterfaceNode`
-arm, and do **not** touch `CollectExportedSymbols`.
+### 1. ✅ FIXED 2026-11-09 — Cross-file `Inherits` / `Implements` (and `Extension`) were order-dependent
+*Was:* *Unknown base class* / *Unknown interface* — but only when the base's file compiled AFTER the
+derived class's (measured on master `11be7d5c`; the other order built and ran). `Visit(ClassNode)`,
+`RegisterClassBases` and `Visit(ExtensionMethodNode)` asked only the type manager, which a
+not-yet-compiled sibling's class shell never enters, and a sibling INTERFACE had no shell at all.
 
-⚠ Affects any user with a multi-file class hierarchy — not a designer-only problem.
+*Now:* `RegisterPendingSiblingSignatures` registers interface shells with their members (the
+`InterfaceNode` arm), and the four lookups go through `ResolveDeclaredTypeAcrossUnits` — type manager
+first, then type symbols in scope. `CollectExportedSymbols` untouched.
+`CrossFileBindingTests.InheritsAndImplements_AcrossFiles_RunInEitherCompileOrder` RUNS an interface
+call, an interface property and a virtual dispatch in both orders on C#, JavaScript and C++;
+`AnExtensionOverAClassInAnotherFile_RunsOnCSharp_InEitherOrder` covers the extension. ⚠ Still open
+and separate: a `Property … Implements I.P` clause does not parse at all ("Unexpected token in class:
+'Implements'"), in either order and in one file.
 
-### 2. `With … End With` silently drops its assignments
-`IRBuilder.cs:3356` and `:2866`; `With` over a .NET receiver at `SemanticAnalyzer.cs:6939`. The IR
-builder's assignment dispatch has no `ImplicitWithMemberNode` arm and no final else, so every
-`.Prop = value` inside a `With` block is discarded — **with a green build**.
+### 2. ✅ FIXED 2026-11-09 — `With … End With` silently dropped its assignments
+*Was:* the IR builder's assignment dispatch had no `ImplicitWithMemberNode` arm, so every
+`.Prop = value` was discarded with a green build; the `.M` READ built an `IRFieldAccess` it never
+emitted; and the `__with` carrier was never declared (CS0103 on C#). Every backend.
 
-⛔ This is why the designer's region writer must never emit `With`. That rule is enforced by a
-comment in `RegionWriter.AppendControlInit`; nothing in the compiler stops anyone else.
+*Now:* the parser desugars the block. `ImplicitWithMemberNode` IS a `MemberAccessExpressionNode` whose
+receiver is the With's own name (a plain identifier or `Me` — which also keeps VB's rule that a
+`With` over a Structure variable writes the variable) or a carrier `Dim __withN = expr` (evaluated
+once). Stores, calls, compound assignment, .NET receivers and nesting take the ordinary member-access
+path. `WithBlockExecutionTests` runs it on every backend.
+
+⚠ The designer's region writer still does not emit `With` — it never needed to, and the
+`FormRegionWriterTests` guard stays — but the reason is now style, not a miscompile.
 
 ### 3. Four JavaScript-backend defects, each from a green build
 Measured 2026-09-11:
@@ -72,7 +85,10 @@ built, so it is unreachable and the chip would not reproduce.
 
 ## Found while building the designer — measured 2026-09-13
 
-### 7. A call on an assignment's right-hand side is emitted TWICE (C# backend)
+### 7. ✅ NO LONGER REPRODUCES (measured 2026-11-09 on master `11be7d5c`) — A call on an assignment's right-hand side is emitted TWICE (C# backend)
+Re-measured with the exact `pic.Image = Image.FromFile("logo.png")` shape plus `String.Concat`,
+`Guid.NewGuid`, `Environment.GetEnvironmentVariable` and a user `Function` with a side effect: each
+emits ONE call. Fixed by some intervening change; kept for the record.
 ```basic
 pic.Image = Image.FromFile("logo.png")
 ```

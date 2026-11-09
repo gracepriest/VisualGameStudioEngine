@@ -1458,18 +1458,34 @@ namespace BasicLang.Compiler.AST
         public ExpressionNode Object { get; set; }
         public BlockNode Body { get; set; }
 
+        /// <summary>
+        /// The <c>Dim __withN = Object</c> the parser builds when <see cref="Object"/> is not a plain
+        /// name, so the object is evaluated ONCE and every <c>.Member</c> in the body reads that
+        /// local. Null when <see cref="Object"/> is a plain identifier or <c>Me</c>: those are named
+        /// directly, which also keeps VB's rule that a <c>With</c> over a Structure variable writes
+        /// the variable itself, not a copy. Consumers visit this INSTEAD of <see cref="Object"/>
+        /// (it is <see cref="VariableDeclarationNode.Initializer"/>) when it is set.
+        /// </summary>
+        public VariableDeclarationNode Carrier { get; set; }
+
         public WithStatementNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);
     }
 
     /// <summary>
-    /// Implicit With member access: .Member inside a With block
+    /// Implicit With member access: <c>.Member</c> inside a With block.
+    ///
+    /// <para>⛔ It IS a <see cref="MemberAccessExpressionNode"/>, whose <see cref="MemberAccessExpressionNode.Object"/>
+    /// the parser fills with a fresh receiver node (the With's own identifier, or its carrier local).
+    /// A separate node type with its own arm in every consumer was how <c>With</c> silently dropped
+    /// every <c>.Prop = value</c>: the assignment dispatch, the call lowering and the .NET member
+    /// resolution each needed an arm, and the store had none. As a member access it takes the one
+    /// path every <c>obj.Prop</c> already takes. <see cref="MemberAccessExpressionNode.Object"/> is
+    /// null only outside any With block, which the analyzer reports.</para>
     /// </summary>
-    public class ImplicitWithMemberNode : ExpressionNode
+    public class ImplicitWithMemberNode : MemberAccessExpressionNode
     {
-        public string MemberName { get; set; }
-
         public ImplicitWithMemberNode(int line, int column) : base(line, column) { }
 
         public override void Accept(IASTVisitor visitor) => visitor.Visit(this);

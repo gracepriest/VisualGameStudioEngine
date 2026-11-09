@@ -380,10 +380,9 @@ public class InheritedMemberTests
             "6");
 
     /// <summary>
-    /// ⚠ The <c>With</c> site's walk, which nothing else can observe: a <c>With</c> block over a
-    /// class instance is unimplemented on every backend (pinned below), so the member cannot be
-    /// RUN. What is observable is that the FRONT END now resolves it — a flat lookup there
-    /// refuses the program outright with "does not have a member".
+    /// The <c>With</c> site's walk in the FRONT END — a flat lookup there refuses the program
+    /// outright with "does not have a member". <see cref="AWithBlockOverAClassInstance_RunsOnEveryBackend"/>
+    /// runs the same shape.
     /// </summary>
     [Test]
     public void AWithBlockNamingAnInheritedMember_ResolvesInTheFrontEnd()
@@ -391,7 +390,7 @@ public class InheritedMemberTests
                 " Public Function Run() As Integer\n  Return 0\n End Function\n",
                 true, "Sub Main()\n Dim b As New Box()\n With b\n  PrintLine(CStr(.Total))\n End With\nEnd Sub\n")),
             Does.Not.Contain("does not have a member"),
-            "the With site walks the base chain; the backends still cannot emit a With block");
+            "the With site walks the base chain");
 
     // ------------------------------------------------------------------ pinned, each with a control
 
@@ -452,14 +451,16 @@ public class InheritedMemberTests
     }
 
     /// <summary>
-    /// ⛔ PINNED, NOT INHERITANCE'S: a <c>With</c> block over a class instance is unimplemented on
-    /// every backend. The control is the class's own member; a <c>With</c> over a MODULE member
-    /// runs on all four, which is why the feature looks implemented.
+    /// A <c>With</c> block over a class instance reads the class's OWN member and an INHERITED one,
+    /// on every backend. This row was <c>AWithBlockOverAClassInstance_IsUnimplemented_OnEveryBackend_Pinned</c>:
+    /// the IR builder never declared its <c>__with</c> carrier and dropped every <c>.Prop = v</c>.
+    /// The parser now desugars <c>.M</c> to a member access on the With's own name (or a carrier
+    /// <c>Dim</c>), so it takes the path every <c>b.M</c> takes; the pin went red and is promoted.
     /// </summary>
     [Test]
-    public void AWithBlockOverAClassInstance_IsUnimplemented_OnEveryBackend_Pinned()
+    public void AWithBlockOverAClassInstance_RunsOnEveryBackend()
     {
-        const string ownControl = """
+        const string own = """
             Class Box
              Public Total As Integer = 7
             End Class
@@ -470,19 +471,11 @@ public class InheritedMemberTests
              End With
             End Sub
             """;
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => Cpp(ownControl), Throws.Exception, "CONTROL: C++ on the class's OWN member");
-            Assert.That(() => Js(ownControl), Throws.Exception, "CONTROL: JavaScript on the class's OWN member");
-            RunsOnEveryBackend("""
-                Module M
-                 Public Total As Integer = 7
-                End Module
-                Sub Main()
-                 PrintLine(CStr(M.Total))
-                End Sub
-                """, "7");
-        });
+        var inherited = Prog(" Public Total As Integer = 7\n",
+            " Public Function Run() As Integer\n  Return 0\n End Function\n",
+            true, "Sub Main()\n Dim b As New Box()\n With b\n  .Total = .Total + 1\n  PrintLine(CStr(.Total))\n End With\nEnd Sub\n");
+        RunsOnEveryBackend(own, "7");
+        RunsOnEveryBackend(inherited, "8");
     }
 
     /// <summary>
@@ -542,12 +535,15 @@ public class InheritedMemberTests
             """, "10");
 
     /// <summary>
-    /// ⛔ PINNED, pre-existing and untouched: a class declared in ANOTHER FILE cannot be a base —
-    /// "Unknown base class". The whole cross-file inheritance surface is unreachable, so none of
-    /// the shapes above could be measured across files.
+    /// A class declared in ANOTHER FILE is a base, and its field is read through the derived class,
+    /// in both compile orders. This row was <c>ACrossFileBaseClass_IsNotFound_Pinned</c> ("Unknown
+    /// base class 'Base'" even with an explicit <c>Import Base</c>): <c>Visit(ClassNode)</c> asked only
+    /// the type manager. It resolves through <c>ResolveDeclaredTypeAcrossUnits</c> now and the pin
+    /// went red as designed (form-designer followup 1; the full shape set is in
+    /// <c>CrossFileBindingTests.InheritsAndImplements_AcrossFiles_RunInEitherCompileOrder</c>).
     /// </summary>
     [Test]
-    public void ACrossFileBaseClass_IsNotFound_Pinned()
+    public void ACrossFileBaseClass_IsFound_AndItsFieldReads_InEitherOrder()
     {
         var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(),
             "BasicLang_Inherited_" + Path.GetRandomFileName())).FullName;
@@ -559,9 +555,15 @@ public class InheritedMemberTests
             File.WriteAllText(mainPath, "Import Base\nClass Box\n Inherits Base\nEnd Class\n" +
                 "Sub Main()\n Dim b As New Box()\n PrintLine(CStr(b.Total))\nEnd Sub\n");
 
-            var result = new BasicCompiler().CompileProjectFiles(new[] { basePath, mainPath });
-            Assert.That(string.Join(" | ", result.AllErrors.Select(e => e.Message)),
-                Does.Contain("Unknown base class 'Base'"));
+            foreach (var order in new[] { new[] { basePath, mainPath }, new[] { mainPath, basePath } })
+            {
+                var label = string.Join(",", order.Select(Path.GetFileName));
+                var result = new BasicCompiler().CompileProjectFiles(order);
+                Assert.That(result.HasErrors, Is.False,
+                    $"[{label}] " + string.Join(" | ", result.AllErrors.Select(e => e.Message)));
+                var cs = new BasicLang.Compiler.CodeGen.CSharp.CSharpCodeGenerator().Generate(result.CombinedIR!);
+                Assert.That(Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("7"), $"[{label}]\n{cs}");
+            }
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }

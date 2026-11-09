@@ -86,6 +86,9 @@ internal static class ReservationPrograms
             With bx
                 .V = 4
             End With
+            With New Box(5)
+                .V = 6
+            End With
             Const K As Integer = 3
             For i As Integer = 0 To 2
                 Dim h As Func(Of Integer, Integer) = Function(lp As Integer) i + K + lp
@@ -379,7 +382,9 @@ public class NameReservationTests
         // pins it. The mutant that leaves it out of the push is killed by this row and by nothing else at the IR level.
         yield return Row("LinqRange_variable", "Run", "t5");
         yield return Row("AndAlso_carrier", "Run", "__sc0");
-        yield return Row("With_carrier", "Run", "__with");
+        // A With over a plain name reads that name (no carrier); only a With over an expression
+        // declares `Dim __withN = …`, which reserves through the ordinary Dim push.
+        yield return Row("With_carrier", "Run", "__with1");
         yield return Row("Unbound_name_GetOrCreateVariable", "Show", "Console");
         yield return Row("Constructor_parameter", "Box__ctor", "v0");
         yield return Row("Operator_parameters_a", "Box.op_Equality", "a", "b");
