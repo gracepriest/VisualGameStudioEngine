@@ -742,6 +742,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Pass 1: class shells, so any sibling signature can reference any
             // sibling class (mutual references included).
             var pendingClasses = new List<(ClassNode Node, TypeInfo Type)>();
+            var pendingInterfaces = new List<(InterfaceNode Node, TypeInfo Type)>();
             foreach (var unit in pendingUnits)
             {
                 if (!string.IsNullOrEmpty(unit.ModuleName))
@@ -763,6 +764,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         RegisterSiblingEnumShell(enumNode, unit);
                     }
+                    else if (decl is InterfaceNode interfaceNode)
+                    {
+                        // Without it `Implements IArea` was "Unknown interface" whenever IArea's
+                        // file compiled AFTER the implementing class's — the class shells above
+                        // had a sibling; interfaces never did (form-designer followup 1).
+                        var interfaceType = RegisterSiblingInterfaceShell(interfaceNode, unit);
+                        if (interfaceType != null)
+                        {
+                            pendingInterfaces.Add((interfaceNode, interfaceType));
+                        }
+                    }
                 }
             }
 
@@ -770,6 +782,13 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // return can be a sibling class, and before the class members so a sibling class's
             // field or method can be typed by a sibling delegate.
             RegisterSiblingDelegateSignatures(pendingUnits);
+
+            // Pass 2a: interface members, now that every sibling class/interface shell exists —
+            // so a call through an interface-typed variable types as Visit(InterfaceNode) types it.
+            foreach (var (interfaceNode, interfaceType) in pendingInterfaces)
+            {
+                PopulateSiblingInterfaceMembers(interfaceNode, interfaceType);
+            }
 
             // Pass 2: class members, now that every sibling class shell exists.
             foreach (var (classNode, classType) in pendingClasses)
@@ -956,6 +975,79 @@ namespace BasicLang.Compiler.SemanticAnalysis
             GlobalScope.Define(symbol);
             return classType;
         }
+
+        /// <summary>
+        /// The interface twin of <see cref="RegisterSiblingClassShell"/>: an imported Interface symbol
+        /// with an empty <see cref="TypeInfo"/>, members filled by
+        /// <see cref="PopulateSiblingInterfaceMembers"/>. Null when the name is already taken.
+        /// </summary>
+        private TypeInfo RegisterSiblingInterfaceShell(InterfaceNode interfaceNode, CompilationUnit unit)
+        {
+            if (string.IsNullOrEmpty(interfaceNode.Name)) return null;
+            if (GlobalScope.Resolve(interfaceNode.Name) != null) return null;
+
+            var interfaceType = new TypeInfo(interfaceNode.Name, TypeKind.Interface);
+            GlobalScope.Define(new Symbol(interfaceNode.Name, SymbolKind.Interface, interfaceType, 0, 0)
+            {
+                IsImported = true,
+                IsSiblingSignature = true,
+                SourceModule = unit.ModuleName
+            });
+            return interfaceType;
+        }
+
+        /// <summary>
+        /// A not-yet-compiled sibling interface's members, from its declaration alone — the same
+        /// shapes <see cref="Visit(InterfaceNode)"/> registers (methods with their signatures,
+        /// properties accessor-backed with their ReadOnly/WriteOnly), resolved through the sibling
+        /// path's own <see cref="ResolveSiblingSignatureType"/> so nothing reports against this unit.
+        /// </summary>
+        private void PopulateSiblingInterfaceMembers(InterfaceNode interfaceNode, TypeInfo interfaceType)
+        {
+            foreach (var method in interfaceNode.Methods)
+            {
+                if (string.IsNullOrEmpty(method.Name)) continue;
+                var returnType = method.ReturnType == null
+                    ? _typeManager.VoidType
+                    : ResolveSiblingSignatureType(method.ReturnType) ?? _typeManager.ObjectType;
+                interfaceType.Members[method.Name] = new Symbol(method.Name,
+                    method.ReturnType == null ? SymbolKind.Subroutine : SymbolKind.Function, returnType, 0, 0)
+                {
+                    ReturnType = returnType,
+                    Parameters = BuildSiblingSignatureParameters(method.Parameters),
+                    Access = AccessModifier.Public,
+                    IsSiblingSignature = true
+                };
+            }
+
+            foreach (var prop in interfaceNode.Properties)
+            {
+                if (string.IsNullOrEmpty(prop.Name)) continue;
+                var propertyType = prop.PropertyType == null
+                    ? _typeManager.ObjectType
+                    : ResolveSiblingSignatureType(prop.PropertyType) ?? _typeManager.ObjectType;
+                interfaceType.Members[prop.Name] = new Symbol(prop.Name, SymbolKind.Property, propertyType, 0, 0)
+                {
+                    Access = AccessModifier.Public,
+                    IsAccessorBacked = true,
+                    IsReadOnly = prop.IsReadOnly,
+                    IsWriteOnly = prop.IsWriteOnly,
+                    IsSiblingSignature = true
+                };
+            }
+        }
+
+        /// <summary>
+        /// A user type named by a DECLARATION — a class's <c>Inherits</c> / <c>Implements</c>, an
+        /// <c>Extension</c> method's extended type: this unit's own types first (the type manager —
+        /// in-file declarations, completed siblings, built-ins), then any type SYMBOL in scope, which
+        /// is where a not-yet-compiled sibling's shell lives. Asking the type manager alone made
+        /// <c>Inherits Shape</c> "Unknown base class" (and <c>Extension Function F(w As Widget)</c>
+        /// "Cannot extend unknown type") whenever the type's file compiled AFTER this one, while the
+        /// reverse order built and ran (form-designer followup 1).
+        /// </summary>
+        private TypeInfo ResolveDeclaredTypeAcrossUnits(string name)
+            => _typeManager.GetType(name) ?? ResolveTypeSymbol(name)?.Type;
 
         /// <summary>
         /// Record a class's members (methods, constructors, fields, properties, constants) on its
@@ -6362,7 +6454,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     if (!string.IsNullOrEmpty(cls.BaseClass))
                     {
                         var classType = _typeManager.GetType(cls.Name);
-                        var baseType = _typeManager.GetType(cls.BaseClass);
+                        var baseType = ResolveDeclaredTypeAcrossUnits(cls.BaseClass);
                         if (classType != null && classType.BaseType == null
                             && baseType != null && baseType.Kind == TypeKind.Class
                             && !InheritanceWouldCycle(classType, baseType))
@@ -6376,7 +6468,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
                     {
                         foreach (var interfaceName in cls.Interfaces)
                         {
-                            var interfaceType = _typeManager.GetType(interfaceName);
+                            var interfaceType = ResolveDeclaredTypeAcrossUnits(interfaceName);
                             if (interfaceType?.Kind == TypeKind.Interface && !implementing.Interfaces.Contains(interfaceType))
                                 implementing.Interfaces.Add(interfaceType);
                         }
@@ -6827,7 +6919,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Set base class
             if (node.BaseClass != null)
             {
-                var baseType = _typeManager.GetType(node.BaseClass);
+                var baseType = ResolveDeclaredTypeAcrossUnits(node.BaseClass);
                 if (baseType == null)
                 {
                     if (_netNamespaces.Count > 0)
@@ -6867,7 +6959,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
             // Add interfaces
             foreach (var interfaceName in node.Interfaces)
             {
-                var interfaceType = _typeManager.GetType(interfaceName);
+                var interfaceType = ResolveDeclaredTypeAcrossUnits(interfaceName);
                 if (interfaceType == null)
                 {
                     Error($"Unknown interface '{interfaceName}'", node.Line, node.Column);
@@ -8043,7 +8135,7 @@ namespace BasicLang.Compiler.SemanticAnalysis
         public void Visit(ExtensionMethodNode node)
         {
             // Verify extended type exists
-            var extendedType = _typeManager.GetType(node.ExtendedType);
+            var extendedType = ResolveDeclaredTypeAcrossUnits(node.ExtendedType);
             if (extendedType == null)
             {
                 Error($"Cannot extend unknown type '{node.ExtendedType}'", node.Line, node.Column);
@@ -10894,12 +10986,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(WithStatementNode node)
         {
-            // Analyze the object expression
-            node.Object.Accept(this);
-            var objectType = GetNodeType(node.Object);
-
-            // Create a scope for the With block where member access can be implicit
+            // Create a scope for the With block where member access can be implicit. The carrier
+            // (`Dim __withN = Object`) is declared INSIDE it, so it is gone after End With.
             EnterScope("WithBlock", ScopeKind.Block);
+
+            // Analyze the object expression — through the carrier's declaration when there is one
+            // (it is the carrier's initializer), so it is analyzed exactly once.
+            if (node.Carrier != null)
+                node.Carrier.Accept(this);
+            else
+                node.Object.Accept(this);
+            var objectType = GetNodeType(node.Object);
 
             // Push the With object type for implicit member access resolution
             _withObjectTypes.Push(objectType);
@@ -10912,35 +11009,17 @@ namespace BasicLang.Compiler.SemanticAnalysis
 
         public void Visit(ImplicitWithMemberNode node)
         {
-            if (_withObjectTypes.Count == 0)
+            if (_withObjectTypes.Count == 0 || node.Object == null)
             {
                 Error("Implicit member access (.) is only valid inside a With block", node.Line, node.Column);
                 SetNodeType(node, _typeManager.ObjectType);
                 return;
             }
 
-            var withType = _withObjectTypes.Peek();
-            if (withType == null)
-            {
-                SetNodeType(node, _typeManager.ObjectType);
-                return;
-            }
-
-            // Look up the member in the With object type, base chain included — without the walk
-            // `With b : .InheritedMember : End With` was a hard compile error on all four.
-            if (withType.ResolveMember(node.MemberName) is Symbol memberSymbol)
-            {
-                SetNodeType(node, memberSymbol.Type ?? memberSymbol.ReturnType ?? _typeManager.ObjectType);
-                CheckPropertyRead(node, memberSymbol);   // task #178: `.W` read in a With block
-            }
-            else
-            {
-                if (_isJavaScriptTarget && PortableLibraryTypes.LibraryTypeName(withType) is { } libraryType)
-                    ReportWebUnavailableMember(libraryType, node.MemberName, node.Line, node.Column);
-                else
-                    Error($"Type '{withType.Name}' does not have a member '{node.MemberName}'", node.Line, node.Column);
-                SetNodeType(node, _typeManager.ObjectType);
-            }
+            // `.W` is `receiver.W` (the parser filled Object), so it takes the member-access path
+            // whole: base-chain lookup, .NET members, property-read checks, the web library's
+            // unavailable-member report — one implementation, not a second copy of each.
+            Visit((MemberAccessExpressionNode)node);
         }
 
         public void Visit(WhileLoopNode node)
@@ -11247,9 +11326,8 @@ namespace BasicLang.Compiler.SemanticAnalysis
         {
             var symbol = expression switch
             {
+                // A With block's `.M` is a MemberAccessExpressionNode too (ImplicitWithMemberNode).
                 IdentifierExpressionNode or MemberAccessExpressionNode => GetNodeSymbol(expression),
-                ImplicitWithMemberNode withMember when _withObjectTypes.Count > 0 =>
-                    _withObjectTypes.Peek()?.ResolveMember(withMember.MemberName),
                 _ => null,
             };
             return symbol?.Kind == SymbolKind.Property ? symbol : null;

@@ -4022,11 +4022,41 @@ namespace BasicLang.Compiler
             node.Object = ParseExpression();
             ConsumeNewlines();
 
-            node.Body = ParseBlock(TokenType.EndWith);
+            // The receiver every `.Member` in the body reads. A plain name (or Me) is named again
+            // directly; anything else is evaluated once into a carrier local (see Carrier).
+            string receiverName;
+            if (node.Object is IdentifierExpressionNode { IsForeignQualified: false } plain)
+            {
+                receiverName = plain.Name;
+            }
+            else
+            {
+                receiverName = $"__with{++_withCarrierCount}";
+                node.Carrier = new VariableDeclarationNode(token.Line, token.Column)
+                {
+                    Name = receiverName,
+                    Initializer = node.Object,
+                    IsAuto = true   // typed from the initializer, exactly as `Dim x = expr`
+                };
+            }
+
+            _withReceivers.Push(receiverName);
+            try
+            {
+                node.Body = ParseBlock(TokenType.EndWith);
+            }
+            finally
+            {
+                _withReceivers.Pop();
+            }
             Consume(TokenType.EndWith, "Expected 'End With'");
 
             return node;
         }
+
+        /// <summary>The receiver name of each enclosing With block, innermost on top.</summary>
+        private readonly Stack<string> _withReceivers = new();
+        private int _withCarrierCount;
 
         private CatchClauseNode ParseCatchClause()
         {
@@ -4835,6 +4865,9 @@ namespace BasicLang.Compiler
                 var memberToken = Consume(TokenType.Identifier, "Expected member name after '.'");
                 var node = new ImplicitWithMemberNode(dotToken.Line, dotToken.Column);
                 node.MemberName = memberToken.Lexeme;
+                // A FRESH receiver node per use: the analyzer keys types and symbols by node.
+                if (_withReceivers.Count > 0)
+                    node.Object = new IdentifierExpressionNode(dotToken.Line, dotToken.Column) { Name = _withReceivers.Peek() };
                 return node;
             }
 

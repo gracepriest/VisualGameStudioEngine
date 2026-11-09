@@ -317,7 +317,8 @@ public class CrossFileBindingTests
     /// (<c>TypeError: w.Describe is not a function</c>) and C++ (<c>C2039</c>) — extension calls
     /// are not lowered there, a separate gap this does not make worse (measured 2026-09-29).
     /// ⚠ One file on purpose: a class in a file of its own name is CS0101 on C#, and extending a
-    /// class from ANOTHER file is "Cannot extend unknown type" — both separate, pre-existing.
+    /// class from ANOTHER file was "Cannot extend unknown type" in one compile order (fixed — see
+    /// <see cref="AnExtensionOverAClassInAnotherFile_RunsOnCSharp_InEitherOrder"/>).
     /// </summary>
     [TestCase("Widget")]
     [TestCase("W")]
@@ -414,5 +415,88 @@ public class CrossFileBindingTests
             ("AppError.bas", "Public Class AppError\n Inherits Exception\n Public Sub New(m As String)\n  MyBase.New(m)\n End Sub\nEnd Class\n"));
         var result = Compile(paths);
         Assert.That(result.HasErrors, Is.False, Messages(result));
+    }
+
+    // ------------------------------------------------------------------ Inherits / Implements across files
+
+    private const string ShapesFile =
+        "Public Interface IArea\n Function Area() As Integer\n ReadOnly Property Label As String\nEnd Interface\n" +
+        "Public Class Shape\n Public Overridable Function Sides() As Integer\n  Return 0\n End Function\nEnd Class\n";
+
+    private const string SquareFile =
+        "Public Class Square\n Inherits Shape\n Implements IArea\n" +
+        " Public Function Area() As Integer Implements IArea.Area\n  Return 9\n End Function\n" +
+        " Public ReadOnly Property Label As String\n  Get\n   Return \"sq\"\n  End Get\n End Property\n" +
+        " Public Overrides Function Sides() As Integer\n  Return 4\n End Function\nEnd Class\n" +
+        "Sub Main()\n Dim s As New Square()\n Dim a As IArea = s\n Dim sh As Shape = s\n" +
+        " PrintLine(CStr(a.Area() + 1))\n PrintLine(a.Label)\n PrintLine(CStr(sh.Sides()))\nEnd Sub\n";
+
+    /// <summary>
+    /// ⛔ <c>Inherits Shape</c> / <c>Implements IArea</c> with both declared in ANOTHER file, in BOTH
+    /// compile orders. The order the base's file compiled FIRST worked; the other was "Unknown base
+    /// class 'Shape'" and "Unknown interface 'IArea'" (measured on master 11be7d5c), because
+    /// <c>Visit(ClassNode)</c> asked only the type manager, which a not-yet-compiled sibling's shell
+    /// never enters — and a sibling INTERFACE had no shell at all (form-designer followup 1). Also
+    /// runs the members that prove the link is real: an interface call typed Integer (<c>+ 1</c>), an
+    /// interface property typed String, and a virtual dispatch through the base.
+    /// </summary>
+    [Test]
+    public void InheritsAndImplements_AcrossFiles_RunInEitherCompileOrder() => RunsOnEveryBackend("10\nsq\n4",
+        ("Main.bas", SquareFile),
+        ("Shapes.bas", ShapesFile));
+
+    /// <summary>The refusals still fire for a name that exists nowhere, in either order.</summary>
+    [Test]
+    public void AnUnknownBaseOrInterface_IsStillRefused_InEitherOrder()
+    {
+        var paths = Write(
+            ("Main.bas", "Public Class Square\n Inherits Nowhere\n Implements INothing\nEnd Class\nSub Main()\nEnd Sub\n"),
+            ("Shapes.bas", ShapesFile));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var messages = Messages(Compile(order));
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Does.Contain("Unknown base class 'Nowhere'"), messages);
+                Assert.That(messages, Does.Contain("Unknown interface 'INothing'"), messages);
+            });
+        }
+    }
+
+    /// <summary>
+    /// ⛔ <c>Extension Function Describe(w As Widget)</c> with Widget in ANOTHER file: "Cannot extend
+    /// unknown type 'Widget'" when Widget's file compiled second (measured on master 11be7d5c) — the
+    /// same type-manager-only lookup as <c>Inherits</c>. C# only: extension calls are not lowered on
+    /// JavaScript or C++ at all (see <see cref="AnExtensionMethodOnAUserClass_IsNotAMissingMember_AndRunsOnCSharp"/>).
+    /// </summary>
+    [Test]
+    public void AnExtensionOverAClassInAnotherFile_RunsOnCSharp_InEitherOrder()
+    {
+        var paths = Write(
+            ("Main.bas", "Extension Function Describe(w As Widget) As String\n Return w.Name\nEnd Function\n" +
+                         "Sub Main()\n Dim w As New Widget()\n PrintLine(w.Describe())\nEnd Sub\n"),
+            ("Widgets.bas", "Public Class Widget\n Public Name As String = \"W2\"\nEnd Class\n"));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var label = string.Join(",", order.Select(Path.GetFileName));
+            var result = Compile(order);
+            Assert.That(result.HasErrors, Is.False, $"[{label}] {Messages(result)}");
+            var cs = new CSharpCodeGenerator().Generate(Optimized(result.CombinedIR!));
+            Assert.That(FourBackends.Norm(FourBackends.RunEmittedCSharpText(cs)), Is.EqualTo("W2"), $"[{label}]\n{cs}");
+        }
+    }
+
+    /// <summary>A sibling CLASS named in <c>Implements</c> is still "not an interface", in either order.</summary>
+    [Test]
+    public void ImplementingASiblingClass_IsRefused_AsNotAnInterface_InEitherOrder()
+    {
+        var paths = Write(
+            ("Main.bas", "Public Class Square\n Implements Shape\nEnd Class\nSub Main()\nEnd Sub\n"),
+            ("Shapes.bas", ShapesFile));
+        foreach (var order in new[] { paths, paths.Reverse().ToArray() })
+        {
+            var messages = Messages(Compile(order));
+            Assert.That(messages, Does.Contain("'Shape' is not an interface"), messages);
+        }
     }
 }

@@ -1753,9 +1753,10 @@ public class NameBindingMissTests
     /// <para>⚠ Not reachable from source: a Structure's member (a Structure had fields only — no
     /// method body could name one bare; STALE since #230, a Structure declares methods now, and
     /// <c>StructureMembersExecutionTests</c> runs a bare field write and a bare self-call inside
-    /// one; whether either takes this IR-miss path was not measured here), and a base class in ANOTHER FILE (refused today:
-    /// <c>InheritedMemberTests.ACrossFileBaseClass_IsNotFound_Pinned</c>). Both are covered by the
-    /// hand-built rows above.</para>
+    /// one; whether either takes this IR-miss path was not measured here), and a base class in ANOTHER FILE (refused when
+    /// this was written; it resolves now — <c>InheritedMemberTests.ACrossFileBaseClass_IsFound_AndItsFieldReads_InEitherOrder</c>
+    /// — but whether it takes this IR-miss path was not measured). Both are covered by the hand-built
+    /// rows above.</para>
     /// </summary>
     [Test]
     public void TheUnregisteredMemberShapes_StillCompile()

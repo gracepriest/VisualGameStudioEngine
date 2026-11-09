@@ -55,8 +55,9 @@ namespace VisualGameStudio.Tests.Compiler;
 //    - (Observed while writing these rows, not filed: C++ dropped `R = Q * 10` after `Q = P + 1` on plain
 //      auto-properties, in a single all-Public class on master too. FIXED by #218 / #254, and
 //      `CppAutoPropertyBareStoreExecutionTests` A09 runs that chain. T6 keeps `R = 9`.)
-//    - A derived class in ANOTHER file is "Unknown base class" (open in CLAUDE.md), so there is no cross-file
-//      derived row; the cross-file row is a class with Private members used by its own methods.
+//    - A derived class in ANOTHER file was "Unknown base class" when this was written (it resolves now —
+//      followup 1), so there is no cross-file derived row; the cross-file row is a class with Private
+//      members used by its own methods.
 //
 //  ⚠ Named "…ExecutionTests" on purpose: it RUNS under Node, so it is in JsExecutionTierRosterTests' roster.
 // ================================================================================================

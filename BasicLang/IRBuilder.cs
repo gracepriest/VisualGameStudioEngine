@@ -5033,53 +5033,29 @@ namespace BasicLang.Compiler.IR
             _currentBlock = endBlock;
         }
 
-        // Stack of With object variables for nested With blocks
-        private Stack<IRVariable> _withObjectStack = new Stack<IRVariable>();
-
         public void Visit(WithStatementNode node)
         {
             TrackSourceLine(node);
-            // Evaluate the With object expression
-            node.Object.Accept(this);
-            var withObject = _expressionResult;
-
-            // Store the object in a temporary variable for use in the body
-            var objType = _semanticAnalyzer.GetNodeType(node.Object) ?? new TypeInfo("Object", TypeKind.Class);
-            var withVar = CreateVariable("__with", objType, _nextVersion++);
-            // A lowering's own storage, never pushed (it is reached through _withObjectStack), so it
-            // reserves here (ADR-0018 D1).
-            ReserveInCurrentFunction(withVar.Name);
-            EmitInstruction(new IRAssignment(withVar, withObject));
-
-            // Push the With variable for implicit member access
-            _withObjectStack.Push(withVar);
-
-            EmitInstruction(new IRComment("With block"));
-
-            // Process the body
+            // The parser desugared the block: every `.Member` in the body is a member access on
+            // either the With's own plain name (nothing to lower here) or the carrier local
+            // `Dim __withN = Object`, which lowers through the ordinary declaration path — declared,
+            // pushed and reserved like any Dim, so every backend declares it.
+            node.Carrier?.Accept(this);
             node.Body.Accept(this);
-
-            _withObjectStack.Pop();
-            EmitInstruction(new IRComment("End With"));
         }
 
         public void Visit(ImplicitWithMemberNode node)
         {
-            if (_withObjectStack.Count == 0)
+            if (node.Object == null)
             {
-                // Error already reported by semantic analyzer
+                // Outside any With block — the semantic analyzer already reported it.
                 _expressionResult = new IRConstant(null, new TypeInfo("Object", TypeKind.Class));
                 return;
             }
 
-            var withVar = _withObjectStack.Peek();
-            var memberType = _semanticAnalyzer.GetNodeType(node) ?? new TypeInfo("Object", TypeKind.Class);
-
-            // Create a field access for the implicit member
-            var tempName = _currentFunction.GetNextTempName();
-            var fieldAccess = new IRFieldAccess(tempName, withVar, node.MemberName, memberType);
-
-            _expressionResult = fieldAccess;
+            // `.W` is `receiver.W`: the one member-read path (accessor, .NET descriptor, emission).
+            // Stores and calls reach the member-access arms through the base type directly.
+            Visit((MemberAccessExpressionNode)node);
         }
 
         public void Visit(WhileLoopNode node)

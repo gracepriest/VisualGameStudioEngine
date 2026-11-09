@@ -154,8 +154,9 @@ a second document type.
   `Form`/`Button`/`Point` member types as `Object` with no diagnostic — **a misspelled property name
   compiles green**. `WinFormsCatalogSweepTests` generates every control with every property and
   requires csc to accept it; that gate has already caught six wrong catalog rows.
-- ⛔ **Never emit `With` from a generator** — the IR builder silently drops every `.Prop = value`
-  inside it (see `docs/form-designer-followups.md`).
+- `With` now compiles and runs (followup 2: the parser desugars `.M` into a member access on the
+  With's own name or a `Dim __withN` carrier), but generators still don't emit it — one statement
+  per property is what `FormRegionWriterTests` pins and what the recognizer reads back.
 - ⛔ **Geometry fans in**: `Location = New Point(x, y)` as ONE statement. `Location.X = 96` is
   CS1612, and BasicLang reports nothing because the member degrades to `Object`.
 - ⚠ The handler-ordering rule (a handler must precede the region that wires it) is **web-only** —
@@ -318,10 +319,11 @@ a second document type.
   on JavaScript (`TypeError: this.X is not a function`) — only csc catches it on C#. Stays permissive
   for an `Extern Class`, a .NET or unresolved base, and anything it cannot enumerate; an `Extension`
   method on the class (or a base, or Object) is never refused — typed Object and bound by the
-  backend, which today means C# only (JavaScript `TypeError`, C++ `C2039`). ⚠ Still open:
-  `Inherits` or `Extension Function` over a class from ANOTHER file ("Unknown base class" / "Cannot
-  extend unknown type" — both ask only the type manager). A base declared BELOW its derived class
-  in the same file does run on every backend.
+  backend, which today means C# only (JavaScript `TypeError`, C++ `C2039`). `Inherits` /
+  `Implements` / `Extension Function` over a type from ANOTHER file resolve in either compile order
+  (`ResolveDeclaredTypeAcrossUnits`: type manager, then sibling shells — a lookup that asks the type
+  manager alone is order-dependent). A base declared BELOW its derived class in the same file does
+  run on every backend.
 - ⛔ **`Place` decides "strip" vs "item" vs "positioned", and each has its own rule.** A **strip**
   (`FormPlace.Docked`) is geometry-less — `Geometry == null`, its edge is a `Dock` PROPERTY not a
   rect, it draws as a BAND on the canvas, and it is page chrome on the web (before/after the form
