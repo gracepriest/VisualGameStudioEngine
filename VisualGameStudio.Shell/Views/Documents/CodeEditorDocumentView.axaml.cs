@@ -2132,11 +2132,13 @@ public partial class CodeEditorDocumentView : UserControl
     /// <summary>Where the press landed and what it was on, or null when no drag is pending.</summary>
     private Point? _toolboxDragOrigin;
     private string? _toolboxDragKind;
+    private string? _toolboxDragClsid;
 
     private void OnToolboxPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         _toolboxDragOrigin = null;
         _toolboxDragKind = null;
+        _toolboxDragClsid = null;
 
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
@@ -2150,6 +2152,7 @@ public partial class CodeEditorDocumentView : UserControl
         {
             _toolboxDragOrigin = e.GetPosition(this);
             _toolboxDragKind = item.Kind;
+            _toolboxDragClsid = item.NewCom?.Clsid;
         }
     }
 
@@ -2177,11 +2180,18 @@ public partial class CodeEditorDocumentView : UserControl
 
         // Cleared BEFORE the await: DoDragDrop runs a nested loop until the drop, and a second
         // PointerMoved arriving in the meantime would start a second drag for the same press.
+        var clsid = _toolboxDragClsid;
         _toolboxDragOrigin = null;
         _toolboxDragKind = null;
+        _toolboxDragClsid = null;
 
         var data = new DataObject();
         data.Set(FormCanvasControl.ControlKindFormat, kind);
+        if (clsid != null)
+        {
+            // Every installed NewCOM control is the same kind; this is which one.
+            data.Set(FormCanvasControl.NewComClsidFormat, clsid);
+        }
 
         try
         {
@@ -2198,6 +2208,7 @@ public partial class CodeEditorDocumentView : UserControl
     {
         _toolboxDragOrigin = null;
         _toolboxDragKind = null;
+        _toolboxDragClsid = null;
     }
 
     #endregion

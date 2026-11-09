@@ -106,6 +106,12 @@ public partial class App : Application
         try { _ = Services.GetRequiredService<RegenOnSaveCoordinator>(); }
         catch (Exception ex) { LogCrash("REGEN_ON_SAVE_START", ex); }
 
+        // Find the installed NewCOM controls (./components, ~/.newcom, $NEWCOM_PATH) BEFORE any form
+        // opens: the designer's toolbox reads this snapshot and offers one entry per control. Nothing
+        // else calls the scanner — without this line no installed control can ever reach the toolbox.
+        try { BasicLang.Forms.NewComCatalogScanner.Scan(); }
+        catch (Exception ex) { LogCrash("NEWCOM_SCAN", ex); }
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var mainViewModel = Services.GetRequiredService<MainWindowViewModel>();

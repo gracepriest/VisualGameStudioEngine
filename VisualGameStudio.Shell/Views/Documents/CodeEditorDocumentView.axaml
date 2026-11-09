@@ -226,7 +226,7 @@
                                    FontFamily="Cascadia Code, Consolas, monospace"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                       </Border>
-                      <TextBlock Grid.Column="1" Text="{Binding Kind}" FontSize="12"
+                      <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12"
                                  VerticalAlignment="Center"/>
                     </Grid>
                   </StackPanel>
