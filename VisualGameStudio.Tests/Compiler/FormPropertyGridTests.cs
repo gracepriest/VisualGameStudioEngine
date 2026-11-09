@@ -1163,14 +1163,17 @@ public class FormPropertyGridTests
         // dragged onto the canvas. The production filter (FormToolboxViewModel.Rebuild) already
         // excludes it; this says the same thing from the other side, so a future Item row cannot
         // silently reappear in the toolbox because only one of the two places agreed to drop it.
+        // ⚠ The NewCOM host row is offered once per INSTALLED control, never bare (NewComToolboxTests);
+        // with nothing installed — this test's world — it is not offered at all.
+        static bool Offered(FormControlDef c) => c.Place != FormPlace.Item && c.Kind != NewComCatalogScanner.HostKind;
         Assert.Multiple(() =>
         {
             Assert.That(web.Items.Select(i => i.Kind),
-                Is.EquivalentTo(FormControlCatalog.All.Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.All.Where(Offered).Select(c => c.Kind)));
             Assert.That(web.Items.Where(i => !FormControlCatalog.Find(i.Kind)!.SupportsTarget(FormTarget.Web)).All(i => i.DesktopOnly),
                 Is.True, "desktop-only kinds must be badged on the web toolbox");
             Assert.That(winForms.Items.Select(i => i.Kind),
-                Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Where(c => c.Place != FormPlace.Item).Select(c => c.Kind)));
+                Is.EquivalentTo(FormControlCatalog.For(FormTarget.WinForms).Where(Offered).Select(c => c.Kind)));
         });
     }
 

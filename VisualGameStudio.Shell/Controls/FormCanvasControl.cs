@@ -90,6 +90,9 @@ public class FormCanvasControl : Control
     /// </summary>
     public const string ControlKindFormat = "vgs/form-control-kind";
 
+    /// <summary>Beside <see cref="ControlKindFormat"/> on a NewCOM toolbox drag: the installed control's clsid.</summary>
+    public const string NewComClsidFormat = "vgs/newcom-clsid";
+
     static FormCanvasControl()
     {
         // Re-draw when what is drawn changes. Without this the canvas keeps showing the previous
@@ -1643,7 +1646,8 @@ public class FormCanvasControl : Control
         // otherwise every control arrives off-grid and has to be nudged before it lines up.
         var point = _transform.ToForm(e.GetPosition(this));
         var request = new FormControlDropRequest(
-            kind, Snap(point.X, e.KeyModifiers), Snap(point.Y, e.KeyModifiers));
+            kind, Snap(point.X, e.KeyModifiers), Snap(point.Y, e.KeyModifiers),
+            e.Data.Contains(NewComClsidFormat) ? e.Data.Get(NewComClsidFormat) as string : null);
 
         var command = DropCommand;
         if (command?.CanExecute(request) == true)
@@ -3943,4 +3947,5 @@ public class FormCanvasControl : Control
 /// carrying canvas pixels would place controls correctly at 100% zoom and wrongly at every other,
 /// which is the class of bug that only shows up on someone else's monitor.</para>
 /// </summary>
-public sealed record FormControlDropRequest(string Kind, int X, int Y);
+/// <param name="NewComClsid">For a NewCOM toolbox entry, WHICH installed control — every one is kind <c>NewComControl</c>.</param>
+public sealed record FormControlDropRequest(string Kind, int X, int Y, string? NewComClsid = null);

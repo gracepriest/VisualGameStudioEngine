@@ -31,6 +31,51 @@ public sealed record FormPlacementResult(FormControl? Control, string? Refusal);
 public static class FormPlacement
 {
     /// <summary>
+    /// Places an INSTALLED NewCOM control (or any other kind, when <paramref name="newComClsid"/> is
+    /// null): the host kind at the point, stamped with the clsid the generated code passes to
+    /// <c>NewComControlHost</c>, at the manifest's default size.
+    ///
+    /// <para>⛔ The host kind is refused without a clsid. Placed bare it writes
+    /// <c>New NewCom.Runtime.NewComControlHost()</c>, which has no such constructor — a form that
+    /// stops building because of a drop the designer accepted.</para>
+    /// </summary>
+    public static FormPlacementResult Place(FormDocument document, string kind, int x, int y, string? newComClsid)
+    {
+        var isHost = string.Equals(kind, NewComCatalogScanner.HostKind, StringComparison.Ordinal);
+        if (newComClsid == null)
+        {
+            return isHost
+                ? new FormPlacementResult(null, "Drag an installed NewCOM control from the toolbox's NewCOM Controls group.")
+                : Place(document, kind, x, y);
+        }
+
+        if (!isHost)
+        {
+            return new FormPlacementResult(null, $"'{kind}' is not a NewCOM control.");
+        }
+
+        var manifest = NewComCatalogScanner.Installed.FirstOrDefault(m =>
+            string.Equals(m.Clsid, newComClsid, StringComparison.OrdinalIgnoreCase));
+        if (manifest == null)
+        {
+            return new FormPlacementResult(null, $"No installed NewCOM control has clsid {newComClsid}.");
+        }
+
+        var result = Place(document, kind, x, y);
+        if (result.Control is { } placed)
+        {
+            placed.UnknownAttributes["Clsid"] = manifest.Clsid;
+            if (placed.Geometry is PixelGeometry pixels)
+            {
+                pixels.Width = manifest.DefaultWidth;
+                pixels.Height = manifest.DefaultHeight;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Adds a control of <paramref name="kind"/> at the form-space point
     /// (<paramref name="x"/>, <paramref name="y"/>), or refuses with a reason.
     /// </summary>

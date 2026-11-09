@@ -2443,11 +2443,10 @@ public static class FormControlCatalog
     /// leaves every shared property null inside the concat ΓÇö with no compile error and no exception
     /// at init, just a NullReferenceException later from <c>Property()</c> or <c>Accepts()</c>.</para>
     /// </summary>
-    private static readonly List<FormControlDef> _external = new();
-    public static IReadOnlyList<FormControlDef> All => _staticAll.Concat(_external).ToList().AsReadOnly();
-    public static void RegisterExternal(FormControlDef def) { if (!_external.Any(d => d.Kind == def.Kind)) _external.Add(def); }
-    public static IReadOnlyList<FormControlDef> StaticAll => _staticAll;
+    public static IReadOnlyList<FormControlDef> All => _staticAll;
 
+    // ⛔ Installed NewCOM controls are NOT added here — they are all this list's one "NewComControl"
+    // row, told apart by a Clsid attribute (see NewComCatalogScanner).
     private static readonly List<FormControlDef> _staticAll = new List<FormControlDef>
     {
         new("Label",       "Label",       "label",    null,       false, Common(Text, LabelTextAlign, PaddingRow,

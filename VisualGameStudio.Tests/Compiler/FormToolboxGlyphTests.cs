@@ -83,8 +83,9 @@ public class FormToolboxGlyphTests
             .Select(i => i.Kind)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // The NewCOM host row is offered once per INSTALLED control, never bare (NewComToolboxTests).
         var missing = FormControlCatalog.All
-            .Where(d => d.SupportsTarget(target) && d.Place != FormPlace.Item)
+            .Where(d => d.SupportsTarget(target) && d.Place != FormPlace.Item && d.Kind != NewComCatalogScanner.HostKind)
             .Select(d => d.Kind)
             .Where(k => !offered.Contains(k))
             .ToList();

@@ -22,10 +22,19 @@ namespace VisualGameStudio.Shell.ViewModels.Designer;
 /// Γ¢ö One ListBox, deliberately: the toolbox drag is wired to <c>ToolboxList</c> by name, and
 /// splitting the list per group would give each group its own unwired ListBox.
 /// </param>
+/// <param name="NewCom">
+/// The installed NewCOM control this entry places, or null for an ordinary catalog row. Every such
+/// entry has <see cref="Kind"/> <c>NewComControl</c>; this is what tells them apart, and the drop
+/// carries its clsid onto the placed control.
+/// </param>
 public sealed record FormToolboxItem(
-    string Kind, string Description, string Glyph, string Category, bool StartsCategory, bool DesktopOnly = false)
+    string Kind, string Description, string Glyph, string Category, bool StartsCategory, bool DesktopOnly = false,
+    NewComControlManifest? NewCom = null)
 {
     public string Badge => DesktopOnly ? "desktop" : "";
+
+    /// <summary>What the row says: the kind, or an installed NewCOM control's own name.</summary>
+    public string Label => NewCom?.Name ?? Kind;
 }
 
 /// <summary>
@@ -65,8 +74,11 @@ public partial class FormToolboxViewModel : ObservableObject
         // a container, and VS gives it its own tab. Ranked on Place rather than on the kind's name,
         // so a strip row added later lands in the group without a second list to update.
         var catalog = Target == FormTarget.Web ? FormControlCatalog.All : FormControlCatalog.For(Target);
+        // ⛔ The NewCOM host row is never a toolbox row of its own: placed bare it has no clsid, and
+        // the generated `New NewComControlHost()` does not compile. It is offered once per INSTALLED
+        // control instead, after everything else (below).
         var ordered = catalog
-            .Where(c => c.Place != FormPlace.Item)
+            .Where(c => c.Place != FormPlace.Item && c.Kind != NewComCatalogScanner.HostKind)
             .OrderBy(c => c.Place switch
             {
                 FormPlace.Tray => 3,
@@ -110,6 +122,27 @@ public partial class FormToolboxViewModel : ObservableObject
                 DesktopOnly: Target == FormTarget.Web && !control.SupportsTarget(FormTarget.Web)));
 
             previousCategory = category;
+        }
+
+        // Installed NewCOM controls, VS's "ActiveX controls" tab in spirit: their own group, last.
+        // Only where the host row exists on this target's list — the same SupportsTarget answer as
+        // every other row, so a web page shows them badged desktop-only exactly as it does a Timer.
+        var host = catalog.FirstOrDefault(c => c.Kind == NewComCatalogScanner.HostKind);
+        if (host != null)
+        {
+            foreach (var manifest in NewComCatalogScanner.Installed.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                const string newComCategory = "NewCOM Controls";
+                Items.Add(new FormToolboxItem(
+                    host.Kind,
+                    $"NewCOM control {manifest.Clsid} ({manifest.ManifestPath})",
+                    GlyphFor(host.Schematic),
+                    newComCategory,
+                    StartsCategory: newComCategory != previousCategory,
+                    DesktopOnly: Target == FormTarget.Web && !host.SupportsTarget(FormTarget.Web),
+                    NewCom: manifest));
+                previousCategory = newComCategory;
+            }
         }
     }
 

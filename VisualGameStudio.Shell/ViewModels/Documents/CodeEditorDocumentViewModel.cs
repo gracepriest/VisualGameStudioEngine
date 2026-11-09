@@ -1296,7 +1296,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return;
         }
 
-        var refusal = PlaceControl(request.Kind, request.X, request.Y);
+        var refusal = PlaceControl(request.Kind, request.X, request.Y, request.NewComClsid);
         if (refusal != null)
         {
             ReportPlacementRefusal(refusal);
@@ -1378,7 +1378,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
     [RelayCommand]
     private void CommitGeometry() => WriteDesignerEditBack();
 
-    public string? PlaceControl(string kind, int x, int y)
+    public string? PlaceControl(string kind, int x, int y, string? newComClsid = null)
     {
         var file = DesignFile;
         if (file == null)
@@ -1386,7 +1386,7 @@ public partial class CodeEditorDocumentViewModel : Document, IDocumentViewModel
             return "This document is not a form the designer can edit.";
         }
 
-        var result = ViewModels.Designer.FormPlacement.Place(file.Model, kind, x, y);
+        var result = ViewModels.Designer.FormPlacement.Place(file.Model, kind, x, y, newComClsid);
         if (result.Control == null)
         {
             return result.Refusal ?? $"'{kind}' could not be placed.";
